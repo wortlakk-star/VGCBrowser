@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+release/
+engine/chromium/
+engine/*.zip
+*.log
+.DS_Store
+.vscode/
+test/verify.cjs
+test/verify.mjs
+test/relay.cjs
+test/api.cjs
+test/engine.cjs

@@ -1,0 +1,88 @@
+{
+  "name": "vgc-browser",
+  "version": "0.1.30",
+  "description": "VGC Browser — antidetect browser & multi-account profile manager (GoLogin-style) by VGC Group",
+  "author": "VGC Group",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "download-engine": "node scripts/download-engine.mjs",
+    "verify": "esbuild test/verify-injection.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/verify.cjs && node test/verify.cjs",
+    "verify:relay": "esbuild test/verify-relay.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/relay.cjs && node test/relay.cjs",
+    "verify:api": "esbuild test/verify-api.ts --bundle --platform=node --format=cjs --outfile=test/api.cjs && node test/api.cjs",
+    "verify:engine": "esbuild test/verify-engine.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/engine.cjs && node test/engine.cjs",
+    "dist": "electron-vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.vgcgroup.browser",
+    "productName": "VGC Browser",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis-web"
+      ],
+      "icon": "resources/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities",
+      "icon": "resources/icon.png",
+      "identity": null,
+      "artifactName": "VGC-Browser-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "VGC Browser ${version}"
+    },
+    "nsisWeb": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "VGC Browser",
+      "artifactName": "VGC-Browser-Setup-${version}.${ext}",
+      "include": "resources/installer.nsh"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://vgcbrowser.com/dl"
+    }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.107.0",
+    "adm-zip": "^0.5.17",
+    "socks": "^2.8.9",
+    "ws": "^8.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

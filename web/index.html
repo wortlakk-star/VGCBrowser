@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VGC Browser — Trình duyệt ẩn danh doanh nghiệp · Veltrix Group</title>
+    <meta name="description" content="VGC Browser — trình duyệt antidetect đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --navy: #07111f;
+        --navy-2: #0b1a2e;
+        --navy-3: #0f2236;
+        --gold: #d8b15f;
+        --gold-2: #f4d792;
+        --cream: #fff7df;
+        --slate: #aeb9ca;
+        --slate-2: #c5cfdf;
+        --line: rgba(216, 177, 95, 0.18);
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'DM Sans', system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html { scroll-behavior: smooth; }
+      body {
+        font-family: var(--sans);
+        background: var(--navy);
+        color: var(--slate-2);
+        line-height: 1.6;
+        overflow-x: hidden;
+      }
+      a { color: inherit; text-decoration: none; }
+      .wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px; }
+      .serif { font-family: var(--serif); }
+      .gold { color: var(--gold-2); }
+
+      /* glow background */
+      .bg {
+        position: fixed; inset: 0; z-index: -1;
+        background:
+          radial-gradient(900px 520px at 78% -8%, rgba(216, 177, 95, 0.14), transparent),
+          radial-gradient(800px 500px at 5% 8%, rgba(15, 70, 120, 0.22), transparent),
+          linear-gradient(180deg, #07111f 0%, #050b14 100%);
+      }
+      .bg::after {
+        content: ''; position: absolute; inset: 0;
+        background-image: linear-gradient(rgba(216,177,95,.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(216,177,95,.04) 1px, transparent 1px);
+        background-size: 64px 64px;
+        mask-image: radial-gradient(circle at 50% 0%, #000 0%, transparent 70%);
+      }
+
+      /* nav */
+      nav {
+        position: sticky; top: 0; z-index: 50;
+        backdrop-filter: blur(10px);
+        background: rgba(7, 17, 31, 0.72);
+        border-bottom: 1px solid var(--line);
+      }
+      .nav-in { display: flex; align-items: center; justify-content: space-between; height: 70px; }
+      .brand { display: flex; align-items: center; gap: 12px; }
+      .mark {
+        width: 38px; height: 38px; display: grid; place-items: center;
+        border: 1px solid var(--gold); border-radius: 9px;
+        color: var(--gold-2); font-size: 20px;
+        background: linear-gradient(135deg, rgba(216,177,95,.16), transparent);
+      }
+      .brand b { font-family: var(--serif); font-size: 21px; color: #fff; font-weight: 700; letter-spacing: .3px; }
+      .brand small { display: block; font-size: 10.5px; color: var(--gold); letter-spacing: 2px; text-transform: uppercase; }
+      .navlinks { display: flex; align-items: center; gap: 30px; }
+      .navlinks a { color: var(--slate); font-size: 14.5px; transition: color .2s; }
+      .navlinks a:hover { color: var(--gold-2); }
+      .btn {
+        font-family: var(--sans); font-weight: 700; font-size: 14.5px; cursor: pointer;
+        border-radius: 40px; padding: 12px 26px; border: 1px solid transparent; transition: .2s; display: inline-block;
+      }
+      .btn.gold { background: linear-gradient(135deg, var(--gold-2), var(--gold)); color: #2a1e07; }
+      .btn.gold:hover { filter: brightness(1.07); box-shadow: 0 10px 30px rgba(216,177,95,.25); }
+      .btn.ghost { border-color: var(--line); color: var(--cream); }
+      .btn.ghost:hover { border-color: var(--gold); color: var(--gold-2); }
+
+      /* hero */
+      .hero { padding: 96px 0 70px; text-align: center; }
+      .eyebrow {
+        display: inline-flex; align-items: center; gap: 9px; font-size: 12px; letter-spacing: 2.5px;
+        text-transform: uppercase; color: var(--gold); border: 1px solid var(--line);
+        padding: 8px 18px; border-radius: 40px; margin-bottom: 30px;
+      }
+      .eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: var(--gold-2); font-style: normal; }
+      .hero h1 { font-family: var(--serif); font-weight: 700; font-size: 64px; line-height: 1.07; color: #fff; letter-spacing: .5px; }
+      .hero h1 em { font-style: italic; color: var(--gold-2); }
+      .hero p { max-width: 660px; margin: 26px auto 38px; font-size: 18px; color: var(--slate); }
+      .cta { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+      .trust { margin-top: 46px; font-size: 13px; color: var(--slate); letter-spacing: .5px; }
+      .trust b { color: var(--gold-2); font-weight: 700; }
+
+      /* section */
+      section.block { padding: 80px 0; }
+      .sec-head { text-align: center; max-width: 720px; margin: 0 auto 54px; }
+      .sec-head .kicker { color: var(--gold); letter-spacing: 3px; text-transform: uppercase; font-size: 12px; font-weight: 700; }
+      .sec-head h2 { font-family: var(--serif); font-size: 44px; color: #fff; line-height: 1.12; margin: 14px 0 12px; }
+      .sec-head p { color: var(--slate); font-size: 16px; }
+
+      .grid { display: grid; gap: 22px; grid-template-columns: repeat(4, 1fr); }
+      .card {
+        background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+        border: 1px solid var(--line); border-radius: 16px; padding: 30px 26px;
+        transition: transform .25s, border-color .25s;
+      }
+      .card:hover { transform: translateY(-5px); border-color: var(--gold); }
+      .card .num { font-family: var(--serif); font-size: 30px; color: var(--gold-2); }
+      .card h3 { color: #fff; font-size: 19px; margin: 12px 0 8px; font-weight: 700; }
+      .card p { color: var(--slate); font-size: 14.5px; }
+
+      /* pricing */
+      .prices { display: grid; gap: 22px; grid-template-columns: repeat(3, 1fr); max-width: 980px; margin: 0 auto; }
+      .price { background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 18px; padding: 34px 28px; text-align: center; }
+      .price.feat { border-color: var(--gold); background: linear-gradient(180deg, rgba(216,177,95,.1), rgba(255,255,255,.02)); position: relative; }
+      .price .tag { position: absolute; top: -13px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, var(--gold-2), var(--gold)); color: #2a1e07; font-size: 11px; font-weight: 700; padding: 5px 16px; border-radius: 20px; letter-spacing: .5px; }
+      .price h3 { font-family: var(--serif); color: #fff; font-size: 26px; }
+      .price .amt { font-size: 40px; color: var(--gold-2); font-weight: 700; margin: 12px 0 4px; font-family: var(--serif); }
+      .price .amt span { font-size: 15px; color: var(--slate); font-family: var(--sans); }
+      .price ul { list-style: none; text-align: left; margin: 22px 0; display: grid; gap: 11px; }
+      .price li { color: var(--slate-2); font-size: 14.5px; }
+      .price li b { color: var(--gold-2); margin-right: 8px; }
+
+      /* auth */
+      .authwrap { max-width: 440px; margin: 0 auto; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 20px; padding: 34px 30px; }
+      .tabs { display: flex; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+      .tab { flex: 1; background: none; border: none; color: var(--slate); font-family: var(--sans); font-size: 15px; font-weight: 700; padding: 12px 0; cursor: pointer; border-bottom: 2px solid transparent; }
+      .tab.active { color: var(--gold-2); border-bottom-color: var(--gold); }
+      .authwrap input { width: 100%; padding: 14px 16px; margin-bottom: 13px; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 10px; color: #fff; font-family: var(--sans); font-size: 15px; outline: none; }
+      .authwrap input:focus { border-color: var(--gold); }
+      .authwrap .btn.gold { width: 100%; margin-top: 4px; }
+      #msg { text-align: center; margin-top: 14px; font-size: 13.5px; font-weight: 600; }
+
+      footer { border-top: 1px solid var(--line); padding: 50px 0 36px; margin-top: 40px; }
+      .foot-in { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 30px; }
+      footer h5 { color: var(--gold); font-size: 12px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px; }
+      footer a, footer p { color: var(--slate); font-size: 14px; display: block; margin-bottom: 8px; }
+      footer a:hover { color: var(--gold-2); }
+      .copy { text-align: center; color: var(--slate); font-size: 13px; margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--line); }
+
+      .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s, transform .7s; }
+      .reveal.in { opacity: 1; transform: none; }
+
+      @media (max-width: 900px) {
+        .grid { grid-template-columns: repeat(2, 1fr); }
+        .prices { grid-template-columns: 1fr; }
+        .navlinks a:not(.btn) { display: none; }
+        .hero h1 { font-size: 44px; }
+        .sec-head h2 { font-size: 34px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg"></div>
+
+    <nav>
+      <div class="wrap nav-in">
+        <div class="brand">
+          <span class="mark">◆</span>
+          <div>
+            <b>VGC Browser</b>
+            <small>by Veltrix Group</small>
+          </div>
+        </div>
+        <div class="navlinks">
+          <a href="#features">Tính năng</a>
+          <a href="#pricing">Bảng giá</a>
+          <a href="#login">Tài khoản</a>
+          <a class="btn gold" id="navDl" href="#">Tải về</a>
+        </div>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div class="wrap">
+        <span class="eyebrow"><i></i> Thành viên của Veltrix Group Corporation</span>
+        <h1 class="serif">Trình duyệt <em>ẩn danh</em><br />đẳng cấp doanh nghiệp</h1>
+        <p>
+          VGC Browser quản lý hàng trăm hồ sơ trình duyệt độc lập — mỗi hồ sơ là một “máy” riêng
+          với vân tay thật, proxy riêng và phiên đăng nhập đồng bộ đám mây. Vận hành đa tài khoản
+          an toàn, ở quy mô tập đoàn.
+        </p>
+        <div class="cta">
+          <a class="btn gold" id="heroDl" href="#">↓ Tải về miễn phí</a>
+          <a class="btn ghost" href="#login">Đăng nhập</a>
+        </div>
+        <div class="trust">Một sản phẩm công nghệ của <b>Veltrix Group</b> · Global Technology Holding</div>
+      </div>
+    </header>
+
+    <section class="block reveal" id="features">
+      <div class="wrap">
+        <div class="sec-head">
+          <div class="kicker">Năng lực cốt lõi</div>
+          <h2 class="serif">Bốn trụ cột của VGC Browser</h2>
+          <p>Hạ tầng antidetect hoàn chỉnh — từ vân tay cấp engine đến đồng bộ đám mây và tự động hoá.</p>
+        </div>
+        <div class="grid">
+          <div class="card"><div class="num">01</div><h3>Đa hồ sơ</h3><p>Hàng trăm hồ sơ cô lập hoàn toàn — cookie, cache, storage và proxy riêng cho từng hồ sơ.</p></div>
+          <div class="card"><div class="num">02</div><h3>Vân tay thật</h3><p>Engine Chromium tuỳ biến (VGC Core) chỉnh vân tay ở cấp C++: WebGL, canvas, audio, phần cứng.</p></div>
+          <div class="card"><div class="num">03</div><h3>Đồng bộ đám mây</h3><p>Hồ sơ &amp; phiên đăng nhập lưu trên server — máy nào đăng nhập tài khoản cũng kéo về dùng ngay.</p></div>
+          <div class="card"><div class="num">04</div><h3>Automation API</h3><p>API nội bộ kết nối Puppeteer / Playwright để tự động hoá tác vụ ở quy mô lớn.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block reveal" id="pricing">
+      <div class="wrap">
+        <div class="sec-head">
+          <div class="kicker">Bảng giá</div>
+          <h2 class="serif">Chọn gói phù hợp</h2>
+          <p>Bắt đầu miễn phí, nâng cấp khi cần thêm hồ sơ và tính năng đội nhóm.</p>
+        </div>
+        <div class="prices">
+          <div class="price">
+            <h3 class="serif">Free</h3>
+            <div class="amt">0đ<span>/mãi mãi</span></div>
+            <ul><li><b>✓</b> 10 hồ sơ</li><li><b>✓</b> Vân tay &amp; proxy</li><li><b>✓</b> Đồng bộ cơ bản</li></ul>
+            <a class="btn ghost" href="#login">Dùng thử</a>
+          </div>
+          <div class="price feat">
+            <span class="tag">PHỔ BIẾN NHẤT</span>
+            <h3 class="serif">Pro</h3>
+            <div class="amt">199k<span>/tháng</span></div>
+            <ul><li><b>✓</b> 100 hồ sơ + cloud sync</li><li><b>✓</b> Automation API</li><li><b>✓</b> Proxy Manager</li><li><b>✓</b> Hỗ trợ ưu tiên 24/7</li></ul>
+            <a class="btn gold" href="#login">Dùng thử</a>
+          </div>
+          <div class="price">
+            <h3 class="serif">Team</h3>
+            <div class="amt">499k<span>/tháng</span></div>
+            <ul><li><b>✓</b> Hồ sơ không giới hạn</li><li><b>✓</b> Chia sẻ nhóm &amp; phân quyền</li><li><b>✓</b> Nhiều thành viên</li></ul>
+            <a class="btn ghost" href="#login">Liên hệ</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block reveal" id="login">
+      <div class="wrap">
+        <div class="sec-head">
+          <div class="kicker">Tài khoản</div>
+          <h2 class="serif">Đăng nhập VGC Cloud</h2>
+          <p>Một tài khoản — đồng bộ hồ sơ &amp; phiên trên mọi thiết bị.</p>
+        </div>
+        <div class="authwrap">
+          <div class="tabs">
+            <button class="tab active" data-t="login">Đăng nhập</button>
+            <button class="tab" data-t="signup">Đăng ký</button>
+          </div>
+          <div id="pane-login">
+            <input id="li-email" type="email" placeholder="Địa chỉ email" />
+            <input id="li-pass" type="password" placeholder="Mật khẩu" />
+            <button class="btn gold" id="loginBtn">Đăng nhập</button>
+          </div>
+          <div id="pane-signup" style="display: none">
+            <input id="su-name" placeholder="Tên hiển thị (tuỳ chọn)" />
+            <input id="su-email" type="email" placeholder="Địa chỉ email" />
+            <input id="su-pass" type="password" placeholder="Mật khẩu (≥ 6 ký tự)" />
+            <input id="su-pass2" type="password" placeholder="Nhập lại mật khẩu" />
+            <button class="btn gold" id="signupBtn">Tạo tài khoản</button>
+          </div>
+          <p id="msg"></p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap foot-in">
+        <div>
+          <div class="brand" style="margin-bottom: 14px">
+            <span class="mark">◆</span>
+            <div><b>VGC Browser</b><small>by Veltrix Group</small></div>
+          </div>
+          <p style="max-width: 320px">Trình duyệt ẩn danh đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation — Global Technology Holding.</p>
+        </div>
+        <div><h5>Sản phẩm</h5><a href="#features">Tính năng</a><a href="#pricing">Bảng giá</a><a id="ctaDl" href="#">Tải về</a></div>
+        <div><h5>Tài khoản</h5><a href="#login">Đăng nhập</a><a href="#login">Đăng ký</a></div>
+        <div><h5>Veltrix Group</h5><a href="https://veltrixworldwide.com" target="_blank" rel="noopener">veltrixworldwide.com</a><p>vgcbrowser.com</p></div>
+      </div>
+      <div class="wrap copy">© 2026 VGC Browser · Veltrix Group Corporation. All rights reserved.</div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+      const DOWNLOAD_URL = 'https://vgcbrowser.com/dl/VGC-Browser-Setup-0.1.30.exe'
+      const SUPABASE_URL = 'https://pwiledrttvbnmytghyip.supabase.co'
+      const SUPABASE_ANON = 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO'
+      ;(function(){ try {
+        var h = location.hash || ''
+        var goLogin = h === '#login'
+        if (h.indexOf('access_token=') !== -1) showAuthDone(h.indexOf('type=recovery') !== -1)
+        if (location.search || location.hash) history.replaceState(null, document.title, location.pathname || '/')
+        if (goLogin) { var el = document.getElementById('login'); if (el) el.scrollIntoView() }
+      } catch(e){} })();
+      function showAuthDone(isRecovery){
+        var t = isRecovery ? 'Liên kết hợp lệ' : 'Xác nhận tài khoản thành công!'
+        var sub = isRecovery
+          ? 'Bạn có thể đăng nhập lại trong app VGC Browser.'
+          : 'Email đã được xác nhận. Mở app VGC Browser và đăng nhập để bắt đầu.'
+        var o = document.createElement('div')
+        o.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(4,10,20,.86);backdrop-filter:blur(6px)'
+        var card = document.createElement('div')
+        card.style.cssText = 'max-width:440px;width:92%;text-align:center;background:linear-gradient(180deg,#0b1a2e,#07111f);border:1px solid #d8b15f;border-radius:18px;padding:38px 30px;color:#fff7df;box-shadow:0 30px 80px rgba(0,0,0,.6)'
+        card.innerHTML = '<div style="font-size:56px;line-height:1">✅</div>'
+          + '<h2 style="margin:16px 0 8px;font-size:24px;font-family:Cormorant Garamond,serif">'+t+'</h2>'
+          + '<p style="margin:0 0 24px;color:#aeb9ca;font-size:14px;line-height:1.6">'+sub+'</p>'
+          + '<a href="'+DOWNLOAD_URL+'" style="display:inline-block;background:linear-gradient(135deg,#f4d792,#d8b15f);color:#2a1e07;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:30px">Tải VGC Browser</a>'
+          + '<div style="margin-top:16px"><a href="#" id="vgcAuthClose" style="color:#d8b15f;font-size:13px;text-decoration:underline">Đóng</a></div>'
+        o.appendChild(card)
+        document.body.appendChild(o)
+        o.addEventListener('click', function(ev){ if(ev.target===o) o.remove() })
+        var cl = document.getElementById('vgcAuthClose'); if(cl) cl.onclick = function(e){ e.preventDefault(); o.remove() }
+      }
+      ;['heroDl','navDl','ctaDl'].forEach(function(id){ var e=document.getElementById(id); if(e) e.href=DOWNLOAD_URL })
+      var io = new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target) } }) }, { threshold: 0.08 })
+      document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el) })
+      var msg = document.getElementById('msg'); var sb = null
+      if (SUPABASE_URL && SUPABASE_ANON && window.supabase) sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON)
+      function setMsg(t, ok){ msg.textContent = t; msg.style.color = ok ? '#7ee0b0' : '#ff9a9a' }
+      function val(id){ var e=document.getElementById(id); return e ? e.value.trim() : '' }
+      document.querySelectorAll('.tab').forEach(function(t){ t.onclick = function(){
+        document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('active') }); t.classList.add('active')
+        var s = t.getAttribute('data-t') === 'signup'
+        document.getElementById('pane-login').style.display = s ? 'none' : ''
+        document.getElementById('pane-signup').style.display = s ? '' : 'none'
+        msg.textContent = ''
+      }})
+      document.getElementById('loginBtn').onclick = async function(){
+        if(!sb){ setMsg('Hệ thống tài khoản đang được cấu hình — thử lại sau.', false); return }
+        var e=val('li-email'), p=val('li-pass'); if(!e||!p){ setMsg('Nhập email và mật khẩu.', false); return }
+        setMsg('Đang đăng nhập…', true)
+        var r=await sb.auth.signInWithPassword({ email:e, password:p })
+        setMsg(r.error ? 'Lỗi: '+r.error.message : 'Đăng nhập thành công! Mở app VGC Browser để đồng bộ.', !r.error)
+      }
+      document.getElementById('signupBtn').onclick = async function(){
+        if(!sb){ setMsg('Hệ thống tài khoản đang được cấu hình — thử lại sau.', false); return }
+        var e=val('su-email'), p=val('su-pass'), p2=val('su-pass2'), n=val('su-name')
+        if(!e||!p){ setMsg('Nhập email và mật khẩu.', false); return }
+        if(p.length<6){ setMsg('Mật khẩu tối thiểu 6 ký tự.', false); return }
+        if(p!==p2){ setMsg('Mật khẩu nhập lại không khớp.', false); return }
+        setMsg('Đang tạo tài khoản…', true)
+        var r=await sb.auth.signUp({ email:e, password:p, options:{ data:{ name:n }, emailRedirectTo: 'https://vgcbrowser.com' } })
+        setMsg(r.error ? 'Lỗi: '+r.error.message : 'Tạo tài khoản thành công! Kiểm tra email để xác nhận, rồi đăng nhập.', !r.error)
+      }
+    </script>
+  </body>
+</html>
