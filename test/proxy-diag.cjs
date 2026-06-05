@@ -1,11 +1,22 @@
 const { SocksClient } = require('socks')
 const tls = require('tls')
 
+// Proxy doc tu BIEN MOI TRUONG (KHONG hardcode credential vao source).
+// Truoc khi chay (PowerShell):
+//   $env:PROXY_HOST='1.2.3.4'; $env:PROXY_PORT='12324'; $env:PROXY_USER='user'; $env:PROXY_PASS='pass'; node test/proxy-diag.cjs
+const PROXY = {
+  host: process.env.PROXY_HOST || '127.0.0.1',
+  port: Number(process.env.PROXY_PORT) || 1080,
+  type: 5,
+  userId: process.env.PROXY_USER || '',
+  password: process.env.PROXY_PASS || ''
+}
+
 async function testHttps(label, host, path) {
   const t0 = Date.now()
   try {
     const { socket } = await SocksClient.createConnection({
-      proxy: { host: '185.123.152.138', port: 12324, type: 5, userId: '14a5942224c26', password: '67e3731d01' },
+      proxy: PROXY,
       command: 'connect',
       destination: { host, port: 443 },
       timeout: 9000
