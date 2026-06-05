@@ -24,10 +24,11 @@ Giải nén xong → mở thư mục bằng **VS Code** (File → Open Folder).
 ```bash
 cd đường/dẫn/tới/VGCBrowser
 npm install
-npm run dist
+npm run dist:mac
 ```
 - `npm install` tải thư viện (~1–2 phút).
-- `npm run dist` build app → tạo file trong thư mục **`release/`**:
+- ⚠️ Dùng **`npm run dist:mac`** (KHÔNG phải `npm run dist` — cái đó build cho Windows).
+- `npm run dist:mac` build app → tạo file trong thư mục **`release/`**:
   - `VGC-Browser-0.1.30-mac-arm64.dmg` (máy Apple Silicon M1/M2/M3)
   - hoặc `...-mac-x64.dmg` (máy Intel)
   - kèm bản `.zip` tương ứng.
