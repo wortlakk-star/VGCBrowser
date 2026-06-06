@@ -200,13 +200,59 @@ export default function App(): JSX.Element {
     [refresh]
   )
 
-  const run = useCallback(async (id: string) => {
-    try {
-      await window.vgc.launchProfile(id)
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
+  // Auto-check each given profile's proxy and store the result ON THE PROFILE
+  // (proxyCheck), so the list shows a fresh IP/country/✓ right after opening — works
+  // for inline proxies too, not just pool ones. Checks run in parallel; the writes
+  // are applied sequentially (updateProfile is a per-id merge) to avoid racing the
+  // profile store. Best-effort: failures just mark the proxy as errored.
+  const autoCheckProxies = useCallback(
+    async (ids: string[]) => {
+      const targets = ids
+        .map((id) => profiles.find((x) => x.id === id))
+        .filter((p): p is Profile => !!p && p.proxy.type !== 'none' && !!p.proxy.host)
+      if (targets.length === 0) return
+      const results = await Promise.all(
+        targets.map(async (p): Promise<{ id: string; check: NonNullable<Profile['proxyCheck']> }> => {
+          const at = new Date().toISOString()
+          try {
+            const res = await window.vgc.checkProxy(p.proxy)
+            return {
+              id: p.id,
+              check: {
+                status: res.ok ? 'ok' : 'error',
+                ip: res.ip,
+                country: res.country,
+                countryCode: res.countryCode,
+                latencyMs: res.latencyMs,
+                at
+              }
+            }
+          } catch {
+            return { id: p.id, check: { status: 'error', at } }
+          }
+        })
+      )
+      for (const r of results) {
+        await window.vgc.updateProfile(r.id, { proxyCheck: r.check }).catch(() => {})
+      }
+      await refresh()
+    },
+    [profiles, refresh]
+  )
+
+  const run = useCallback(
+    async (id: string) => {
+      try {
+        await window.vgc.launchProfile(id)
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : String(e))
+        return
+      }
+      // Don't block the browser opening — check the proxy in the background.
+      void autoCheckProxies([id])
+    },
+    [autoCheckProxies]
+  )
   const stop = useCallback(async (id: string) => {
     await window.vgc.stopProfile(id)
   }, [])
@@ -277,8 +323,10 @@ export default function App(): JSX.Element {
 
   // ── bulk + import/export ──
   const bulkRun = useCallback(async () => {
-    await window.vgc.launchMany([...selected])
-  }, [selected])
+    const ids = [...selected]
+    await window.vgc.launchMany(ids)
+    void autoCheckProxies(ids)
+  }, [selected, autoCheckProxies])
   const bulkStop = useCallback(async () => {
     await window.vgc.stopMany([...selected])
   }, [selected])

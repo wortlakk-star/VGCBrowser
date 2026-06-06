@@ -112,6 +112,15 @@ export interface Profile {
   /** ISO time the profile's browser DATA (cookies/session) was last uploaded to
    *  cloud storage. Set ⇒ this profile has session data in the cloud bucket. */
   cloudDataAt?: string
+  /** Result of the automatic proxy check run each time the profile is opened. */
+  proxyCheck?: {
+    status: 'ok' | 'error'
+    ip?: string
+    country?: string
+    countryCode?: string
+    latencyMs?: number
+    at: string // ISO
+  }
   createdAt: string // ISO
   updatedAt: string // ISO
   lastUsedAt?: string // ISO
