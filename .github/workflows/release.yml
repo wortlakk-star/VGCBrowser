@@ -10,12 +10,16 @@ name: Build & publish (auto-update)
 # (Settings → Secrets and variables → Actions → New repository secret). A dedicated
 # SSH key is more secure — see the note at the bottom of this file.
 
+# Triggered MANUALLY (button) or by a version tag — NOT on every push to main,
+# because the repo's git auto-sync commits to main every ~10-20 min and we don't
+# want to rebuild on each of those. To release: bump "version" in package.json,
+# commit, then either click "Run workflow" or push a tag:
+#   git tag v0.1.34 && git push origin v0.1.34
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build-win:
