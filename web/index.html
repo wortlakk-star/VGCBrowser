@@ -3,163 +3,195 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VGC Browser — Trình duyệt ẩn danh doanh nghiệp · Veltrix Group</title>
-    <meta name="description" content="VGC Browser — trình duyệt antidetect đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation." />
+    <title>VGC Browser — Trình duyệt ẩn danh đa hồ sơ · Veltrix Group</title>
+    <meta name="description" content="VGC Browser — trình duyệt antidetect đa hồ sơ cho doanh nghiệp. Vân tay cấp engine, proxy riêng, đồng bộ đám mây. Một thành viên của Veltrix Group Corporation." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
     <style>
       :root {
-        --navy: #07111f;
-        --navy-2: #0b1a2e;
-        --navy-3: #0f2236;
-        --gold: #d8b15f;
-        --gold-2: #f4d792;
-        --cream: #fff7df;
-        --slate: #aeb9ca;
-        --slate-2: #c5cfdf;
-        --line: rgba(216, 177, 95, 0.18);
-        --serif: 'Cormorant Garamond', Georgia, serif;
-        --sans: 'DM Sans', system-ui, sans-serif;
+        --bg: #08090f;
+        --bg2: #0c0e1a;
+        --surface: rgba(255, 255, 255, 0.045);
+        --surface-2: rgba(255, 255, 255, 0.07);
+        --border: rgba(255, 255, 255, 0.09);
+        --border-2: rgba(255, 255, 255, 0.16);
+        --text: #eef0f7;
+        --muted: #9aa3bd;
+        --muted-2: #c2c8da;
+        --v1: #8b5cf6;   /* violet */
+        --v2: #6366f1;   /* indigo */
+        --v3: #22d3ee;   /* cyan   */
+        --gold: #e6c071;
+        --grad: linear-gradient(135deg, #a78bfa 0%, #6366f1 55%, #22d3ee 110%);
+        --grad-soft: linear-gradient(135deg, rgba(167,139,250,.18), rgba(99,102,241,.10));
+        --display: 'Space Grotesk', system-ui, sans-serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
+        --radius: 18px;
       }
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html { scroll-behavior: smooth; }
       body {
         font-family: var(--sans);
-        background: var(--navy);
-        color: var(--slate-2);
-        line-height: 1.6;
+        background: var(--bg);
+        color: var(--muted-2);
+        line-height: 1.65;
         overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
       }
       a { color: inherit; text-decoration: none; }
-      .wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px; }
-      .serif { font-family: var(--serif); }
-      .gold { color: var(--gold-2); }
-
-      /* glow background */
-      .bg {
-        position: fixed; inset: 0; z-index: -1;
-        background:
-          radial-gradient(900px 520px at 78% -8%, rgba(216, 177, 95, 0.14), transparent),
-          radial-gradient(800px 500px at 5% 8%, rgba(15, 70, 120, 0.22), transparent),
-          linear-gradient(180deg, #07111f 0%, #050b14 100%);
+      .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+      .grad-text {
+        background: var(--grad);
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent; color: transparent;
       }
+
+      /* animated glow background */
+      .bg { position: fixed; inset: 0; z-index: -2; background: radial-gradient(1100px 700px at 80% -10%, rgba(139,92,246,.20), transparent 60%), radial-gradient(900px 600px at -5% 5%, rgba(34,211,238,.12), transparent 55%), linear-gradient(180deg, #08090f, #06070c); }
       .bg::after {
         content: ''; position: absolute; inset: 0;
-        background-image: linear-gradient(rgba(216,177,95,.04) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(216,177,95,.04) 1px, transparent 1px);
-        background-size: 64px 64px;
-        mask-image: radial-gradient(circle at 50% 0%, #000 0%, transparent 70%);
+        background-image: linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+        background-size: 56px 56px;
+        mask-image: radial-gradient(circle at 50% 0%, #000, transparent 72%);
       }
+      .orb { position: fixed; border-radius: 50%; filter: blur(80px); z-index: -1; opacity: .5; pointer-events: none; }
+      .orb.a { width: 380px; height: 380px; background: #7c3aed; top: -80px; right: 8%; animation: float 14s ease-in-out infinite; }
+      .orb.b { width: 320px; height: 320px; background: #0891b2; top: 360px; left: -60px; animation: float 18s ease-in-out infinite reverse; }
+      @keyframes float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(34px) } }
 
       /* nav */
-      nav {
-        position: sticky; top: 0; z-index: 50;
-        backdrop-filter: blur(10px);
-        background: rgba(7, 17, 31, 0.72);
-        border-bottom: 1px solid var(--line);
-      }
-      .nav-in { display: flex; align-items: center; justify-content: space-between; height: 70px; }
+      nav { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(14px); background: rgba(8,9,15,.6); border-bottom: 1px solid var(--border); }
+      .nav-in { display: flex; align-items: center; justify-content: space-between; height: 72px; }
       .brand { display: flex; align-items: center; gap: 12px; }
-      .mark {
-        width: 38px; height: 38px; display: grid; place-items: center;
-        border: 1px solid var(--gold); border-radius: 9px;
-        color: var(--gold-2); font-size: 20px;
-        background: linear-gradient(135deg, rgba(216,177,95,.16), transparent);
-      }
-      .brand b { font-family: var(--serif); font-size: 21px; color: #fff; font-weight: 700; letter-spacing: .3px; }
-      .brand small { display: block; font-size: 10.5px; color: var(--gold); letter-spacing: 2px; text-transform: uppercase; }
-      .navlinks { display: flex; align-items: center; gap: 30px; }
-      .navlinks a { color: var(--slate); font-size: 14.5px; transition: color .2s; }
-      .navlinks a:hover { color: var(--gold-2); }
-      .btn {
-        font-family: var(--sans); font-weight: 700; font-size: 14.5px; cursor: pointer;
-        border-radius: 40px; padding: 12px 26px; border: 1px solid transparent; transition: .2s; display: inline-block;
-      }
-      .btn.gold { background: linear-gradient(135deg, var(--gold-2), var(--gold)); color: #2a1e07; }
-      .btn.gold:hover { filter: brightness(1.07); box-shadow: 0 10px 30px rgba(216,177,95,.25); }
-      .btn.ghost { border-color: var(--line); color: var(--cream); }
-      .btn.ghost:hover { border-color: var(--gold); color: var(--gold-2); }
+      .mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: #fff; font-size: 18px; font-weight: 700; background: var(--grad); box-shadow: 0 8px 24px rgba(124,58,237,.4); }
+      .brand b { font-family: var(--display); font-size: 19px; color: #fff; font-weight: 700; letter-spacing: .2px; display: block; line-height: 1.1; }
+      .brand small { font-size: 10px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; }
+      .navlinks { display: flex; align-items: center; gap: 32px; }
+      .navlinks a { color: var(--muted); font-size: 14.5px; font-weight: 500; transition: color .2s; }
+      .navlinks a:hover { color: #fff; }
+      .btn { font-family: var(--sans); font-weight: 600; font-size: 14.5px; cursor: pointer; border-radius: 12px; padding: 12px 24px; border: 1px solid transparent; transition: .2s; display: inline-flex; align-items: center; gap: 8px; }
+      .btn.primary { background: var(--grad); color: #fff; box-shadow: 0 10px 28px rgba(99,102,241,.35); }
+      .btn.primary:hover { transform: translateY(-2px); box-shadow: 0 16px 38px rgba(99,102,241,.5); }
+      .btn.ghost { border-color: var(--border-2); color: var(--text); background: var(--surface); }
+      .btn.ghost:hover { border-color: var(--v1); color: #fff; background: var(--surface-2); }
+      .btn.lg { padding: 15px 30px; font-size: 15.5px; border-radius: 14px; }
 
       /* hero */
-      .hero { padding: 96px 0 70px; text-align: center; }
-      .eyebrow {
-        display: inline-flex; align-items: center; gap: 9px; font-size: 12px; letter-spacing: 2.5px;
-        text-transform: uppercase; color: var(--gold); border: 1px solid var(--line);
-        padding: 8px 18px; border-radius: 40px; margin-bottom: 30px;
-      }
-      .eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: var(--gold-2); font-style: normal; }
-      .hero h1 { font-family: var(--serif); font-weight: 700; font-size: 64px; line-height: 1.07; color: #fff; letter-spacing: .5px; }
-      .hero h1 em { font-style: italic; color: var(--gold-2); }
-      .hero p { max-width: 660px; margin: 26px auto 38px; font-size: 18px; color: var(--slate); }
-      .cta { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
-      .trust { margin-top: 46px; font-size: 13px; color: var(--slate); letter-spacing: .5px; }
-      .trust b { color: var(--gold-2); font-weight: 700; }
+      .hero { padding: 84px 0 40px; text-align: center; }
+      .badge { display: inline-flex; align-items: center; gap: 9px; font-size: 12.5px; letter-spacing: .3px; color: var(--muted-2); border: 1px solid var(--border); background: var(--surface); padding: 7px 16px; border-radius: 40px; margin-bottom: 28px; }
+      .badge i { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 10px #34d399; font-style: normal; }
+      .hero h1 { font-family: var(--display); font-weight: 700; font-size: 66px; line-height: 1.04; color: #fff; letter-spacing: -1.5px; }
+      .hero p { max-width: 640px; margin: 24px auto 36px; font-size: 18.5px; color: var(--muted); }
+      .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+      .subnote { margin-top: 18px; font-size: 13px; color: var(--muted); }
 
-      /* section */
-      section.block { padding: 80px 0; }
-      .sec-head { text-align: center; max-width: 720px; margin: 0 auto 54px; }
-      .sec-head .kicker { color: var(--gold); letter-spacing: 3px; text-transform: uppercase; font-size: 12px; font-weight: 700; }
-      .sec-head h2 { font-family: var(--serif); font-size: 44px; color: #fff; line-height: 1.12; margin: 14px 0 12px; }
-      .sec-head p { color: var(--slate); font-size: 16px; }
+      /* product mockup */
+      .mock { max-width: 940px; margin: 64px auto 0; perspective: 1600px; }
+      .mock-frame { border: 1px solid var(--border-2); border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, #0e1120, #0a0c16); box-shadow: 0 40px 120px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03); transform: rotateX(6deg); transform-origin: top center; }
+      .mock-bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.02); }
+      .mock-bar .dot { width: 11px; height: 11px; border-radius: 50%; }
+      .mock-bar .dot:nth-child(1){ background:#ff5f57 } .mock-bar .dot:nth-child(2){ background:#febc2e } .mock-bar .dot:nth-child(3){ background:#28c840 }
+      .mock-bar .url { margin-left: 14px; font-size: 12px; color: var(--muted); background: rgba(255,255,255,.04); border: 1px solid var(--border); padding: 5px 14px; border-radius: 8px; }
+      .mock-body { display: grid; grid-template-columns: 190px 1fr; min-height: 320px; }
+      .mock-side { border-right: 1px solid var(--border); padding: 16px 12px; background: rgba(255,255,255,.015); }
+      .mock-side .si { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+      .mock-side .si.on { background: var(--grad-soft); color: #fff; border: 1px solid var(--border-2); }
+      .mock-side .si b { width: 16px; text-align: center; }
+      .mock-main { padding: 16px 18px; text-align: left; }
+      .mrow { display: grid; grid-template-columns: 18px 1.4fr 1fr 70px 64px; align-items: center; gap: 12px; padding: 13px 12px; border-radius: 10px; border: 1px solid transparent; font-size: 13px; }
+      .mrow + .mrow { margin-top: 4px; }
+      .mrow:hover { background: rgba(255,255,255,.03); border-color: var(--border); }
+      .mrow .av { width: 26px; height: 26px; border-radius: 7px; background: var(--grad); display: grid; place-items: center; font-size: 11px; color: #fff; font-weight: 700; }
+      .mrow .nm { color: #fff; font-weight: 600; }
+      .mrow .px { color: var(--muted); font-size: 12px; }
+      .mrow .st { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+      .mrow .st i { width: 7px; height: 7px; border-radius: 50%; font-style: normal; }
+      .st.run { color: #34d399 } .st.run i { background:#34d399; box-shadow:0 0 8px #34d399 }
+      .st.idle { color: var(--muted) } .st.idle i { background:#5b6480 }
+      .mrun { font-size: 11px; font-weight: 600; padding: 5px 0; border-radius: 7px; text-align: center; background: var(--grad); color: #fff; }
+      .mhead { display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; }
+      .mhead h4 { font-family: var(--display); color:#fff; font-size: 16px; }
+      .mhead .mnew { font-size: 12px; font-weight:600; color:#fff; background: var(--grad); padding: 7px 14px; border-radius: 9px; }
 
-      .grid { display: grid; gap: 22px; grid-template-columns: repeat(4, 1fr); }
-      .card {
-        background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
-        border: 1px solid var(--line); border-radius: 16px; padding: 30px 26px;
-        transition: transform .25s, border-color .25s;
-      }
-      .card:hover { transform: translateY(-5px); border-color: var(--gold); }
-      .card .num { font-family: var(--serif); font-size: 30px; color: var(--gold-2); }
-      .card h3 { color: #fff; font-size: 19px; margin: 12px 0 8px; font-weight: 700; }
-      .card p { color: var(--slate); font-size: 14.5px; }
+      /* stats */
+      .stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 18px; margin-top: 70px; }
+      .stat { text-align: center; padding: 22px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+      .stat .n { font-family: var(--display); font-size: 30px; font-weight: 700; color: #fff; }
+      .stat .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+      /* sections */
+      section.block { padding: 96px 0; }
+      .sec-head { text-align: center; max-width: 680px; margin: 0 auto 56px; }
+      .kicker { display:inline-block; color: #fff; letter-spacing: .4px; font-size: 12.5px; font-weight: 600; padding: 6px 14px; border-radius: 30px; background: var(--grad-soft); border: 1px solid var(--border); }
+      .sec-head h2 { font-family: var(--display); font-size: 46px; color: #fff; line-height: 1.1; margin: 18px 0 14px; letter-spacing: -1px; }
+      .sec-head p { color: var(--muted); font-size: 17px; }
+
+      .grid { display: grid; gap: 20px; grid-template-columns: repeat(4, 1fr); }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px 26px; transition: transform .25s, border-color .25s, background .25s; position: relative; overflow: hidden; }
+      .card:hover { transform: translateY(-6px); border-color: var(--border-2); background: var(--surface-2); }
+      .ic { width: 50px; height: 50px; border-radius: 13px; display: grid; place-items: center; background: var(--grad-soft); border: 1px solid var(--border-2); margin-bottom: 18px; }
+      .ic svg { width: 24px; height: 24px; stroke: #c4b5fd; fill: none; stroke-width: 1.8; }
+      .card h3 { color: #fff; font-size: 18.5px; margin-bottom: 9px; font-weight: 600; font-family: var(--display); }
+      .card p { color: var(--muted); font-size: 14.5px; }
 
       /* pricing */
-      .prices { display: grid; gap: 22px; grid-template-columns: repeat(3, 1fr); max-width: 980px; margin: 0 auto; }
-      .price { background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 18px; padding: 34px 28px; text-align: center; }
-      .price.feat { border-color: var(--gold); background: linear-gradient(180deg, rgba(216,177,95,.1), rgba(255,255,255,.02)); position: relative; }
-      .price .tag { position: absolute; top: -13px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, var(--gold-2), var(--gold)); color: #2a1e07; font-size: 11px; font-weight: 700; padding: 5px 16px; border-radius: 20px; letter-spacing: .5px; }
-      .price h3 { font-family: var(--serif); color: #fff; font-size: 26px; }
-      .price .amt { font-size: 40px; color: var(--gold-2); font-weight: 700; margin: 12px 0 4px; font-family: var(--serif); }
-      .price .amt span { font-size: 15px; color: var(--slate); font-family: var(--sans); }
-      .price ul { list-style: none; text-align: left; margin: 22px 0; display: grid; gap: 11px; }
-      .price li { color: var(--slate-2); font-size: 14.5px; }
-      .price li b { color: var(--gold-2); margin-right: 8px; }
+      .prices { display: grid; gap: 22px; grid-template-columns: repeat(3, 1fr); max-width: 1000px; margin: 0 auto; align-items: start; }
+      .price { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 34px 30px; transition: transform .25s, border-color .25s; }
+      .price:hover { transform: translateY(-5px); border-color: var(--border-2); }
+      .price.feat { border-color: transparent; background: linear-gradient(180deg, rgba(139,92,246,.16), rgba(99,102,241,.05)); box-shadow: 0 0 0 1px var(--v1), 0 30px 70px rgba(99,102,241,.25); position: relative; transform: scale(1.03); }
+      .price.feat:hover { transform: scale(1.03) translateY(-5px); }
+      .price .tag { position: absolute; top: -13px; left: 50%; transform: translateX(-50%); background: var(--grad); color: #fff; font-size: 11px; font-weight: 700; padding: 6px 16px; border-radius: 20px; letter-spacing: .5px; box-shadow: 0 8px 20px rgba(99,102,241,.4); }
+      .price h3 { font-family: var(--display); color: #fff; font-size: 21px; }
+      .price .amt { font-size: 42px; color: #fff; font-weight: 700; margin: 12px 0 4px; font-family: var(--display); letter-spacing: -1px; }
+      .price .amt span { font-size: 15px; color: var(--muted); font-weight: 500; }
+      .price ul { list-style: none; margin: 22px 0 26px; display: grid; gap: 12px; }
+      .price li { color: var(--muted-2); font-size: 14.5px; display: flex; align-items: flex-start; gap: 10px; }
+      .price li b { color: var(--v3); flex-shrink: 0; }
+      .price .btn { width: 100%; justify-content: center; }
 
       /* auth */
-      .authwrap { max-width: 440px; margin: 0 auto; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 20px; padding: 34px 30px; }
-      .tabs { display: flex; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
-      .tab { flex: 1; background: none; border: none; color: var(--slate); font-family: var(--sans); font-size: 15px; font-weight: 700; padding: 12px 0; cursor: pointer; border-bottom: 2px solid transparent; }
-      .tab.active { color: var(--gold-2); border-bottom-color: var(--gold); }
-      .authwrap input { width: 100%; padding: 14px 16px; margin-bottom: 13px; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 10px; color: #fff; font-family: var(--sans); font-size: 15px; outline: none; }
-      .authwrap input:focus { border-color: var(--gold); }
-      .authwrap .btn.gold { width: 100%; margin-top: 4px; }
+      .authwrap { max-width: 440px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 22px; padding: 34px 32px; backdrop-filter: blur(8px); }
+      .tabs { display: flex; gap: 6px; background: rgba(0,0,0,.25); border: 1px solid var(--border); border-radius: 12px; padding: 5px; margin-bottom: 22px; }
+      .tab { flex: 1; background: none; border: none; color: var(--muted); font-family: var(--sans); font-size: 14.5px; font-weight: 600; padding: 11px 0; cursor: pointer; border-radius: 8px; transition: .2s; }
+      .tab.active { color: #fff; background: var(--grad); box-shadow: 0 6px 18px rgba(99,102,241,.35); }
+      .authwrap input { width: 100%; padding: 14px 16px; margin-bottom: 13px; background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 11px; color: #fff; font-family: var(--sans); font-size: 15px; outline: none; transition: border-color .2s; }
+      .authwrap input::placeholder { color: #6b7390; }
+      .authwrap input:focus { border-color: var(--v1); }
+      .authwrap .btn.primary { width: 100%; margin-top: 4px; justify-content: center; }
       #msg { text-align: center; margin-top: 14px; font-size: 13.5px; font-weight: 600; }
 
-      footer { border-top: 1px solid var(--line); padding: 50px 0 36px; margin-top: 40px; }
-      .foot-in { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 30px; }
-      footer h5 { color: var(--gold); font-size: 12px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px; }
-      footer a, footer p { color: var(--slate); font-size: 14px; display: block; margin-bottom: 8px; }
-      footer a:hover { color: var(--gold-2); }
-      .copy { text-align: center; color: var(--slate); font-size: 13px; margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--line); }
+      footer { border-top: 1px solid var(--border); padding: 60px 0 40px; margin-top: 30px; }
+      .foot-in { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 36px; }
+      footer h5 { color: #fff; font-size: 13px; letter-spacing: .3px; margin-bottom: 16px; font-weight: 600; }
+      footer a, footer p { color: var(--muted); font-size: 14px; display: block; margin-bottom: 9px; transition: color .2s; }
+      footer a:hover { color: #fff; }
+      .copy { text-align: center; color: var(--muted); font-size: 13px; margin-top: 40px; padding-top: 26px; border-top: 1px solid var(--border); }
 
-      .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s, transform .7s; }
+      .reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); }
       .reveal.in { opacity: 1; transform: none; }
 
-      @media (max-width: 900px) {
+      @media (max-width: 920px) {
         .grid { grid-template-columns: repeat(2, 1fr); }
-        .prices { grid-template-columns: 1fr; }
+        .prices { grid-template-columns: 1fr; max-width: 440px; }
+        .price.feat { transform: none; } .price.feat:hover { transform: translateY(-5px); }
+        .stats { grid-template-columns: repeat(2,1fr); }
         .navlinks a:not(.btn) { display: none; }
-        .hero h1 { font-size: 44px; }
-        .sec-head h2 { font-size: 34px; }
+        .hero h1 { font-size: 42px; }
+        .sec-head h2 { font-size: 32px; }
+        .mock-body { grid-template-columns: 1fr; } .mock-side { display: none; }
+        .mrow { grid-template-columns: 18px 1.3fr 64px 60px; } .mrow .px { display: none; }
+        .mock-frame { transform: none; }
       }
     </style>
   </head>
   <body>
     <div class="bg"></div>
+    <div class="orb a"></div>
+    <div class="orb b"></div>
 
     <nav>
       <div class="wrap nav-in">
@@ -174,25 +206,58 @@
           <a href="#features">Tính năng</a>
           <a href="#pricing">Bảng giá</a>
           <a href="#login">Tài khoản</a>
-          <a class="btn gold" id="navDl" href="#">Tải về</a>
+          <a class="btn primary" id="navDl" href="#">Tải về</a>
         </div>
       </div>
     </nav>
 
     <header class="hero">
       <div class="wrap">
-        <span class="eyebrow"><i></i> Thành viên của Veltrix Group Corporation</span>
-        <h1 class="serif">Trình duyệt <em>ẩn danh</em><br />đẳng cấp doanh nghiệp</h1>
+        <span class="badge"><i></i> Thành viên của Veltrix Group Corporation</span>
+        <h1>Trình duyệt <span class="grad-text">ẩn danh</span><br />đa hồ sơ cho doanh nghiệp</h1>
         <p>
-          VGC Browser quản lý hàng trăm hồ sơ trình duyệt độc lập — mỗi hồ sơ là một “máy” riêng
-          với vân tay thật, proxy riêng và phiên đăng nhập đồng bộ đám mây. Vận hành đa tài khoản
-          an toàn, ở quy mô tập đoàn.
+          Quản lý hàng trăm hồ sơ trình duyệt độc lập — mỗi hồ sơ là một “máy” riêng với vân tay
+          thật, proxy riêng và phiên đăng nhập đồng bộ đám mây. Vận hành đa tài khoản an toàn, ở quy mô tập đoàn.
         </p>
         <div class="cta">
-          <a class="btn gold" id="heroDl" href="#">↓ Tải về miễn phí</a>
-          <a class="btn ghost" href="#login">Đăng nhập</a>
+          <a class="btn primary lg" id="heroDl" href="#">↓ Tải về miễn phí</a>
+          <a class="btn ghost lg" href="#login">Đăng nhập VGC Cloud</a>
         </div>
-        <div class="trust">Một sản phẩm công nghệ của <b>Veltrix Group</b> · Global Technology Holding</div>
+        <div class="subnote">Miễn phí 10 hồ sơ · Windows · không cần thẻ tín dụng</div>
+
+        <!-- Product mockup -->
+        <div class="mock reveal">
+          <div class="mock-frame">
+            <div class="mock-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="url">VGC Browser — Profile Manager</span>
+            </div>
+            <div class="mock-body">
+              <div class="mock-side">
+                <div class="si on"><b>▦</b> Tất cả hồ sơ</div>
+                <div class="si"><b>★</b> Yêu thích</div>
+                <div class="si"><b>☁</b> Cloud sync</div>
+                <div class="si"><b>◈</b> Proxy Manager</div>
+                <div class="si"><b>⚙</b> Cài đặt</div>
+              </div>
+              <div class="mock-main">
+                <div class="mhead"><h4>Hồ sơ (128)</h4><span class="mnew">+ Tạo hồ sơ</span></div>
+                <div class="mrow"><span class="av">US</span><span class="nm">Facebook · US 01</span><span class="px">socks5 · 🇺🇸 New York</span><span class="st run"><i></i>chạy</span><span class="mrun">Mở</span></div>
+                <div class="mrow"><span class="av">VN</span><span class="nm">TikTok Shop · VN</span><span class="px">http · 🇻🇳 Hà Nội</span><span class="st idle"><i></i>tắt</span><span class="mrun">Mở</span></div>
+                <div class="mrow"><span class="av">DE</span><span class="nm">Amazon · DE 03</span><span class="px">socks5 · 🇩🇪 Berlin</span><span class="st run"><i></i>chạy</span><span class="mrun">Mở</span></div>
+                <div class="mrow"><span class="av">JP</span><span class="nm">Rakuten · JP 02</span><span class="px">socks5 · 🇯🇵 Tokyo</span><span class="st idle"><i></i>tắt</span><span class="mrun">Mở</span></div>
+                <div class="mrow"><span class="av">SG</span><span class="nm">Shopee · SG 07</span><span class="px">http · 🇸🇬 Singapore</span><span class="st run"><i></i>chạy</span><span class="mrun">Mở</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stats reveal">
+          <div class="stat"><div class="n">128+</div><div class="l">Hồ sơ song song</div></div>
+          <div class="stat"><div class="n">C++</div><div class="l">Vân tay cấp engine</div></div>
+          <div class="stat"><div class="n">☁ 24/7</div><div class="l">Đồng bộ đám mây</div></div>
+          <div class="stat"><div class="n">API</div><div class="l">Tự động hoá</div></div>
+        </div>
       </div>
     </header>
 
@@ -200,14 +265,30 @@
       <div class="wrap">
         <div class="sec-head">
           <div class="kicker">Năng lực cốt lõi</div>
-          <h2 class="serif">Bốn trụ cột của VGC Browser</h2>
+          <h2>Bốn trụ cột của VGC Browser</h2>
           <p>Hạ tầng antidetect hoàn chỉnh — từ vân tay cấp engine đến đồng bộ đám mây và tự động hoá.</p>
         </div>
         <div class="grid">
-          <div class="card"><div class="num">01</div><h3>Đa hồ sơ</h3><p>Hàng trăm hồ sơ cô lập hoàn toàn — cookie, cache, storage và proxy riêng cho từng hồ sơ.</p></div>
-          <div class="card"><div class="num">02</div><h3>Vân tay thật</h3><p>Engine Chromium tuỳ biến (VGC Core) chỉnh vân tay ở cấp C++: WebGL, canvas, audio, phần cứng.</p></div>
-          <div class="card"><div class="num">03</div><h3>Đồng bộ đám mây</h3><p>Hồ sơ &amp; phiên đăng nhập lưu trên server — máy nào đăng nhập tài khoản cũng kéo về dùng ngay.</p></div>
-          <div class="card"><div class="num">04</div><h3>Automation API</h3><p>API nội bộ kết nối Puppeteer / Playwright để tự động hoá tác vụ ở quy mô lớn.</p></div>
+          <div class="card">
+            <div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+            <h3>Đa hồ sơ</h3>
+            <p>Hàng trăm hồ sơ cô lập hoàn toàn — cookie, cache, storage và proxy riêng cho từng hồ sơ.</p>
+          </div>
+          <div class="card">
+            <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V6z"/></svg></div>
+            <h3>Vân tay thật</h3>
+            <p>Engine Chromium tuỳ biến (VGC Core) chỉnh vân tay ở cấp C++: WebGL, canvas, audio, phần cứng.</p>
+          </div>
+          <div class="card">
+            <div class="ic"><svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 010-8 5 5 0 019.6-1.5A3.5 3.5 0 0117 18z"/></svg></div>
+            <h3>Đồng bộ đám mây</h3>
+            <p>Hồ sơ &amp; phiên đăng nhập lưu trên server — máy nào đăng nhập tài khoản cũng kéo về dùng ngay.</p>
+          </div>
+          <div class="card">
+            <div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 00-1.7-1l-.3-2.6H9.4l-.3 2.6a7 7 0 00-1.7 1l-2.3-1-2 3.4L5 11a7 7 0 000 2l-2 1.5 2 3.4 2.3-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.3 1 2-3.4-2-1.5a7 7 0 00.1-1z"/></svg></div>
+            <h3>Automation API</h3>
+            <p>API nội bộ kết nối Puppeteer / Playwright để tự động hoá tác vụ ở quy mô lớn.</p>
+          </div>
         </div>
       </div>
     </section>
@@ -216,26 +297,26 @@
       <div class="wrap">
         <div class="sec-head">
           <div class="kicker">Bảng giá</div>
-          <h2 class="serif">Chọn gói phù hợp</h2>
+          <h2>Chọn gói phù hợp</h2>
           <p>Bắt đầu miễn phí, nâng cấp khi cần thêm hồ sơ và tính năng đội nhóm.</p>
         </div>
         <div class="prices">
           <div class="price">
-            <h3 class="serif">Free</h3>
-            <div class="amt">0đ<span>/mãi mãi</span></div>
+            <h3>Free</h3>
+            <div class="amt">0đ<span> /mãi mãi</span></div>
             <ul><li><b>✓</b> 10 hồ sơ</li><li><b>✓</b> Vân tay &amp; proxy</li><li><b>✓</b> Đồng bộ cơ bản</li></ul>
             <a class="btn ghost" href="#login">Dùng thử</a>
           </div>
           <div class="price feat">
             <span class="tag">PHỔ BIẾN NHẤT</span>
-            <h3 class="serif">Pro</h3>
-            <div class="amt">199k<span>/tháng</span></div>
+            <h3>Pro</h3>
+            <div class="amt">199k<span> /tháng</span></div>
             <ul><li><b>✓</b> 100 hồ sơ + cloud sync</li><li><b>✓</b> Automation API</li><li><b>✓</b> Proxy Manager</li><li><b>✓</b> Hỗ trợ ưu tiên 24/7</li></ul>
-            <a class="btn gold" href="#login">Dùng thử</a>
+            <a class="btn primary" href="#login">Dùng thử</a>
           </div>
           <div class="price">
-            <h3 class="serif">Team</h3>
-            <div class="amt">499k<span>/tháng</span></div>
+            <h3>Team</h3>
+            <div class="amt">499k<span> /tháng</span></div>
             <ul><li><b>✓</b> Hồ sơ không giới hạn</li><li><b>✓</b> Chia sẻ nhóm &amp; phân quyền</li><li><b>✓</b> Nhiều thành viên</li></ul>
             <a class="btn ghost" href="#login">Liên hệ</a>
           </div>
@@ -247,7 +328,7 @@
       <div class="wrap">
         <div class="sec-head">
           <div class="kicker">Tài khoản</div>
-          <h2 class="serif">Đăng nhập VGC Cloud</h2>
+          <h2>Đăng nhập VGC Cloud</h2>
           <p>Một tài khoản — đồng bộ hồ sơ &amp; phiên trên mọi thiết bị.</p>
         </div>
         <div class="authwrap">
@@ -258,14 +339,14 @@
           <div id="pane-login">
             <input id="li-email" type="email" placeholder="Địa chỉ email" />
             <input id="li-pass" type="password" placeholder="Mật khẩu" />
-            <button class="btn gold" id="loginBtn">Đăng nhập</button>
+            <button class="btn primary" id="loginBtn">Đăng nhập</button>
           </div>
           <div id="pane-signup" style="display: none">
             <input id="su-name" placeholder="Tên hiển thị (tuỳ chọn)" />
             <input id="su-email" type="email" placeholder="Địa chỉ email" />
             <input id="su-pass" type="password" placeholder="Mật khẩu (≥ 6 ký tự)" />
             <input id="su-pass2" type="password" placeholder="Nhập lại mật khẩu" />
-            <button class="btn gold" id="signupBtn">Tạo tài khoản</button>
+            <button class="btn primary" id="signupBtn">Tạo tài khoản</button>
           </div>
           <p id="msg"></p>
         </div>
@@ -274,12 +355,12 @@
 
     <footer>
       <div class="wrap foot-in">
-        <div>
-          <div class="brand" style="margin-bottom: 14px">
+        <div style="max-width: 330px">
+          <div class="brand" style="margin-bottom: 16px">
             <span class="mark">◆</span>
             <div><b>VGC Browser</b><small>by Veltrix Group</small></div>
           </div>
-          <p style="max-width: 320px">Trình duyệt ẩn danh đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation — Global Technology Holding.</p>
+          <p>Trình duyệt ẩn danh đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation — Global Technology Holding.</p>
         </div>
         <div><h5>Sản phẩm</h5><a href="#features">Tính năng</a><a href="#pricing">Bảng giá</a><a id="ctaDl" href="#">Tải về</a></div>
         <div><h5>Tài khoản</h5><a href="#login">Đăng nhập</a><a href="#login">Đăng ký</a></div>
@@ -318,12 +399,12 @@
         var o = document.createElement('div')
         o.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(4,10,20,.86);backdrop-filter:blur(6px)'
         var card = document.createElement('div')
-        card.style.cssText = 'max-width:440px;width:92%;text-align:center;background:linear-gradient(180deg,#0b1a2e,#07111f);border:1px solid #d8b15f;border-radius:18px;padding:38px 30px;color:#fff7df;box-shadow:0 30px 80px rgba(0,0,0,.6)'
+        card.style.cssText = 'max-width:440px;width:92%;text-align:center;background:linear-gradient(180deg,#0e1120,#0a0c16);border:1px solid #6366f1;border-radius:18px;padding:38px 30px;color:#eef0f7;box-shadow:0 30px 80px rgba(0,0,0,.6)'
         card.innerHTML = '<div style="font-size:56px;line-height:1">✅</div>'
-          + '<h2 style="margin:16px 0 8px;font-size:24px;font-family:Cormorant Garamond,serif">'+t+'</h2>'
-          + '<p style="margin:0 0 24px;color:#aeb9ca;font-size:14px;line-height:1.6">'+sub+'</p>'
-          + '<a href="'+DOWNLOAD_URL+'" style="display:inline-block;background:linear-gradient(135deg,#f4d792,#d8b15f);color:#2a1e07;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:30px">Tải VGC Browser</a>'
-          + '<div style="margin-top:16px"><a href="#" id="vgcAuthClose" style="color:#d8b15f;font-size:13px;text-decoration:underline">Đóng</a></div>'
+          + '<h2 style="margin:16px 0 8px;font-size:24px;font-family:Space Grotesk,sans-serif">'+t+'</h2>'
+          + '<p style="margin:0 0 24px;color:#9aa3bd;font-size:14px;line-height:1.6">'+sub+'</p>'
+          + '<a href="'+DOWNLOAD_URL+'" style="display:inline-block;background:linear-gradient(135deg,#a78bfa,#6366f1);color:#fff;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:30px">Tải VGC Browser</a>'
+          + '<div style="margin-top:16px"><a href="#" id="vgcAuthClose" style="color:#a78bfa;font-size:13px;text-decoration:underline">Đóng</a></div>'
         o.appendChild(card)
         document.body.appendChild(o)
         o.addEventListener('click', function(ev){ if(ev.target===o) o.remove() })
