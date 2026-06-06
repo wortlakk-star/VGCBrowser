@@ -28,6 +28,23 @@ function basicAuth(p: ProxyConfig): string {
   return `Proxy-Authorization: Basic ${token}\r\n`
 }
 
+/**
+ * One-way pipe that can't crash the app. When a peer (browser tab or upstream
+ * proxy) closes mid-transfer, the next write throws EPIPE/ECONNRESET; with no
+ * 'error' listener on that stream Node escalates it to an uncaught exception —
+ * the "A JavaScript error occurred in the main process" dialog. Attaching error
+ * listeners to BOTH ends and tearing the pair down keeps the blip contained.
+ */
+function safePipe(src: NodeJS.ReadableStream, dst: NodeJS.WritableStream): void {
+  const onErr = (): void => {
+    ;(src as Partial<Duplex>).destroy?.()
+    ;(dst as Partial<Duplex>).destroy?.()
+  }
+  src.once('error', onErr)
+  dst.once('error', onErr)
+  src.pipe(dst)
+}
+
 // ── HTTPS tunneling (CONNECT) — the common path ──
 function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex, head: Buffer): void {
   const [host, portStr] = (req.url ?? '').split(':')
@@ -61,9 +78,8 @@ function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex,
       .then(({ socket }) => {
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
         if (head && head.length) socket.write(head)
-        socket.pipe(client)
-        client.pipe(socket)
-        socket.on('error', fail)
+        safePipe(socket, client)
+        safePipe(client, socket)
       })
       .catch(fail)
     return
@@ -94,8 +110,8 @@ function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex,
     const remainder = buf.slice(idx + 4)
     if (head && head.length) upstream.write(head)
     if (remainder.length) client.write(remainder)
-    upstream.pipe(client)
-    client.pipe(upstream)
+    safePipe(upstream, client)
+    safePipe(client, upstream)
   }
   upstream.on('data', onData)
   upstream.on('error', fail)
@@ -139,8 +155,8 @@ function handleHttp(proxy: ProxyConfig, req: IncomingMessage, res: ServerRespons
           .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
           .join('\r\n')
         socket.write(`${req.method} ${u.pathname}${u.search} HTTP/1.1\r\n${headers}\r\n\r\n`)
-        req.pipe(socket)
-        socket.pipe(res.socket!)
+        safePipe(req, socket)
+        if (res.socket) safePipe(socket, res.socket)
         socket.on('error', fail)
       })
       .catch(fail)
@@ -155,9 +171,9 @@ function handleHttp(proxy: ProxyConfig, req: IncomingMessage, res: ServerRespons
       .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
       .join('\r\n')
     upstream.write(`${req.method} ${url} HTTP/1.1\r\n${headers}\r\n${auth}\r\n`)
-    req.pipe(upstream)
+    safePipe(req, upstream)
   })
-  upstream.pipe(res.socket!)
+  if (res.socket) safePipe(upstream, res.socket)
   upstream.on('error', fail)
 }
 
