@@ -132,6 +132,24 @@ export function ProfileTable({
                       </>
                     )
                   }
+                  // Prefer the per-profile auto-check (run when the profile opens);
+                  // fall back to the matching pool proxy's last check.
+                  const pc = p.proxyCheck
+                  if (pc?.status === 'ok' && pc.ip) {
+                    return (
+                      <span style={{ color: 'var(--green)' }}>
+                        <span className="pdot on" />
+                        {(pc.countryCode || '').toUpperCase()} · {pc.ip}
+                      </span>
+                    )
+                  }
+                  if (pc?.status === 'error') {
+                    return (
+                      <span style={{ color: 'var(--red)' }}>
+                        <span className="pdot off" />✗ proxy lỗi
+                      </span>
+                    )
+                  }
                   const sp = proxyPool.find(
                     (x) =>
                       x.host === p.proxy.host &&

@@ -6,6 +6,20 @@ import { stopAllAndSync } from './profile-manager'
 import { restartApiServer, stopApiServer } from './api-manager'
 import { initUpdater } from './updater'
 
+// Network races — a browser tab or upstream proxy closing mid-write — surface as
+// socket errors with these codes. The proxy relay attaches its own handlers, but
+// this is a last-resort guard so a stray one never escalates to the fatal "A
+// JavaScript error occurred in the main process" dialog. Non-network errors are
+// re-thrown so real bugs still crash and aren't silently masked.
+const BENIGN_NET = new Set(['EPIPE', 'ECONNRESET', 'ECONNABORTED', 'ERR_STREAM_WRITE_AFTER_END'])
+process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
+  if (err && BENIGN_NET.has(err.code ?? '')) {
+    console.warn('[net] ignored benign socket error:', err.code, err.message)
+    return
+  }
+  throw err
+})
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,

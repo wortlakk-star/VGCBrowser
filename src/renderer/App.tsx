@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   DataSyncState,
   EngineProgress,
@@ -15,7 +15,13 @@ import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { Sidebar } from './components/Sidebar'
 import { applyTheme, getTheme, type Theme } from './theme'
-import { getCloud } from './cloud'
+import {
+  getCloud,
+  pullCloudProfileList,
+  pushCloudProfileList,
+  pullCloudProxies,
+  pushCloudProxies
+} from './cloud'
 
 export default function App(): JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -114,6 +120,88 @@ export default function App(): JSX.Element {
     return off
   }, [refresh])
 
+  // ── Cloud auto-sync (GoLogin-style) ──────────────────────────────────────────
+  // Set when an auto-pull just rewrote a local list, so the matching auto-push
+  // effect below skips the echo it would otherwise fire for cloud-originated data.
+  const justPulledRef = useRef(false)
+  const justPulledProxiesRef = useRef(false)
+
+  // Auto-PULL: App only mounts once signed in (see Gate), so this runs right after
+  // login — fetch the account's profiles AND proxy pool from the cloud so a fresh
+  // machine shows everything without a manual "Kéo về". Profile session data still
+  // loads lazily on open.
+  useEffect(() => {
+    void (async () => {
+      // allSettled so a proxy-sync hiccup (e.g. proxies_cloud table not created yet)
+      // never blocks the profile pull, and vice-versa.
+      const [pr, px] = await Promise.allSettled([pullCloudProfileList(), pullCloudProxies()])
+      const nProfiles = pr.status === 'fulfilled' ? pr.value : 0
+      const nProxies = px.status === 'fulfilled' ? px.value : 0
+      if (nProfiles > 0 || nProxies > 0) {
+        justPulledRef.current = true
+        justPulledProxiesRef.current = true
+        await refresh()
+        const parts: string[] = []
+        if (nProfiles > 0) parts.push(`${nProfiles} profile`)
+        if (nProxies > 0) parts.push(`${nProxies} proxy`)
+        setDataSync({ id: '*', phase: 'download', message: `✓ Đã tải ${parts.join(' + ')} từ cloud` })
+        setTimeout(() => setDataSync(null), 2500)
+      }
+      if (px.status === 'rejected') console.warn('[auto-pull:proxies]', px.reason)
+      // Only surface the profile pull failure (the critical path) to the user.
+      if (pr.status === 'rejected') {
+        setDataSync({
+          id: '*',
+          phase: 'error',
+          message:
+            'Lỗi tải profile từ cloud: ' +
+            (pr.reason instanceof Error ? pr.reason.message : String(pr.reason))
+        })
+        setTimeout(() => setDataSync(null), 4000)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-PUSH profiles: whenever the local profile list changes (create/edit/delete),
+  // upsert the metadata to the cloud — debounced — so other machines see it without a
+  // manual push. Skipped during the initial load and right after an auto-pull.
+  useEffect(() => {
+    if (loading) return
+    if (justPulledRef.current) {
+      justPulledRef.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      void pushCloudProfileList().catch((e) => console.error('[auto-push]', e))
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [profiles, loading])
+
+  // Auto-PUSH proxies: same idea for the Proxy Manager pool — adding/editing a proxy
+  // (the pool reloads when the modal closes) syncs it to the account's cloud.
+  useEffect(() => {
+    if (loading) return
+    if (justPulledProxiesRef.current) {
+      justPulledProxiesRef.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      void pushCloudProxies().catch((e) => console.error('[auto-push:proxies]', e))
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [proxyPool, loading])
+
+  // Safety net: re-push on a slow interval in case a change-triggered push was
+  // missed or failed transiently. Metadata-only, so it's cheap.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void pushCloudProfileList().catch((e) => console.error('[auto-push:interval]', e))
+      void pushCloudProxies().catch((e) => console.error('[auto-push:proxies:interval]', e))
+    }, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
+
   const createGroup = useCallback(
     async (name: string) => {
       const n = name.trim()
@@ -146,13 +234,59 @@ export default function App(): JSX.Element {
     [refresh]
   )
 
-  const run = useCallback(async (id: string) => {
-    try {
-      await window.vgc.launchProfile(id)
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
+  // Auto-check each given profile's proxy and store the result ON THE PROFILE
+  // (proxyCheck), so the list shows a fresh IP/country/✓ right after opening — works
+  // for inline proxies too, not just pool ones. Checks run in parallel; the writes
+  // are applied sequentially (updateProfile is a per-id merge) to avoid racing the
+  // profile store. Best-effort: failures just mark the proxy as errored.
+  const autoCheckProxies = useCallback(
+    async (ids: string[]) => {
+      const targets = ids
+        .map((id) => profiles.find((x) => x.id === id))
+        .filter((p): p is Profile => !!p && p.proxy.type !== 'none' && !!p.proxy.host)
+      if (targets.length === 0) return
+      const results = await Promise.all(
+        targets.map(async (p): Promise<{ id: string; check: NonNullable<Profile['proxyCheck']> }> => {
+          const at = new Date().toISOString()
+          try {
+            const res = await window.vgc.checkProxy(p.proxy)
+            return {
+              id: p.id,
+              check: {
+                status: res.ok ? 'ok' : 'error',
+                ip: res.ip,
+                country: res.country,
+                countryCode: res.countryCode,
+                latencyMs: res.latencyMs,
+                at
+              }
+            }
+          } catch {
+            return { id: p.id, check: { status: 'error', at } }
+          }
+        })
+      )
+      for (const r of results) {
+        await window.vgc.updateProfile(r.id, { proxyCheck: r.check }).catch(() => {})
+      }
+      await refresh()
+    },
+    [profiles, refresh]
+  )
+
+  const run = useCallback(
+    async (id: string) => {
+      try {
+        await window.vgc.launchProfile(id)
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : String(e))
+        return
+      }
+      // Don't block the browser opening — check the proxy in the background.
+      void autoCheckProxies([id])
+    },
+    [autoCheckProxies]
+  )
   const stop = useCallback(async (id: string) => {
     await window.vgc.stopProfile(id)
   }, [])
@@ -223,8 +357,10 @@ export default function App(): JSX.Element {
 
   // ── bulk + import/export ──
   const bulkRun = useCallback(async () => {
-    await window.vgc.launchMany([...selected])
-  }, [selected])
+    const ids = [...selected]
+    await window.vgc.launchMany(ids)
+    void autoCheckProxies(ids)
+  }, [selected, autoCheckProxies])
   const bulkStop = useCallback(async () => {
     await window.vgc.stopMany([...selected])
   }, [selected])
