@@ -4,6 +4,7 @@ import { join } from 'path'
 import { registerIpc } from './ipc'
 import { stopAllAndSync } from './profile-manager'
 import { restartApiServer, stopApiServer } from './api-manager'
+import { initUpdater } from './updater'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -42,6 +43,7 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
   void restartApiServer()
+  initUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -3,7 +3,7 @@
 // is invoke/handle (request/response); status changes are pushed separately via
 // 'profile:status' from the profile manager.
 
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { ipcMain, dialog, BrowserWindow, app } from 'electron'
 import { randomUUID } from 'crypto'
 import { promises as fs } from 'fs'
 import type {
@@ -21,6 +21,7 @@ import { createProfile, updateProfile } from './profiles-service'
 import { getSettings, saveSettings, regenerateToken, type AppSettings } from './settings'
 import { restartApiServer } from './api-manager'
 import { ensureEngine, isEngineInstalled, type EngineProgress } from './engine-download'
+import { checkForUpdates, getUpdateStatus, installUpdate } from './updater'
 import {
   listProfiles,
   getProfile,
@@ -231,6 +232,12 @@ export function registerIpc(): void {
     await restartApiServer()
     return s
   })
+
+  // ── App version + auto-update ──
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+  ipcMain.handle('update:statusGet', () => getUpdateStatus())
+  ipcMain.handle('update:check', () => checkForUpdates())
+  ipcMain.handle('update:install', () => installUpdate())
 
   ipcMain.handle('engine:installed', () => isEngineInstalled())
 

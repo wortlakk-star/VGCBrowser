@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { DataSyncState, EngineProgress, Profile, ProfileStatus, SavedProxy } from '../shared/types'
+import type {
+  DataSyncState,
+  EngineProgress,
+  Profile,
+  ProfileStatus,
+  SavedProxy,
+  UpdateStatus
+} from '../shared/types'
 import { ProfileTable } from './components/ProfileTable'
 import { EditProfileModal } from './components/EditProfileModal'
 import { CreateProfileModal } from './components/CreateProfileModal'
@@ -27,6 +34,7 @@ export default function App(): JSX.Element {
   const [theme, setTheme] = useState<Theme>(getTheme())
   const [engineProg, setEngineProg] = useState<EngineProgress | null>(null)
   const [dataSync, setDataSync] = useState<DataSyncState | null>(null)
+  const [updateReady, setUpdateReady] = useState<UpdateStatus | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
 
   // Show the signed-in account in the sidebar.
@@ -56,6 +64,16 @@ export default function App(): JSX.Element {
       if (p.phase === 'done' || p.phase === 'error') {
         setTimeout(() => setEngineProg(null), 2500)
       }
+    })
+  }, [])
+
+  // When a new version finishes downloading, surface a restart-to-update banner.
+  useEffect(() => {
+    void window.vgc.getUpdateStatus().then((s) => {
+      if (s.phase === 'downloaded') setUpdateReady(s)
+    })
+    return window.vgc.onUpdateStatus((s) => {
+      if (s.phase === 'downloaded') setUpdateReady(s)
     })
   }, [])
 
@@ -237,6 +255,37 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app">
+      {updateReady && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 14,
+            padding: '8px 16px',
+            fontSize: 13,
+            color: '#fff',
+            background: 'linear-gradient(135deg,#15803d,#166534)',
+            boxShadow: '0 4px 14px rgba(0,0,0,.3)'
+          }}
+        >
+          <span>
+            🎉 Đã tải bản mới
+            {updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — khởi động lại để cập nhật.
+          </span>
+          <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
+            ⟳ Khởi động lại ngay
+          </button>
+          <button className="btn ghost" onClick={() => setUpdateReady(null)}>
+            Để sau
+          </button>
+        </div>
+      )}
       <Sidebar
         groups={groupsWithCounts}
         allCount={profiles.length}

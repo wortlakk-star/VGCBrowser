@@ -164,6 +164,19 @@ export interface AppSettings {
   engineUrl: string
 }
 
+/** State of the app auto-update flow (check → download → install). */
+export interface UpdateStatus {
+  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error' | 'dev'
+  /** Version currently running. */
+  currentVersion: string
+  /** Version available/downloaded on the server (when newer). */
+  newVersion?: string
+  /** Download progress 0–100 (during 'downloading'). */
+  percent?: number
+  /** Human message (errors / dev note). */
+  message?: string
+}
+
 /** Progress of the on-demand engine download. */
 export interface EngineProgress {
   id?: string

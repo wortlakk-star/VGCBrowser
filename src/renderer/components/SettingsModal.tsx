@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react'
+import type { UpdateStatus } from '../../shared/types'
+
 interface Props {
   onClose: () => void
   theme: 'dark' | 'light'
@@ -5,6 +8,28 @@ interface Props {
   accountEmail?: string
   onSignOut: () => void
   onOpenCloud: () => void
+}
+
+function updateLabel(s: UpdateStatus | null): string {
+  if (!s) return ''
+  switch (s.phase) {
+    case 'checking':
+      return '⏳ Đang kiểm tra cập nhật…'
+    case 'available':
+      return `⬇ Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — đang tải…`
+    case 'downloading':
+      return `⬇ Đang tải bản mới… ${s.percent ?? 0}%`
+    case 'downloaded':
+      return `✅ Đã tải xong ${s.newVersion ? `v${s.newVersion}` : 'bản mới'} — bấm "Khởi động lại để cập nhật".`
+    case 'up-to-date':
+      return '✓ Bạn đang dùng phiên bản mới nhất.'
+    case 'error':
+      return `⚠ Lỗi kiểm tra cập nhật: ${s.message ?? ''}`
+    case 'dev':
+      return `ℹ ${s.message ?? 'Chỉ chạy ở bản đã cài đặt.'}`
+    default:
+      return ''
+  }
 }
 
 export function SettingsModal({
@@ -15,6 +40,20 @@ export function SettingsModal({
   onSignOut,
   onOpenCloud
 }: Props): JSX.Element {
+  const [version, setVersion] = useState<string>('')
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+
+  useEffect(() => {
+    void window.vgc.getVersion().then(setVersion)
+    void window.vgc.getUpdateStatus().then((s) => {
+      if (s.phase !== 'idle') setUpdate(s)
+    })
+    return window.vgc.onUpdateStatus(setUpdate)
+  }, [])
+
+  const checking = update?.phase === 'checking' || update?.phase === 'downloading'
+  const downloaded = update?.phase === 'downloaded'
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
@@ -60,6 +99,33 @@ export function SettingsModal({
                 ☀ Sáng
               </button>
             </div>
+          </section>
+
+          <section className="card">
+            <h3>Phiên bản &amp; Cập nhật</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              VGC Browser {version ? `v${version}` : '…'}
+            </p>
+            <div className="proxy-check">
+              {downloaded ? (
+                <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
+                  ⟳ Khởi động lại để cập nhật
+                </button>
+              ) : (
+                <button
+                  className="btn"
+                  disabled={checking}
+                  onClick={() => void window.vgc.checkForUpdate()}
+                >
+                  {checking ? 'Đang xử lý…' : '⬇ Kiểm tra cập nhật'}
+                </button>
+              )}
+            </div>
+            {update && update.phase !== 'idle' && (
+              <p className="hint" style={{ marginBottom: 0 }}>
+                {updateLabel(update)}
+              </p>
+            )}
           </section>
         </div>
 

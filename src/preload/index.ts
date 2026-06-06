@@ -19,7 +19,8 @@ import type {
   ProxyCheckResult,
   ProxyConfig,
   ProxyProviderId,
-  SavedProxy
+  SavedProxy,
+  UpdateStatus
 } from '../shared/types'
 
 const api = {
@@ -99,6 +100,21 @@ const api = {
     const listener = (_e: unknown, state: ProfileRuntimeState): void => cb(state)
     ipcRenderer.on('profile:status', listener)
     return () => ipcRenderer.removeListener('profile:status', listener)
+  },
+
+  // ── App version + auto-update (check → download → install) ──
+  getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+
+  getUpdateStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:statusGet'),
+
+  checkForUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),
+
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+
+  onUpdateStatus: (cb: (s: UpdateStatus) => void): (() => void) => {
+    const listener = (_e: unknown, s: UpdateStatus): void => cb(s)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
   },
 
   // ── On-demand engine (download VGC Core from server, GoLogin-style) ──
