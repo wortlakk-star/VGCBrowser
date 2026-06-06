@@ -1,0 +1,89 @@
+name: Build & publish (auto-update)
+
+# Every push to main builds BOTH the Windows and macOS apps and uploads them +
+# their update manifests (latest.yml / latest-mac.yml) to vgcbrowser.com/dl, so all
+# installed apps auto-update on next launch. To actually ship an update, bump the
+# "version" in package.json in the commit you push (installs only update to a
+# higher version). Run manually anytime via the "Run workflow" button.
+#
+# One-time setup: add a repo secret DEPLOY_SSH_PASSWORD = the Hostinger SSH password
+# (Settings → Secrets and variables → Actions → New repository secret). A dedicated
+# SSH key is more secure — see the note at the bottom of this file.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run dist # electron-vite build && electron-builder --win (nsis-web)
+      - name: Collect Windows artifacts
+        shell: bash
+        run: |
+          mkdir -p out-dl
+          cp release/nsis-web/*.exe release/nsis-web/*.7z release/nsis-web/latest.yml out-dl/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win
+          path: out-dl/
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:mac # electron-vite build && electron-builder --mac (dmg + zip)
+      - name: Collect macOS artifacts
+        run: |
+          mkdir -p out-dl
+          cp release/latest-mac.yml release/*-mac-*.zip release/*-mac-*.dmg out-dl/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: out-dl/
+
+  publish:
+    needs: [build-win, build-mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: win
+          path: dl
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: dl
+      - name: List files to publish
+        run: ls -la dl/
+      - name: Upload to vgcbrowser.com/dl
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 212.85.28.201
+          port: 65002
+          username: u469659181
+          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          source: 'dl/*'
+          target: 'domains/vgcbrowser.com/public_html/dl'
+          strip_components: 1
+
+# More secure alternative to DEPLOY_SSH_PASSWORD: generate a dedicated key
+#   ssh-keygen -t ed25519 -f deploy_key -N ""
+# add deploy_key.pub to the server's ~/.ssh/authorized_keys, store the private
+# deploy_key as secret DEPLOY_SSH_KEY, and replace "password:" above with
+#   key: ${{ secrets.DEPLOY_SSH_KEY }}
