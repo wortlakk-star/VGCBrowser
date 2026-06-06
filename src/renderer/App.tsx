@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   DataSyncState,
   EngineProgress,
@@ -15,7 +15,7 @@ import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { Sidebar } from './components/Sidebar'
 import { applyTheme, getTheme, type Theme } from './theme'
-import { getCloud } from './cloud'
+import { getCloud, pullCloudProfileList, pushCloudProfileList } from './cloud'
 
 export default function App(): JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -113,6 +113,60 @@ export default function App(): JSX.Element {
     })
     return off
   }, [refresh])
+
+  // ── Cloud auto-sync (GoLogin-style) ──────────────────────────────────────────
+  // Set when an auto-pull just rewrote the local list, so the auto-push effect
+  // below skips the echo it would otherwise fire for cloud-originated data.
+  const justPulledRef = useRef(false)
+
+  // Auto-PULL: App only mounts once signed in (see Gate), so this runs right after
+  // login — fetch the account's profile list from the cloud so a fresh machine
+  // shows every profile without a manual "Kéo về". Session data loads lazily on open.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const n = await pullCloudProfileList()
+        if (n > 0) {
+          justPulledRef.current = true
+          await refresh()
+          setDataSync({ id: '*', phase: 'download', message: `✓ Đã tải ${n} profile từ cloud` })
+          setTimeout(() => setDataSync(null), 2500)
+        }
+      } catch (e) {
+        setDataSync({
+          id: '*',
+          phase: 'error',
+          message: 'Lỗi tải profile từ cloud: ' + (e instanceof Error ? e.message : String(e))
+        })
+        setTimeout(() => setDataSync(null), 4000)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-PUSH: whenever the local profile list changes (create/edit/delete), upsert
+  // the metadata to the cloud — debounced — so other machines see it without a manual
+  // push. Skipped during the initial load and right after an auto-pull (echo guard).
+  useEffect(() => {
+    if (loading) return
+    if (justPulledRef.current) {
+      justPulledRef.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      void pushCloudProfileList().catch((e) => console.error('[auto-push]', e))
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [profiles, loading])
+
+  // Safety net: re-push on a slow interval in case a change-triggered push was
+  // missed or failed transiently. Metadata-only, so it's cheap.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void pushCloudProfileList().catch((e) => console.error('[auto-push:interval]', e))
+    }, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
 
   const createGroup = useCallback(
     async (name: string) => {
