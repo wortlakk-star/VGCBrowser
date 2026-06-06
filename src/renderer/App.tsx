@@ -15,7 +15,13 @@ import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { Sidebar } from './components/Sidebar'
 import { applyTheme, getTheme, type Theme } from './theme'
-import { getCloud, pullCloudProfileList, pushCloudProfileList } from './cloud'
+import {
+  getCloud,
+  pullCloudProfileList,
+  pushCloudProfileList,
+  pullCloudProxies,
+  pushCloudProxies
+} from './cloud'
 
 export default function App(): JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -115,28 +121,41 @@ export default function App(): JSX.Element {
   }, [refresh])
 
   // ── Cloud auto-sync (GoLogin-style) ──────────────────────────────────────────
-  // Set when an auto-pull just rewrote the local list, so the auto-push effect
-  // below skips the echo it would otherwise fire for cloud-originated data.
+  // Set when an auto-pull just rewrote a local list, so the matching auto-push
+  // effect below skips the echo it would otherwise fire for cloud-originated data.
   const justPulledRef = useRef(false)
+  const justPulledProxiesRef = useRef(false)
 
   // Auto-PULL: App only mounts once signed in (see Gate), so this runs right after
-  // login — fetch the account's profile list from the cloud so a fresh machine
-  // shows every profile without a manual "Kéo về". Session data loads lazily on open.
+  // login — fetch the account's profiles AND proxy pool from the cloud so a fresh
+  // machine shows everything without a manual "Kéo về". Profile session data still
+  // loads lazily on open.
   useEffect(() => {
     void (async () => {
-      try {
-        const n = await pullCloudProfileList()
-        if (n > 0) {
-          justPulledRef.current = true
-          await refresh()
-          setDataSync({ id: '*', phase: 'download', message: `✓ Đã tải ${n} profile từ cloud` })
-          setTimeout(() => setDataSync(null), 2500)
-        }
-      } catch (e) {
+      // allSettled so a proxy-sync hiccup (e.g. proxies_cloud table not created yet)
+      // never blocks the profile pull, and vice-versa.
+      const [pr, px] = await Promise.allSettled([pullCloudProfileList(), pullCloudProxies()])
+      const nProfiles = pr.status === 'fulfilled' ? pr.value : 0
+      const nProxies = px.status === 'fulfilled' ? px.value : 0
+      if (nProfiles > 0 || nProxies > 0) {
+        justPulledRef.current = true
+        justPulledProxiesRef.current = true
+        await refresh()
+        const parts: string[] = []
+        if (nProfiles > 0) parts.push(`${nProfiles} profile`)
+        if (nProxies > 0) parts.push(`${nProxies} proxy`)
+        setDataSync({ id: '*', phase: 'download', message: `✓ Đã tải ${parts.join(' + ')} từ cloud` })
+        setTimeout(() => setDataSync(null), 2500)
+      }
+      if (px.status === 'rejected') console.warn('[auto-pull:proxies]', px.reason)
+      // Only surface the profile pull failure (the critical path) to the user.
+      if (pr.status === 'rejected') {
         setDataSync({
           id: '*',
           phase: 'error',
-          message: 'Lỗi tải profile từ cloud: ' + (e instanceof Error ? e.message : String(e))
+          message:
+            'Lỗi tải profile từ cloud: ' +
+            (pr.reason instanceof Error ? pr.reason.message : String(pr.reason))
         })
         setTimeout(() => setDataSync(null), 4000)
       }
@@ -144,9 +163,9 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Auto-PUSH: whenever the local profile list changes (create/edit/delete), upsert
-  // the metadata to the cloud — debounced — so other machines see it without a manual
-  // push. Skipped during the initial load and right after an auto-pull (echo guard).
+  // Auto-PUSH profiles: whenever the local profile list changes (create/edit/delete),
+  // upsert the metadata to the cloud — debounced — so other machines see it without a
+  // manual push. Skipped during the initial load and right after an auto-pull.
   useEffect(() => {
     if (loading) return
     if (justPulledRef.current) {
@@ -159,11 +178,26 @@ export default function App(): JSX.Element {
     return () => clearTimeout(t)
   }, [profiles, loading])
 
+  // Auto-PUSH proxies: same idea for the Proxy Manager pool — adding/editing a proxy
+  // (the pool reloads when the modal closes) syncs it to the account's cloud.
+  useEffect(() => {
+    if (loading) return
+    if (justPulledProxiesRef.current) {
+      justPulledProxiesRef.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      void pushCloudProxies().catch((e) => console.error('[auto-push:proxies]', e))
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [proxyPool, loading])
+
   // Safety net: re-push on a slow interval in case a change-triggered push was
   // missed or failed transiently. Metadata-only, so it's cheap.
   useEffect(() => {
     const id = setInterval(() => {
       void pushCloudProfileList().catch((e) => console.error('[auto-push:interval]', e))
+      void pushCloudProxies().catch((e) => console.error('[auto-push:proxies:interval]', e))
     }, 5 * 60 * 1000)
     return () => clearInterval(id)
   }, [])

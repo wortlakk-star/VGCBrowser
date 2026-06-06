@@ -4,7 +4,7 @@
 // the session persists in localStorage under a VGC-specific key.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Profile } from '../shared/types'
+import type { Profile, SavedProxy } from '../shared/types'
 
 let client: SupabaseClient | null = null
 let signature = ''
@@ -71,6 +71,48 @@ export async function pushCloudProfileList(): Promise<number> {
     updated_at: new Date().toISOString()
   }))
   const { error } = await c.from('profiles_cloud').upsert(rows, { onConflict: 'owner,profile_id' })
+  if (error) throw new Error(error.message)
+  return rows.length
+}
+
+/**
+ * Pull the account's proxy pool (Proxy Manager) from `proxies_cloud` into the local
+ * store. Mirrors pullCloudProfileList. Returns the number pulled, or -1 when cloud
+ * isn't configured / the user isn't signed in.
+ */
+export async function pullCloudProxies(): Promise<number> {
+  const c = await getCloud()
+  if (!c) return -1
+  const { data: sess } = await c.auth.getSession()
+  if (!sess.session) return -1
+  const { data, error } = await c.from('proxies_cloud').select('data')
+  if (error) throw new Error(error.message)
+  const proxies = (data ?? []).map((r) => (r as { data: SavedProxy }).data)
+  await window.vgc.saveManyProxies(proxies)
+  return proxies.length
+}
+
+/**
+ * Push the account's proxy pool to `proxies_cloud` so a proxy added on one machine
+ * appears on the account's other machines automatically. Mirrors pushCloudProfileList.
+ * Returns the number pushed, or -1 when cloud isn't configured / signed out.
+ */
+export async function pushCloudProxies(): Promise<number> {
+  const c = await getCloud()
+  if (!c) return -1
+  const { data: sess } = await c.auth.getSession()
+  if (!sess.session) return -1
+  const owner = sess.session.user.id
+  const locals = await window.vgc.listProxies()
+  if (!locals.length) return 0
+  const rows = locals.map((p) => ({
+    owner,
+    proxy_id: p.id,
+    label: p.label,
+    data: p,
+    updated_at: new Date().toISOString()
+  }))
+  const { error } = await c.from('proxies_cloud').upsert(rows, { onConflict: 'owner,proxy_id' })
   if (error) throw new Error(error.message)
   return rows.length
 }
