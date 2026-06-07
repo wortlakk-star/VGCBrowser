@@ -206,7 +206,7 @@
           <a href="#features">Tính năng</a>
           <a href="#pricing">Bảng giá</a>
           <a href="#login">Tài khoản</a>
-          <a class="btn primary" id="navDl" href="#">Tải về</a>
+          <a class="btn primary" id="navDl" href="#download">Tải về</a>
         </div>
       </div>
     </nav>
@@ -219,11 +219,12 @@
           Quản lý hàng trăm hồ sơ trình duyệt độc lập — mỗi hồ sơ là một “máy” riêng với vân tay
           thật, proxy riêng và phiên đăng nhập đồng bộ đám mây. Vận hành đa tài khoản an toàn, ở quy mô tập đoàn.
         </p>
-        <div class="cta">
-          <a class="btn primary lg" id="heroDl" href="#">↓ Tải về miễn phí</a>
+        <div class="cta" id="download">
+          <a class="btn primary lg" id="dlWin" href="#">↓ Tải cho Windows</a>
+          <a class="btn primary lg" id="dlMac" href="#">↓ Tải cho macOS</a>
           <a class="btn ghost lg" href="#login">Đăng nhập VGC Cloud</a>
         </div>
-        <div class="subnote" id="dlNote">Miễn phí 10 hồ sơ · không cần thẻ tín dụng</div>
+        <div class="subnote" id="dlNote">Windows (.exe) &amp; macOS (.dmg) · miễn phí 10 hồ sơ · không cần thẻ tín dụng</div>
 
         <!-- Product mockup -->
         <div class="mock reveal">
@@ -362,7 +363,7 @@
           </div>
           <p>Trình duyệt ẩn danh đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation — Global Technology Holding.</p>
         </div>
-        <div><h5>Sản phẩm</h5><a href="#features">Tính năng</a><a href="#pricing">Bảng giá</a><a id="ctaDl" href="#">Tải về</a></div>
+        <div><h5>Sản phẩm</h5><a href="#features">Tính năng</a><a href="#pricing">Bảng giá</a><a id="ctaDl" href="#download">Tải về</a></div>
         <div><h5>Tài khoản</h5><a href="#login">Đăng nhập</a><a href="#login">Đăng ký</a></div>
         <div><h5>Veltrix Group</h5><a href="https://veltrixworldwide.com" target="_blank" rel="noopener">veltrixworldwide.com</a><p>vgcbrowser.com</p></div>
       </div>
@@ -371,38 +372,25 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
-      // Link tải nhận diện HỆ ĐIỀU HÀNH: macOS → .dmg, Windows → .exe. Version lấy
-      // từ feed (/dl/latest*.yml) nên luôn mới, không hardcode. Trước đây nút luôn ra
-      // .exe kể cả trên Mac — giờ đã đúng theo máy + có link tải bản kia.
+      // HAI luồng tải riêng: nút Windows (.exe) + nút macOS (.dmg). Mỗi nút lấy
+      // version mới nhất từ feed riêng của nó (latest.yml / latest-mac.yml) nên luôn
+      // mới, không hardcode. Người dùng tự chọn đúng máy của mình.
       const DL_BASE = 'https://vgcbrowser.com/dl/'
-      const IS_MAC = /Mac/i.test(navigator.platform || '') || /Macintosh|Mac OS X/i.test(navigator.userAgent || '')
-      const OS_LABEL = IS_MAC ? 'macOS' : 'Windows'
-      const OTHER_LABEL = IS_MAC ? 'Windows' : 'macOS'
       function winUrl(v){ return DL_BASE + 'VGC-Browser-Setup-' + v + '.exe' }
       function macUrl(v){ return DL_BASE + 'VGC-Browser-' + v + '-mac-arm64.dmg' }
-      let DOWNLOAD_URL = IS_MAC ? macUrl('0.1.35') : winUrl('0.1.32') // fallback khi feed chưa tải
-      function applyDownloadUrl(u){
-        DOWNLOAD_URL = u
-        ;['heroDl','navDl','ctaDl'].forEach(function(id){ var e=document.getElementById(id); if(e) e.href = u })
-      }
-      function setOtherUrl(u){ var e = document.getElementById('dlOther'); if(e) e.href = u }
       function readVer(t){ var m = t && t.match(/^version:\s*([0-9][^\s]*)/m); return m ? m[1] : null }
-      // Nhãn nút + dòng phụ theo OS, kèm link tải bản còn lại.
-      ;(function(){
-        var hero = document.getElementById('heroDl'); if(hero) hero.textContent = '↓ Tải cho ' + OS_LABEL
-        var note = document.getElementById('dlNote')
-        if(note) note.innerHTML = 'Miễn phí 10 hồ sơ · ' + OS_LABEL + ' · không cần thẻ · '
-          + '<a id="dlOther" href="#" style="color:inherit;text-decoration:underline">Tải bản ' + OTHER_LABEL + '</a>'
-      })()
-      applyDownloadUrl(DOWNLOAD_URL)
-      // Đọc cả 2 feed: gán bản đúng OS cho nút chính, bản kia cho link phụ.
+      function setHref(id, u){ var e = document.getElementById(id); if(e) e.href = u }
+      var DOWNLOAD_URL = winUrl('0.1.32') // dùng cho popup xác nhận email (mặc định Windows)
+      // fallback trước, rồi cập nhật version thật từ feed.
+      setHref('dlWin', winUrl('0.1.32'))
+      setHref('dlMac', macUrl('0.1.35'))
       fetch(DL_BASE + 'latest.yml', { cache: 'no-store' })
         .then(function(r){ return r.ok ? r.text() : null })
-        .then(function(t){ var v = readVer(t); if(v){ if(IS_MAC) setOtherUrl(winUrl(v)); else applyDownloadUrl(winUrl(v)) } })
+        .then(function(t){ var v = readVer(t); if(v){ setHref('dlWin', winUrl(v)); DOWNLOAD_URL = winUrl(v) } })
         .catch(function(){})
       fetch(DL_BASE + 'latest-mac.yml', { cache: 'no-store' })
         .then(function(r){ return r.ok ? r.text() : null })
-        .then(function(t){ var v = readVer(t); if(v){ if(IS_MAC) applyDownloadUrl(macUrl(v)); else setOtherUrl(macUrl(v)) } })
+        .then(function(t){ var v = readVer(t); if(v) setHref('dlMac', macUrl(v)) })
         .catch(function(){})
       const SUPABASE_URL = 'https://pwiledrttvbnmytghyip.supabase.co'
       const SUPABASE_ANON = 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO'
@@ -432,7 +420,6 @@
         o.addEventListener('click', function(ev){ if(ev.target===o) o.remove() })
         var cl = document.getElementById('vgcAuthClose'); if(cl) cl.onclick = function(e){ e.preventDefault(); o.remove() }
       }
-      ;['heroDl','navDl','ctaDl'].forEach(function(id){ var e=document.getElementById(id); if(e) e.href=DOWNLOAD_URL })
       var io = new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target) } }) }, { threshold: 0.08 })
       document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el) })
       var msg = document.getElementById('msg'); var sb = null
