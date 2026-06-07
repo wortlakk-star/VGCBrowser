@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useState, type KeyboardEvent } from 'react'
 import { getCloud } from '../cloud'
 
 /** Map common Supabase auth errors to Vietnamese. */
@@ -14,21 +14,6 @@ function viErr(m: string): string {
   return m
 }
 
-const TEAL = 'linear-gradient(180deg, #1aa896 0%, #0e8f7e 100%)'
-const YELLOW = '#F5CE47'
-
-const inputStyle: CSSProperties = {
-  width: '100%',
-  padding: '14px 16px',
-  borderRadius: 8,
-  border: '1px solid rgba(0,0,0,.08)',
-  background: '#fff',
-  color: '#1a1a1a',
-  fontSize: 15,
-  outline: 'none',
-  marginBottom: 12
-}
-
 interface Props {
   onAuthed: () => void
 }
@@ -42,6 +27,11 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [ok, setOk] = useState(false)
+
+  const switchMode = (m: 'login' | 'signup'): void => {
+    setMode(m)
+    setMsg('')
+  }
 
   const submit = async (): Promise<void> => {
     const c = await getCloud()
@@ -120,27 +110,32 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: TEAL,
-        overflow: 'auto',
-        padding: 24
-      }}
-    >
-      <div style={{ width: 420, maxWidth: '92vw', color: '#fff' }}>
-        <h1 style={{ textAlign: 'center', fontSize: 38, fontWeight: 800, margin: '0 0 28px' }}>
-          {mode === 'login' ? 'Đăng nhập' : 'Đăng ký'}
-        </h1>
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <div className="auth-logo">◆</div>
+          <div className="name">VGC Browser</div>
+          <div className="sub">Antidetect Browser · VGC Group</div>
+        </div>
+
+        <div className="auth-tabs">
+          <button
+            className={`auth-tab ${mode === 'login' ? 'active' : ''}`}
+            onClick={() => switchMode('login')}
+          >
+            Đăng nhập
+          </button>
+          <button
+            className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
+            onClick={() => switchMode('signup')}
+          >
+            Đăng ký
+          </button>
+        </div>
 
         {mode === 'signup' && (
           <input
-            style={inputStyle}
+            className="auth-field"
             placeholder="Tên hiển thị (tuỳ chọn)"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -148,7 +143,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           />
         )}
         <input
-          style={inputStyle}
+          className="auth-field"
           type="email"
           placeholder="Địa chỉ email"
           value={email}
@@ -157,7 +152,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           autoFocus
         />
         <input
-          style={inputStyle}
+          className="auth-field"
           type="password"
           placeholder="Mật khẩu"
           value={pass}
@@ -166,7 +161,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
         />
         {mode === 'signup' && (
           <input
-            style={inputStyle}
+            className="auth-field"
             type="password"
             placeholder="Nhập lại mật khẩu"
             value={pass2}
@@ -175,80 +170,24 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           />
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
-          <button
-            onClick={() => void submit()}
-            disabled={busy}
-            style={{
-              background: YELLOW,
-              color: '#1a1a1a',
-              fontWeight: 700,
-              fontSize: 15,
-              border: 'none',
-              borderRadius: 24,
-              padding: '13px 48px',
-              cursor: busy ? 'default' : 'pointer',
-              opacity: busy ? 0.7 : 1
-            }}
-          >
-            {busy ? 'Đang xử lý…' : mode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}
-          </button>
-        </div>
+        <button className="auth-btn" onClick={() => void submit()} disabled={busy}>
+          {busy ? 'Đang xử lý…' : mode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}
+        </button>
 
-        {msg && (
-          <p
-            style={{
-              textAlign: 'center',
-              marginTop: 16,
-              fontSize: 13.5,
-              color: ok ? '#eafff5' : '#ffe2e2',
-              fontWeight: 600
-            }}
-          >
-            {msg}
-          </p>
-        )}
+        {msg && <p className={`auth-msg ${ok ? 'ok' : 'err'}`}>{msg}</p>}
 
-        <p style={{ textAlign: 'center', marginTop: 22, fontSize: 14, fontWeight: 600 }}>
+        <p className="auth-links">
           {mode === 'login' ? (
-            <>
-              <span style={{ opacity: 0.85 }}>Chưa có tài khoản? </span>
-              <a
-                style={{ color: '#fff', cursor: 'pointer', textDecoration: 'underline' }}
-                onClick={() => {
-                  setMode('signup')
-                  setMsg('')
-                }}
-              >
-                Đăng ký
-              </a>
-              <span style={{ opacity: 0.6 }}> · </span>
-              <a
-                style={{ color: '#fff', cursor: 'pointer', textDecoration: 'underline' }}
-                onClick={() => void forgot()}
-              >
-                Quên mật khẩu?
-              </a>
-            </>
+            <a onClick={() => void forgot()}>Quên mật khẩu?</a>
           ) : (
             <>
-              <span style={{ opacity: 0.85 }}>Đã có tài khoản? </span>
-              <a
-                style={{ color: '#fff', cursor: 'pointer', textDecoration: 'underline' }}
-                onClick={() => {
-                  setMode('login')
-                  setMsg('')
-                }}
-              >
-                Đăng nhập
-              </a>
+              <span style={{ color: 'var(--dim)' }}>Đã có tài khoản? </span>
+              <a onClick={() => switchMode('login')}>Đăng nhập</a>
             </>
           )}
         </p>
 
-        <p style={{ textAlign: 'center', marginTop: 40, fontSize: 12, opacity: 0.7 }}>
-          ◆ VGC Browser · Antidetect Browser
-        </p>
+        <p className="auth-foot">◆ VGC Browser · Antidetect Browser</p>
       </div>
     </div>
   )
