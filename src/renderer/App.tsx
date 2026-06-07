@@ -138,8 +138,10 @@ export default function App(): JSX.Element {
       const nProfiles = pr.status === 'fulfilled' ? pr.value : 0
       const nProxies = px.status === 'fulfilled' ? px.value : 0
       if (nProfiles > 0 || nProxies > 0) {
-        justPulledRef.current = true
-        justPulledProxiesRef.current = true
+        // Guard ONLY the list that was actually pulled, so e.g. pulling profiles
+        // (but 0 proxies) doesn't suppress the first push of local-only proxies.
+        if (nProfiles > 0) justPulledRef.current = true
+        if (nProxies > 0) justPulledProxiesRef.current = true
         await refresh()
         const parts: string[] = []
         if (nProfiles > 0) parts.push(`${nProfiles} profile`)
