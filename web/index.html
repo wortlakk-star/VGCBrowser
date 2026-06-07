@@ -392,6 +392,38 @@
         .then(function(r){ return r.ok ? r.text() : null })
         .then(function(t){ var v = readVer(t); if(v) setHref('dlMac', macUrl(v)) })
         .catch(function(){})
+      // macOS: app chưa notarize (chưa mua cert Apple) nên lần đầu mở cần 1 bước.
+      // Bấm nút Tải macOS → tải về + hiện hướng dẫn mở.
+      function showMacGuide(){
+        var o = document.createElement('div')
+        o.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(4,10,20,.86);backdrop-filter:blur(6px);padding:20px'
+        var card = document.createElement('div')
+        card.style.cssText = 'max-width:520px;width:96%;background:linear-gradient(180deg,#0e1120,#0a0c16);border:1px solid #2bd6c2;border-radius:18px;padding:30px;color:#eef0f7;box-shadow:0 30px 80px rgba(0,0,0,.6);text-align:left'
+        card.innerHTML =
+          '<div style="font-size:40px;text-align:center;line-height:1"></div>'
+          + '<h2 style="margin:14px 0 6px;font-size:21px;text-align:center;font-family:Space Grotesk,sans-serif">Mở VGC Browser trên macOS</h2>'
+          + '<p style="margin:0 0 18px;color:#9aa3bd;font-size:13.5px;text-align:center;line-height:1.6">Bản macOS chưa ký số Apple nên lần đầu mở cần 1 bước nhỏ (chỉ làm 1 lần):</p>'
+          + '<ol style="margin:0;padding-left:20px;font-size:14px;line-height:1.85;color:#dfe3f0">'
+          + '<li>Mở file <b>.dmg</b> vừa tải → kéo <b>VGC Browser</b> vào thư mục <b>Applications</b>.</li>'
+          + '<li><b>Chuột phải</b> vào VGC Browser → bấm <b>Open</b> → <b>Open</b> lần nữa.</li>'
+          + '<li>Nếu vẫn báo <i>"bị hỏng"</i>: mở <b>Terminal</b>, dán dòng sau rồi Enter:</li>'
+          + '</ol>'
+          + '<div style="margin:10px 0 4px;background:#05070e;border:1px solid #243049;border-radius:10px;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:#7ef7e6;display:flex;gap:8px;align-items:center;justify-content:space-between">'
+          + '<code style="white-space:nowrap;overflow:auto">xattr -dr com.apple.quarantine "/Applications/VGC Browser.app"</code>'
+          + '<button id="vgcCopyCmd" style="flex:none;background:#18c0ad;border:none;color:#05201c;font-weight:700;border-radius:7px;padding:6px 12px;cursor:pointer;font-size:12px">Copy</button>'
+          + '</div>'
+          + '<p style="margin:14px 0 0;color:#9aa3bd;font-size:12px;text-align:center">Dùng Windows? <a href="#download" id="vgcGoWin" style="color:#2bd6c2">Tải bản Windows</a> — chạy ngay, không cần bước này.</p>'
+          + '<div style="text-align:center;margin-top:18px"><a href="#" id="vgcMacClose" style="color:#9aa3bd;font-size:13px;text-decoration:underline">Đóng</a></div>'
+        o.appendChild(card)
+        document.body.appendChild(o)
+        o.addEventListener('click', function(ev){ if(ev.target===o) o.remove() })
+        var cl = document.getElementById('vgcMacClose'); if(cl) cl.onclick = function(e){ e.preventDefault(); o.remove() }
+        var gw = document.getElementById('vgcGoWin'); if(gw) gw.onclick = function(){ o.remove() }
+        var cp = document.getElementById('vgcCopyCmd'); if(cp) cp.onclick = function(){
+          try { navigator.clipboard.writeText('xattr -dr com.apple.quarantine "/Applications/VGC Browser.app"'); cp.textContent = 'Đã copy ✓' } catch(e){}
+        }
+      }
+      ;(function(){ var m = document.getElementById('dlMac'); if(m) m.addEventListener('click', function(){ setTimeout(showMacGuide, 400) }) })()
       const SUPABASE_URL = 'https://pwiledrttvbnmytghyip.supabase.co'
       const SUPABASE_ANON = 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO'
       ;(function(){ try {
