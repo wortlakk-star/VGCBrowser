@@ -112,6 +112,42 @@ export async function stopAllAndSync(): Promise<void> {
   )
 }
 
+/**
+ * Spawn the engine and resolve only once it has actually started (the child's
+ * 'spawn' event). Rejects on failure — INCLUDING async failures: on Windows a
+ * CreateProcess error like `spawn UNKNOWN` (engine blocked by antivirus / locked /
+ * corrupt) is emitted on the 'error' event AFTER spawn() returns, so a plain
+ * try/catch around spawn() never sees it. Waiting on the events catches both the
+ * sync throw and the async 'error' — which is what lets the system-browser
+ * fallback actually kick in instead of the launch dying with "spawn UNKNOWN".
+ */
+function spawnAndWait(exe: string, args: string[]): Promise<ChildProcess> {
+  return new Promise<ChildProcess>((resolve, reject) => {
+    let proc: ChildProcess
+    try {
+      proc = spawn(exe, args, { detached: false })
+    } catch (e) {
+      reject(e instanceof Error ? e : new Error(String(e)))
+      return
+    }
+    let settled = false
+    const onSpawn = (): void => {
+      if (settled) return
+      settled = true
+      proc.removeListener('error', onError)
+      resolve(proc)
+    }
+    const onError = (err: Error): void => {
+      if (settled) return
+      settled = true
+      proc.removeListener('spawn', onSpawn)
+      reject(err)
+    }
+    proc.once('spawn', onSpawn)
+    proc.once('error', onError)
+  })
+}
+
 export async function launchProfile(
   id: string,
   opts: { headless?: boolean } = {}
@@ -200,15 +236,17 @@ export async function launchProfile(
 
   broadcast({ id, status: 'starting', debugPort })
 
-  // Spawn the engine. On Windows `spawn` reports CreateProcess failures
-  // synchronously (errno UNKNOWN), which happens when the unsigned VGC Core
-  // engine.exe is blocked/quarantined by antivirus, locked, or corrupt. In that
-  // case fall back to a system browser (Chrome/Edge) — exactly how the Mac build
-  // already runs — so the profile still opens (CDP fingerprint injection still
-  // applies). Stock Chrome ignores the unknown --vgc-* flags.
+  // Spawn the engine. CRITICAL: on Windows a CreateProcess failure (errno UNKNOWN
+  // — the unsigned VGC Core engine.exe blocked/quarantined by antivirus, locked,
+  // or corrupt) is reported ASYNCHRONOUSLY via the child's 'error' event, NOT
+  // thrown by spawn(). So we wait on the 'spawn'/'error' events (spawnAndWait)
+  // rather than a plain try/catch — otherwise the failure slips past and the
+  // profile never opens. On failure we fall back to a system browser (Chrome/Edge),
+  // just like the Mac build, so the profile still opens (CDP fingerprint injection
+  // still applies; stock Chrome ignores the unknown --vgc-* flags).
   let proc: ChildProcess
   try {
-    proc = spawn(enginePath, args, { detached: false })
+    proc = await spawnAndWait(enginePath, args)
   } catch (err) {
     const fallback = resolveSystemBrowser(enginePath)
     if (!fallback) {
@@ -226,7 +264,7 @@ export async function launchProfile(
       message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
     })
     try {
-      proc = spawn(fallback, args, { detached: false })
+      proc = await spawnAndWait(fallback, args)
     } catch (err2) {
       relay?.close()
       const msg =
