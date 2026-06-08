@@ -18,6 +18,7 @@ import { mkdirSync } from 'fs'
 import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
+import { resolveSystemBrowser } from './engine'
 import { getProfile, saveProfile } from './store'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
@@ -199,7 +200,42 @@ export async function launchProfile(
 
   broadcast({ id, status: 'starting', debugPort })
 
-  const proc = spawn(enginePath, args, { detached: false })
+  // Spawn the engine. On Windows `spawn` reports CreateProcess failures
+  // synchronously (errno UNKNOWN), which happens when the unsigned VGC Core
+  // engine.exe is blocked/quarantined by antivirus, locked, or corrupt. In that
+  // case fall back to a system browser (Chrome/Edge) — exactly how the Mac build
+  // already runs — so the profile still opens (CDP fingerprint injection still
+  // applies). Stock Chrome ignores the unknown --vgc-* flags.
+  let proc: ChildProcess
+  try {
+    proc = spawn(enginePath, args, { detached: false })
+  } catch (err) {
+    const fallback = resolveSystemBrowser(enginePath)
+    if (!fallback) {
+      relay?.close()
+      const msg =
+        'Không mở được engine VGC Core (' +
+        (err instanceof Error ? err.message : String(err)) +
+        ') và không tìm thấy Chrome/Edge hệ thống để thay thế. Hãy cài Google Chrome trên máy này.'
+      broadcast({ id, status: 'error', error: msg })
+      throw new Error(msg)
+    }
+    console.error('[vgc] engine spawn failed, dùng trình duyệt hệ thống thay thế:', err)
+    broadcastEngine(id, {
+      phase: 'done',
+      message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
+    })
+    try {
+      proc = spawn(fallback, args, { detached: false })
+    } catch (err2) {
+      relay?.close()
+      const msg =
+        'Không mở được trình duyệt (cả engine VGC Core lẫn Chrome hệ thống đều lỗi): ' +
+        (err2 instanceof Error ? err2.message : String(err2))
+      broadcast({ id, status: 'error', error: msg })
+      throw new Error(msg)
+    }
+  }
 
   const state: ProfileRuntimeState = {
     id,
