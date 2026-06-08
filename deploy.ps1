@@ -1,8 +1,10 @@
 # VGC Browser - deploy the latest build to vgcbrowser.com/dl
 # Usage:   .\deploy.ps1
-# Uploads Setup .exe + .7z + latest.yml from release\nsis-web to the website.
-# No password is stored here. Uses your SSH key if present, otherwise ssh asks
-# for the password. ASCII-only on purpose (Windows PowerShell mis-reads UTF-8).
+# Finds the newest installer ANYWHERE under release\ (works for both the
+# self-contained 'nsis' build [release\*.exe] and the older 'nsis-web' build
+# [release\nsis-web\*.exe]) and uploads it + latest.yml (+ .blockmap / .7z if
+# present) to the website. No password stored here. Uses your SSH key if present,
+# otherwise ssh asks for the password. ASCII-only (Windows PowerShell mis-reads UTF-8).
 
 $ErrorActionPreference = 'Stop'
 
@@ -13,28 +15,34 @@ $SSH_USER = 'u469659181'
 $REMOTE   = 'domains/vgcbrowser.com/public_html/dl'
 $WEBROOT  = 'domains/vgcbrowser.com/public_html'
 
-$dir = Join-Path $PSScriptRoot 'release\nsis-web'
-if (-not (Test-Path $dir)) {
+$rel = Join-Path $PSScriptRoot 'release'
+if (-not (Test-Path $rel)) {
   Write-Host "No build found. Run 'npm run dist' first." -ForegroundColor Yellow
   exit 1
 }
 
-$setup = Get-ChildItem $dir -Filter 'VGC-Browser-Setup-*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$pkg   = Get-ChildItem $dir -Filter 'vgc-browser-*-x64.nsis.7z' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$yml   = Join-Path $dir 'latest.yml'
+# Newest installer anywhere under release\ (skip win-unpacked\)
+$setup = Get-ChildItem $rel -Recurse -Filter 'VGC-Browser-Setup-*.exe' -File |
+  Where-Object { $_.DirectoryName -notlike '*win-unpacked*' } |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $setup) { Write-Host "No installer (.exe) found under release\" -ForegroundColor Red; exit 1 }
 
-$files = @()
-if ($setup) { $files += $setup.FullName }
-if ($pkg)   { $files += $pkg.FullName }
+$dir = $setup.DirectoryName
+$files = @($setup.FullName)
+$yml = Join-Path $dir 'latest.yml'
 if (Test-Path $yml) { $files += $yml }
-
-if ($files.Count -eq 0) { Write-Host "No build files in $dir" -ForegroundColor Red; exit 1 }
+$bm = "$($setup.FullName).blockmap"
+if (Test-Path $bm) { $files += $bm }
+$pkg = Get-ChildItem $dir -Filter '*.nsis.7z' -File -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($pkg) { $files += $pkg.FullName }
 
 Write-Host "Uploading to ${SSH_USER}@${SSH_HOST}:$REMOTE/" -ForegroundColor Cyan
-$files | ForEach-Object { Write-Host "  $_" }
+$files | ForEach-Object { Write-Host ("  {0}  ({1} MB)" -f (Split-Path $_ -Leaf), [math]::Round((Get-Item $_).Length/1MB,1)) }
 
 ssh -p $SSH_PORT -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE"
 scp -P $SSH_PORT $files "${SSH_USER}@${SSH_HOST}:$REMOTE/"
+$scpExit = $LASTEXITCODE
 
 # Also upload the landing page (its Download button auto-reads latest.yml)
 $landing = Join-Path $PSScriptRoot 'web\index.html'
@@ -43,10 +51,10 @@ if (Test-Path $landing) {
   scp -P $SSH_PORT $landing "${SSH_USER}@${SSH_HOST}:$WEBROOT/index.html"
 }
 
-if ($LASTEXITCODE -eq 0) {
+if ($scpExit -eq 0) {
   Write-Host ""
   Write-Host "Done. Check: https://vgcbrowser.com/dl/$($setup.Name)" -ForegroundColor Green
 } else {
   Write-Host ""
-  Write-Host "scp failed (exit $LASTEXITCODE)" -ForegroundColor Red
+  Write-Host "scp failed (exit $scpExit)" -ForegroundColor Red
 }
