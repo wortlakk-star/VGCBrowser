@@ -11,7 +11,7 @@ import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
-import { resolveEnginePath } from './engine'
+import { resolveEnginePath, isDedicatedEngine } from './engine'
 import type { EngineProgress } from '../shared/types'
 
 export type { EngineProgress }
@@ -36,18 +36,24 @@ export function isEngineInstalled(): boolean {
 export async function ensureEngine(
   onProgress?: (p: EngineProgress) => void
 ): Promise<string> {
-  // 1. Already downloaded locally.
+  // 1. Already downloaded locally (runtime download from a previous launch).
   if (existsSync(downloadedEngineExe())) return downloadedEngineExe()
 
   // 2. Explicit override (e.g. local dev build).
   const override = process.env.VGC_ENGINE_PATH
   if (override && existsSync(override)) return override
 
-  // 2b. Non-Windows (macOS/Linux): the downloadable VGC Core engine is Windows-only,
+  // 3. Engine BUNDLED with the installer (electron-builder win.extraResources →
+  //    resources/engine/chromium). A fresh machine then has the antidetect engine
+  //    immediately, with NO 341MB download. resolveEnginePath() finds it as a
+  //    dedicated engine (vs a system-browser fallback).
+  const resolved = resolveEnginePath()
+  if (resolved && isDedicatedEngine(resolved)) return resolved
+
+  // 4. Non-Windows (macOS/Linux): the downloadable VGC Core engine is Windows-only,
   // so use a system Chromium as the engine (CDP fingerprint injection still applies).
   if (process.platform !== 'win32') {
-    const sys = resolveEnginePath()
-    if (sys) return sys
+    if (resolved) return resolved // resolveEnginePath() already falls back to system Chrome/Edge
     throw new Error(
       'Không tìm thấy trình duyệt nền. Hãy cài Google Chrome trên máy này để VGC Browser dùng làm engine.'
     )

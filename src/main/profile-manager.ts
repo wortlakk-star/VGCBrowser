@@ -16,8 +16,11 @@ import { spawn, type ChildProcess } from 'child_process'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
 import { app, BrowserWindow } from 'electron'
-import type { Cookie, DataSyncState, ProfileRuntimeState } from '../shared/types'
+import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
+import { resolveSystemBrowser } from './engine'
+import { checkProxy } from './proxy-check'
+import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, saveProfile } from './store'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
@@ -147,7 +150,39 @@ export async function launchProfile(
   }
 
   const debugPort = nextDebugPort++
-  const fp = profile.fingerprint
+
+  // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
+  // the proxy's EXIT IP so they can't contradict each other. A US proxy reporting a
+  // Vietnam timezone (or leaking the real public IP via WebRTC) is a classic bot
+  // tell. Looked up live so it works with rotating residential proxies; capped at
+  // 6s and falls back to the profile's stored fingerprint so launch never hangs.
+  let fp: Fingerprint = profile.fingerprint
+  if (profile.proxy && profile.proxy.type !== 'none' && profile.proxy.host && profile.proxy.port) {
+    try {
+      broadcastData({ id, phase: 'download', message: 'Đang khớp múi giờ/vị trí theo proxy…' })
+      const geo = await Promise.race([
+        checkProxy(profile.proxy),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000))
+      ])
+      if (geo && geo.ok) {
+        const next: Fingerprint = { ...fp }
+        if (geo.timezone) next.timezone = geo.timezone
+        if (geo.ip) next.webrtcPublicIp = geo.ip
+        if (typeof geo.latitude === 'number' && typeof geo.longitude === 'number') {
+          next.geolocation = { latitude: geo.latitude, longitude: geo.longitude, accuracy: 100 }
+        }
+        const loc = localeForCountry(geo.countryCode)
+        if (loc) {
+          next.language = loc.language
+          next.languages = loc.languages
+        }
+        fp = next
+      }
+      broadcastData({ id, phase: 'done' })
+    } catch {
+      // keep the profile's stored fingerprint — coherence is best-effort
+    }
+  }
 
   const args: string[] = [
     `--user-data-dir=${userDataDir}`,
@@ -199,7 +234,42 @@ export async function launchProfile(
 
   broadcast({ id, status: 'starting', debugPort })
 
-  const proc = spawn(enginePath, args, { detached: false })
+  // Spawn the engine. On Windows `spawn` reports CreateProcess failures
+  // synchronously (errno UNKNOWN), which happens when the unsigned VGC Core
+  // engine.exe is blocked/quarantined by antivirus, locked, or corrupt. In that
+  // case fall back to a system browser (Chrome/Edge) — exactly how the Mac build
+  // already runs — so the profile still opens (CDP fingerprint injection still
+  // applies). Stock Chrome ignores the unknown --vgc-* flags.
+  let proc: ChildProcess
+  try {
+    proc = spawn(enginePath, args, { detached: false })
+  } catch (err) {
+    const fallback = resolveSystemBrowser(enginePath)
+    if (!fallback) {
+      relay?.close()
+      const msg =
+        'Không mở được engine VGC Core (' +
+        (err instanceof Error ? err.message : String(err)) +
+        ') và không tìm thấy Chrome/Edge hệ thống để thay thế. Hãy cài Google Chrome trên máy này.'
+      broadcast({ id, status: 'error', error: msg })
+      throw new Error(msg)
+    }
+    console.error('[vgc] engine spawn failed, dùng trình duyệt hệ thống thay thế:', err)
+    broadcastEngine(id, {
+      phase: 'done',
+      message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
+    })
+    try {
+      proc = spawn(fallback, args, { detached: false })
+    } catch (err2) {
+      relay?.close()
+      const msg =
+        'Không mở được trình duyệt (cả engine VGC Core lẫn Chrome hệ thống đều lỗi): ' +
+        (err2 instanceof Error ? err2.message : String(err2))
+      broadcast({ id, status: 'error', error: msg })
+      throw new Error(msg)
+    }
+  }
 
   const state: ProfileRuntimeState = {
     id,
@@ -234,7 +304,7 @@ export async function launchProfile(
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.
   try {
-    entry.injector = await attachInjector(profile, debugPort)
+    entry.injector = await attachInjector({ ...profile, fingerprint: fp }, debugPort)
     for (const url of profile.startUrls) {
       await entry.injector.openUrl(url)
     }

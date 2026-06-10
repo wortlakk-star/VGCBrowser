@@ -1,6 +1,6 @@
 {
   "name": "vgc-browser",
-  "version": "0.1.35",
+  "version": "0.1.41",
   "description": "VGC Browser Ã¢â‚¬â€ antidetect browser & multi-account profile manager (GoLogin-style) by VGC Group",
   "author": "VGC Group",
   "license": "UNLICENSED",
@@ -16,12 +16,14 @@
     "verify:relay": "esbuild test/verify-relay.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/relay.cjs && node test/relay.cjs",
     "verify:api": "esbuild test/verify-api.ts --bundle --platform=node --format=cjs --outfile=test/api.cjs && node test/api.cjs",
     "verify:engine": "esbuild test/verify-engine.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/engine.cjs && node test/engine.cjs",
-    "dist": "electron-vite build && electron-builder --win",
+    "fetch-engine": "node scripts/fetch-engine.mjs",
+    "dist": "node scripts/fetch-engine.mjs && electron-vite build && electron-builder --win",
     "dist:mac": "electron-vite build && electron-builder --mac"
   },
   "build": {
     "appId": "com.vgcgroup.browser",
     "productName": "VGC Browser",
+    "afterPack": "scripts/afterPack.cjs",
     "directories": {
       "output": "release",
       "buildResources": "resources"
@@ -32,9 +34,15 @@
     ],
     "win": {
       "target": [
-        "nsis-web"
+        "nsis"
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "extraResources": [
+        {
+          "from": "engine/chromium",
+          "to": "engine/chromium"
+        }
+      ]
     },
     "mac": {
       "target": [
@@ -49,7 +57,7 @@
     "dmg": {
       "title": "VGC Browser ${version}"
     },
-    "nsisWeb": {
+    "nsis": {
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
