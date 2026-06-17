@@ -174,38 +174,93 @@ try {
       var kill = function(k){ try { Object.defineProperty(window, k, { value: undefined, configurable: true }); } catch(e){} };
       kill('RTCPeerConnection'); kill('webkitRTCPeerConnection'); kill('RTCDataChannel');
     } else if (CFG.webrtc === 'proxy') {
-      // Strip ICE candidates that reveal local/private (mDNS/host) IPs.
       var RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
       if (RTC) {
-        var Wrapped = function(cfg2, con){
-          var pc = new RTC(cfg2, con);
-          var origAdd = pc.addEventListener;
-          pc.addEventListener = function(type, cb, opts){
+        var ip4 = /(\\d{1,3}\\.){3}\\d{1,3}/;
+        // A candidate is safe to expose only if it leaks NO real IP: mDNS-anonymized
+        // (.local) host candidates are fine; an IPv4 candidate is allowed only when it
+        // equals the proxy's known public IP; any other srflx/relay (incl. IPv6) is
+        // dropped so the machine's REAL public/local IP never escapes via WebRTC.
+        var safeCand = function(cand){
+          if (!cand) return true;
+          if (cand.indexOf('.local') !== -1) return true;
+          var m = cand.match(ip4);
+          if (m) { return CFG.webrtcPublicIp ? (m[0] === CFG.webrtcPublicIp) : false; }
+          if (/typ srflx|typ relay|typ prflx/.test(cand)) return false;
+          return true;
+        };
+        var scrubSdp = function(sdp){
+          if (!sdp) return sdp;
+          var lines = String(sdp).split('\\r\\n'), out = [];
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('a=candidate:') === 0 && !safeCand(lines[i])) continue;
+            out.push(lines[i]);
+          }
+          return out.join('\\r\\n');
+        };
+        var wrapPc = function(pc){
+          var origAdd = pc.addEventListener.bind(pc);
+          pc.addEventListener = mask(function(type, cb, opts){
             if (type === 'icecandidate' && typeof cb === 'function') {
-              var wrapped = function(ev){
-                try {
-                  var cand = (ev && ev.candidate && ev.candidate.candidate) || '';
-                  if (cand) {
-                    if (CFG.webrtcPublicIp) {
-                      if (cand.indexOf(CFG.webrtcPublicIp) === -1) return;
-                    } else if (/typ host|\\.local|192\\.168\\.| 10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\./.test(cand)) {
-                      return;
-                    }
-                  }
-                } catch(e){}
-                return cb.call(this, ev);
-              };
-              return origAdd.call(this, type, wrapped, opts);
+              return origAdd(type, function(ev){ try { if (ev && ev.candidate && !safeCand(ev.candidate.candidate)) return; } catch(e){} return cb.call(pc, ev); }, opts);
             }
-            return origAdd.call(this, type, cb, opts);
-          };
+            return origAdd(type, cb, opts);
+          }, 'addEventListener');
+          try {
+            Object.defineProperty(pc, 'onicecandidate', {
+              configurable: true,
+              get: function(){ return this.__vgcOic || null; },
+              set: function(cb){
+                this.__vgcOic = cb;
+                origAdd('icecandidate', function(ev){ try { if (ev && ev.candidate && !safeCand(ev.candidate.candidate)) return; } catch(e){} if (typeof cb === 'function') return cb.call(pc, ev); });
+              }
+            });
+          } catch(e){}
+          try {
+            var ld = Object.getOwnPropertyDescriptor(RTC.prototype, 'localDescription');
+            if (ld && ld.get) {
+              Object.defineProperty(pc, 'localDescription', { configurable: true, get: function(){ var d = ld.get.call(this); if (d && d.sdp) { try { return { type: d.type, sdp: scrubSdp(d.sdp) }; } catch(e){} } return d; } });
+            }
+          } catch(e){}
           return pc;
         };
+        var Wrapped = function(cfg2, con){ return wrapPc(new RTC(cfg2, con)); };
         Wrapped.prototype = RTC.prototype;
         try { window.RTCPeerConnection = mask(Wrapped, 'RTCPeerConnection'); } catch(e){}
         try { window.webkitRTCPeerConnection = window.RTCPeerConnection; } catch(e){}
       }
     }
+  } catch(e){}
+
+  // ── Fonts: clamp the JS-detectable font set to the declared list (best-effort) ──
+  // Offscreen probes (FontFaceSet.check + canvas measureText) for a NON-declared
+  // family behave as the generic fallback → that font looks "not installed". Does
+  // NOT alter visible DOM layout, so pages still render normally.
+  try {
+    var GENERIC = {'serif':1,'sans-serif':1,'monospace':1,'cursive':1,'fantasy':1,'system-ui':1,'ui-serif':1,'ui-sans-serif':1,'ui-monospace':1,'ui-rounded':1,'math':1,'emoji':1,'fangsong':1,'inherit':1,'initial':1,'unset':1,'':1};
+    var ALLOWED = {};
+    var fl = CFG.fonts || [];
+    for (var fi = 0; fi < fl.length; fi++) { ALLOWED[String(fl[fi]).toLowerCase()] = 1; }
+    var famName = function(spec){ return String(spec || '').replace(/^.*?\\d+(?:px|pt|em|rem|%)\\s+/i, '').split(',')[0].trim().replace(/^["']|["']$/g, ''); };
+    var familyAllowed = function(fam){ var n = String(fam || '').trim().replace(/^["']|["']$/g, '').toLowerCase(); return GENERIC[n] === 1 || ALLOWED[n] === 1; };
+    if (document.fonts && document.fonts.check) {
+      var origCheck = document.fonts.check.bind(document.fonts);
+      document.fonts.check = mask(function(font, text){ try { if (!familyAllowed(famName(font))) return false; } catch(e){} return origCheck(font, text); }, 'check');
+    }
+    var MT = CanvasRenderingContext2D.prototype.measureText;
+    CanvasRenderingContext2D.prototype.measureText = mask(function(t){
+      try {
+        var fam = famName(this.font);
+        if (fam && !familyAllowed(fam)) {
+          var saved = this.font;
+          this.font = String(this.font).replace(fam, 'sans-serif');
+          var r = MT.call(this, t);
+          this.font = saved;
+          return r;
+        }
+      } catch(e){}
+      return MT.call(this, t);
+    }, 'measureText');
   } catch(e){}
 } catch(e){ /* never throw into the page */ }
 `
