@@ -42,6 +42,7 @@ export function buildStealthScript(fp: Fingerprint, seed: number): string {
     audioNoise: fp.audioNoise,
     webrtc: fp.webrtc,
     webrtcPublicIp: fp.webrtcPublicIp ?? '',
+    fonts: fp.fonts,
     doNotTrack: fp.doNotTrack
   }
 
@@ -117,7 +118,6 @@ try {
   // ── Canvas noise (deterministic) ──
   if (CFG.canvasNoise) {
     try {
-      var cRng = mulberry32(CFG.seed);
       function noisify(canvas){
         try {
           var ctx = canvas.getContext('2d');
@@ -126,6 +126,9 @@ try {
           if(!w || !h) return;
           var img = ctx.getImageData(0, 0, w, h);
           var d = img.data;
+          // Re-seed per call so the SAME canvas always yields the SAME noise → a
+          // STABLE hash (real canvases are stable; a drifting hash flags as a lie).
+          var cRng = mulberry32(CFG.seed);
           // perturb a sparse, seeded set of pixels by +-1 — visually invisible.
           var step = Math.max(1, Math.floor(d.length / 4 / 64)) * 4;
           for (var i = 0; i < d.length; i += step) {
@@ -144,7 +147,7 @@ try {
       var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
       CanvasRenderingContext2D.prototype.getImageData = mask(function(){
         var r = origGetImageData.apply(this, arguments);
-        try { var dd = r.data; var st = Math.max(4, Math.floor(dd.length / 4 / 64) * 4); for (var k=0;k<dd.length;k+=st){ var nn=(cRng()*3|0)-1; dd[k]=Math.min(255,Math.max(0,dd[k]+nn)); } } catch(e){}
+        try { var dd = r.data; var gRng = mulberry32(CFG.seed); var st = Math.max(4, Math.floor(dd.length / 4 / 64) * 4); for (var k=0;k<dd.length;k+=st){ var nn=(gRng()*3|0)-1; dd[k]=Math.min(255,Math.max(0,dd[k]+nn)); } } catch(e){}
         return r;
       }, 'getImageData');
     } catch(e){}

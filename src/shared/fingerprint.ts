@@ -41,7 +41,9 @@ const TIMEZONES = [
 ]
 
 const CORES = [4, 6, 8, 12, 16]
-const MEMORY = [4, 8, 16]
+// navigator.deviceMemory is CAPPED at 8 by Chrome and only ever reports a value
+// from {0.25,0.5,1,2,4,8}. Anything else (e.g. 16, 6) is impossible → instant flag.
+const MEMORY = [4, 8]
 
 interface OsPreset {
   uaParens: string
@@ -155,7 +157,7 @@ export function generateFingerprint(os: OsType = 'windows'): Fingerprint {
     language: 'en-US',
     languages: ['en-US', 'en'],
     hardwareConcurrency: preset.mobile ? pick([4, 6, 8]) : pick(CORES),
-    deviceMemory: preset.mobile ? pick([4, 6, 8]) : pick(MEMORY),
+    deviceMemory: preset.mobile ? pick([4, 8]) : pick(MEMORY),
     vendor: 'Google Inc.',
     screen: {
       ...screen,

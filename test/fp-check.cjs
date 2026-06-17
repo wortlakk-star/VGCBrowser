@@ -63,7 +63,12 @@ ws.on('open', async () => {
     returnByValue: true,
     awaitPromise: true
   })
-  console.log(JSON.stringify(r.result && r.result.value, null, 2))
+  const cmd = r.result || {}
+  if (cmd.exceptionDetails) {
+    console.log('EVAL EXCEPTION: ' + JSON.stringify(cmd.exceptionDetails.exception || cmd.exceptionDetails))
+  } else {
+    console.log(JSON.stringify(cmd.result && cmd.result.value, null, 2))
+  }
   ws.close()
   process.exit(0)
 })
