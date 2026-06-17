@@ -14,7 +14,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { join } from 'path'
-import { mkdirSync } from 'fs'
+import { mkdirSync, promises as fs } from 'fs'
 import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
@@ -31,6 +31,8 @@ interface RunningProfile {
   state: ProfileRuntimeState
   injector?: InjectorHandle
   relay?: RelayHandle
+  /** Interval that polls + persists open tabs for cross-machine tab sync. */
+  tabPoll?: ReturnType<typeof setInterval>
 }
 
 /** Default fingerprint validation target opened by "Kiểm tra fingerprint". */
@@ -43,6 +45,34 @@ function profileDataDir(id: string): string {
   const dir = join(app.getPath('userData'), 'profiles', id)
   mkdirSync(dir, { recursive: true })
   return dir
+}
+
+// ── Tab sync ─────────────────────────────────────────────────────────────────
+// The list of open tabs is persisted INSIDE the synced user-data-dir
+// (Default/vgc-open-tabs.json), so the existing cloud data zip carries it to every
+// machine. On open we reopen those tabs; while running we refresh the file so the
+// latest set is what syncs on close.
+function openTabsFile(id: string): string {
+  return join(profileDataDir(id), 'Default', 'vgc-open-tabs.json')
+}
+
+async function readSavedTabs(id: string): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(openTabsFile(id), 'utf-8')
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr.filter((u): u is string => typeof u === 'string') : []
+  } catch {
+    return [] // no saved tabs yet (first open) or unreadable
+  }
+}
+
+async function writeSavedTabs(id: string, urls: string[]): Promise<void> {
+  try {
+    await fs.mkdir(join(profileDataDir(id), 'Default'), { recursive: true })
+    await fs.writeFile(openTabsFile(id), JSON.stringify(urls), 'utf-8')
+  } catch {
+    // best-effort — tab sync must never break a launch
+  }
 }
 
 function broadcast(state: ProfileRuntimeState): void {
@@ -291,6 +321,7 @@ export async function launchProfile(
   await saveProfile(profile)
 
   proc.on('exit', () => {
+    if (entry.tabPoll) clearInterval(entry.tabPoll)
     entry.injector?.dispose()
     entry.relay?.close()
     running.delete(id)
@@ -309,9 +340,23 @@ export async function launchProfile(
   // then open the profile's start URLs through it so they get the overrides.
   try {
     entry.injector = await attachInjector(profile, debugPort)
-    for (const url of profile.startUrls) {
+    // Tab sync: reopen the tabs that were open last time (synced from any machine
+    // via the cloud data zip). First-ever open (no saved tabs) → use start URLs.
+    const savedTabs = await readSavedTabs(id)
+    const toOpen = savedTabs.length > 0 ? savedTabs : profile.startUrls
+    for (const url of toOpen) {
       await entry.injector.openUrl(url)
     }
+    // Refresh the saved-tabs file every 8s so the latest set is what syncs on close
+    // (covers the user opening/closing tabs, even when they close the window directly).
+    entry.tabPoll = setInterval(() => {
+      void (async () => {
+        const inj = entry.injector
+        if (!inj) return
+        const urls = await inj.listOpenUrls()
+        if (urls.length > 0) await writeSavedTabs(id, urls)
+      })()
+    }, 8000)
   } catch (err) {
     console.error('[vgc] fingerprint injection failed:', err)
   }

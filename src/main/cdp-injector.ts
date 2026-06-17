@@ -17,6 +17,8 @@ import type { Cookie, Fingerprint, Profile } from '../shared/types'
 
 export interface InjectorHandle {
   openUrl: (url: string) => Promise<void>
+  /** URLs of all currently-open page tabs (http/https only) — for tab sync. */
+  listOpenUrls: () => Promise<string[]>
   getCookies: () => Promise<Cookie[]>
   dispose: () => void
 }
@@ -225,6 +227,20 @@ export async function attachInjector(
   return {
     openUrl: async (url: string) => {
       await conn.send('Target.createTarget', { url })
+    },
+    listOpenUrls: async (): Promise<string[]> => {
+      try {
+        const { targetInfos } = (await conn.send('Target.getTargets')) as {
+          targetInfos?: Array<{ type: string; url: string }>
+        }
+        const urls = (targetInfos ?? [])
+          .filter((t) => t.type === 'page' && /^https?:\/\//i.test(t.url))
+          .map((t) => t.url)
+        // de-dupe while keeping order
+        return [...new Set(urls)]
+      } catch {
+        return []
+      }
     },
     getCookies: async (): Promise<Cookie[]> => {
       try {
