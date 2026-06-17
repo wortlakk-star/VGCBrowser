@@ -90,14 +90,6 @@ async function fetchOpenTabs(port: number): Promise<string[]> {
     return []
   }
 }
-
-function dbg(msg: string): void {
-  void fs.appendFile(
-    join(app.getPath('userData'), 'vgc-tabsync-debug.log'),
-    `${new Date().toISOString()} ${msg}\n`
-  ).catch(() => {})
-}
-
 function broadcast(state: ProfileRuntimeState): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('profile:status', state)
@@ -362,13 +354,11 @@ export async function launchProfile(
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.
   try {
-    dbg(`injector-start id=${id} port=${debugPort}`)
     entry.injector = await attachInjector(profile, debugPort)
     // Tab sync: reopen the tabs that were open last time (synced from any machine
     // via the cloud data zip). First-ever open (no saved tabs) → use start URLs.
     const savedTabs = await readSavedTabs(id)
     const toOpen = savedTabs.length > 0 ? savedTabs : profile.startUrls
-    dbg(`restore id=${id} saved=${JSON.stringify(savedTabs)} toOpen=${JSON.stringify(toOpen)}`)
     for (const url of toOpen) {
       await entry.injector.openUrl(url)
     }
@@ -377,12 +367,10 @@ export async function launchProfile(
     entry.tabPoll = setInterval(() => {
       void (async () => {
         const urls = await fetchOpenTabs(debugPort)
-        dbg(`poll id=${id} port=${debugPort} urls=${JSON.stringify(urls)}`)
         if (urls.length > 0) await writeSavedTabs(id, urls)
       })()
     }, 5000)
   } catch (err) {
-    dbg(`injector-CATCH id=${id} err=${err instanceof Error ? err.message : String(err)}`)
     console.error('[vgc] fingerprint injection failed:', err)
   }
 
