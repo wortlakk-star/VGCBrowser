@@ -75,6 +75,29 @@ async function writeSavedTabs(id: string, urls: string[]): Promise<void> {
   }
 }
 
+/** Read the currently-open page tabs straight from the CDP HTTP endpoint
+ *  (http://127.0.0.1:<port>/json/list) — robust, independent of the injector. */
+async function fetchOpenTabs(port: number): Promise<string[]> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/list`)
+    if (!res.ok) return []
+    const list = (await res.json()) as Array<{ type?: string; url?: string }>
+    const urls = list
+      .filter((t) => t.type === 'page' && typeof t.url === 'string' && /^https?:\/\//i.test(t.url))
+      .map((t) => t.url as string)
+    return [...new Set(urls)]
+  } catch {
+    return []
+  }
+}
+
+function dbg(msg: string): void {
+  void fs.appendFile(
+    join(app.getPath('userData'), 'vgc-tabsync-debug.log'),
+    `${new Date().toISOString()} ${msg}\n`
+  ).catch(() => {})
+}
+
 function broadcast(state: ProfileRuntimeState): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('profile:status', state)
@@ -339,25 +362,27 @@ export async function launchProfile(
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.
   try {
+    dbg(`injector-start id=${id} port=${debugPort}`)
     entry.injector = await attachInjector(profile, debugPort)
     // Tab sync: reopen the tabs that were open last time (synced from any machine
     // via the cloud data zip). First-ever open (no saved tabs) → use start URLs.
     const savedTabs = await readSavedTabs(id)
     const toOpen = savedTabs.length > 0 ? savedTabs : profile.startUrls
+    dbg(`restore id=${id} saved=${JSON.stringify(savedTabs)} toOpen=${JSON.stringify(toOpen)}`)
     for (const url of toOpen) {
       await entry.injector.openUrl(url)
     }
-    // Refresh the saved-tabs file every 8s so the latest set is what syncs on close
+    // Refresh the saved-tabs file every 5s so the latest set is what syncs on close
     // (covers the user opening/closing tabs, even when they close the window directly).
     entry.tabPoll = setInterval(() => {
       void (async () => {
-        const inj = entry.injector
-        if (!inj) return
-        const urls = await inj.listOpenUrls()
+        const urls = await fetchOpenTabs(debugPort)
+        dbg(`poll id=${id} port=${debugPort} urls=${JSON.stringify(urls)}`)
         if (urls.length > 0) await writeSavedTabs(id, urls)
       })()
-    }, 8000)
+    }, 5000)
   } catch (err) {
+    dbg(`injector-CATCH id=${id} err=${err instanceof Error ? err.message : String(err)}`)
     console.error('[vgc] fingerprint injection failed:', err)
   }
 
