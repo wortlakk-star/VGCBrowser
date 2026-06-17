@@ -1,0 +1,60 @@
+name: Build & deploy macOS (.dmg)
+
+# Builds the macOS .dmg on a GitHub-hosted Mac (no local Mac needed) and uploads
+# it to vgcbrowser.com/dl so the macOS app's auto-update + download button get the
+# new version. Run it manually (Actions tab -> Run workflow) or it runs on push.
+#
+# ONE-TIME SETUP (done by the repo owner):
+#   Repo Settings -> Secrets and variables -> Actions -> New repository secret
+#     Name : HOSTINGER_SSH_KEY
+#     Value: the PRIVATE key contents of C:\Users\Administrator\.ssh\id_ed25519
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'resources/**'
+      - 'package.json'
+      - 'electron.vite.config.*'
+      - '.github/workflows/build-mac.yml'
+
+jobs:
+  build-mac:
+    runs-on: macos-14 # Apple Silicon runner -> arm64 .dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build macOS app (.dmg + .zip + latest-mac.yml)
+        run: npm run dist:mac
+
+      - name: List build output
+        run: ls -la release || true
+
+      - name: Upload to vgcbrowser.com/dl via SSH
+        env:
+          SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::Missing secret HOSTINGER_SSH_KEY. Add it in repo Settings -> Secrets -> Actions."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 65002 212.85.28.201 >> ~/.ssh/known_hosts 2>/dev/null || true
+          DEST="domains/vgcbrowser.com/public_html/dl"
+          ssh -p 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new u469659181@212.85.28.201 "mkdir -p $DEST"
+          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
+            release/*.dmg release/*-mac-*.zip release/latest-mac.yml \
+            u469659181@212.85.28.201:"$DEST/"
+          echo "Uploaded macOS build to https://vgcbrowser.com/dl/"
