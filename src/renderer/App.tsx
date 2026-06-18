@@ -130,6 +130,9 @@ export default function App(): JSX.Element {
   // effect below skips the echo it would otherwise fire for cloud-originated data.
   const justPulledRef = useRef(false)
   const justPulledProxiesRef = useRef(false)
+  // True while a local change is waiting to be pushed — the periodic auto-pull skips
+  // those windows so it can't overwrite an edit that hasn't reached the cloud yet.
+  const pendingPushRef = useRef(false)
 
   // Auto-PULL: App only mounts once signed in (see Gate), so this runs right after
   // login — fetch the account's profiles AND proxy pool from the cloud so a fresh
@@ -179,8 +182,13 @@ export default function App(): JSX.Element {
       justPulledRef.current = false
       return
     }
+    pendingPushRef.current = true // a local edit is in flight — pause the auto-pull
     const t = setTimeout(() => {
-      void pushCloudProfileList().catch((e) => console.error('[auto-push]', e))
+      void pushCloudProfileList()
+        .catch((e) => console.error('[auto-push]', e))
+        .finally(() => {
+          pendingPushRef.current = false
+        })
     }, 2500)
     return () => clearTimeout(t)
   }, [profiles, loading])
@@ -208,6 +216,34 @@ export default function App(): JSX.Element {
     }, 5 * 60 * 1000)
     return () => clearInterval(id)
   }, [])
+
+  // Auto-PULL on a short interval (the "auto-F5"): re-pull the cloud list so a profile
+  // ADDED, EDITED, or DELETED (tombstoned) on another machine shows up here within
+  // seconds — no manual "Làm mới" / restart needed. Skipped while a local push is in
+  // flight so it can't clobber an unpushed edit; only refreshes the UI when the local
+  // list actually changed (by id + updatedAt), so there's no constant re-render.
+  useEffect(() => {
+    const sig = (list: Profile[]): string =>
+      list.map((p) => `${p.id}:${p.updatedAt}`).sort().join('|')
+    const id = setInterval(() => {
+      if (loading || pendingPushRef.current) return
+      void (async () => {
+        try {
+          const before = sig(await window.vgc.listProfiles())
+          const n = await pullCloudProfileList()
+          if (n < 0) return // not signed in / cloud not configured
+          const after = sig(await window.vgc.listProfiles())
+          if (after !== before) {
+            justPulledRef.current = true // the resulting state change isn't a local edit
+            await refresh()
+          }
+        } catch (e) {
+          console.error('[auto-sync:pull]', e)
+        }
+      })()
+    }, 12 * 1000)
+    return () => clearInterval(id)
+  }, [loading, refresh])
 
   const createGroup = useCallback(
     async (name: string) => {
