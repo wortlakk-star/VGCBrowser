@@ -42,6 +42,7 @@ export default function App(): JSX.Element {
   const [dataSync, setDataSync] = useState<DataSyncState | null>(null)
   const [updateReady, setUpdateReady] = useState<UpdateStatus | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
+  const [refreshing, setRefreshing] = useState(false)
 
   // Show the signed-in account in the sidebar.
   useEffect(() => {
@@ -387,6 +388,40 @@ export default function App(): JSX.Element {
     }
   }, [refresh])
 
+  // "Làm mới" (F5): re-pull the latest profiles + proxies from the cloud so switching
+  // between machines shows the newest state. Data is already saved to the cloud on
+  // close (sync-on-close), so this is the matching "read the latest" action.
+  const syncNow = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    setDataSync({ id: '*', phase: 'download', message: '↻ Đang làm mới từ cloud…' })
+    try {
+      const [pr, px] = await Promise.allSettled([pullCloudProfileList(), pullCloudProxies()])
+      const nP = pr.status === 'fulfilled' && pr.value > 0 ? pr.value : 0
+      const nX = px.status === 'fulfilled' && px.value > 0 ? px.value : 0
+      if (nP > 0) justPulledRef.current = true
+      if (nX > 0) justPulledProxiesRef.current = true
+      await refresh()
+      const parts: string[] = []
+      if (nP > 0) parts.push(`${nP} profile`)
+      if (nX > 0) parts.push(`${nX} proxy`)
+      setDataSync({
+        id: '*',
+        phase: 'done',
+        message: parts.length ? `✓ Đã làm mới: ${parts.join(' + ')}` : '✓ Đã là bản mới nhất'
+      })
+    } catch (e) {
+      setDataSync({
+        id: '*',
+        phase: 'error',
+        message: 'Lỗi làm mới: ' + (e instanceof Error ? e.message : String(e))
+      })
+    } finally {
+      setRefreshing(false)
+      setTimeout(() => setDataSync(null), 2500)
+    }
+  }, [refreshing, refresh])
+
   const runningCount = Object.values(statuses).filter(
     (s) => s === 'running' || s === 'starting'
   ).length
@@ -447,6 +482,14 @@ export default function App(): JSX.Element {
             <span className="running-dot" /> {runningCount} chạy
             <span className="dot">·</span> {profiles.length} profile
           </div>
+          <button
+            className="btn"
+            onClick={syncNow}
+            disabled={refreshing}
+            title="Kéo dữ liệu mới nhất từ cloud (đồng bộ giữa 2 máy)"
+          >
+            {refreshing ? '↻ Đang làm mới…' : '↻ Làm mới'}
+          </button>
           <button className="btn" onClick={importProfiles}>
             ↧ Nhập
           </button>
