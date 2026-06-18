@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from 'react'
+import logo from '../assets/logo.png'
 
 interface Props {
   groups: Array<{ name: string; count: number }>
@@ -50,7 +51,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand">
-        <span className="logo">◆</span>
+        <img className="logo" src={logo} alt="VGC" style={{ width: 28, height: 28 }} />
         <div>
           <div className="brand-name">VGC Browser</div>
           <div className="brand-sub">Antidetect · VGC Group</div>

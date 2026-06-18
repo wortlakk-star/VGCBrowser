@@ -929,11 +929,7 @@ code {
   width: 60px;
   height: 60px;
   border-radius: 18px;
-  display: grid;
-  place-items: center;
-  font-size: 30px;
-  color: #05201c;
-  background: var(--accent-grad);
+  object-fit: contain;
   box-shadow: 0 10px 26px rgba(24, 192, 173, 0.4);
 }
 

@@ -15,6 +15,7 @@ import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { Sidebar } from './components/Sidebar'
 import { applyTheme, getTheme, type Theme } from './theme'
+import logo from './assets/logo.png'
 import {
   getCloud,
   pullCloudProfileList,
@@ -660,7 +661,7 @@ export default function App(): JSX.Element {
       {engineProg && (
         <div className="engine-overlay">
           <div className="engine-card">
-            <div className="engine-logo">◆</div>
+            <img className="engine-logo" src={logo} alt="VGC" style={{ width: 44, height: 44 }} />
             <h3>VGC Core Engine</h3>
             <p className="hint">{engineProg.message ?? 'Đang chuẩn bị…'}</p>
             <div className="progress">

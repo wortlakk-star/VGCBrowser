@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from 'react'
 import { getCloud } from '../cloud'
+import logo from '../assets/logo.png'
 
 /** Map common Supabase auth errors to Vietnamese. */
 function viErr(m: string): string {
@@ -113,7 +114,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="auth-logo">◆</div>
+          <img className="auth-logo" src={logo} alt="VGC" />
           <div className="name">VGC Browser</div>
           <div className="sub">Antidetect Browser · VGC Group</div>
         </div>
@@ -187,7 +188,14 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           )}
         </p>
 
-        <p className="auth-foot">◆ VGC Browser · Antidetect Browser</p>
+        <p className="auth-foot">
+          <img
+            src={logo}
+            alt=""
+            style={{ width: 14, height: 14, verticalAlign: 'middle', marginRight: 4 }}
+          />
+          VGC Browser · Antidetect Browser
+        </p>
       </div>
     </div>
   )

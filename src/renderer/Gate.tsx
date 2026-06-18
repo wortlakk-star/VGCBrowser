@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import App from './App'
 import { AuthScreen } from './components/AuthScreen'
 import { getCloud } from './cloud'
+import logo from './assets/logo.png'
 import type { Session } from '@supabase/supabase-js'
 
 type Status = 'loading' | 'out' | 'in'
@@ -79,16 +80,7 @@ export default function Gate(): JSX.Element {
         }}
       >
         <div style={{ textAlign: 'center' }}>
-          <div
-            style={{
-              fontSize: 40,
-              background: 'var(--accent-grad)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent'
-            }}
-          >
-            ◆
-          </div>
+          <img src={logo} alt="VGC" style={{ width: 56, height: 56 }} />
           <p style={{ marginTop: 8 }}>Đang tải…</p>
         </div>
       </div>
