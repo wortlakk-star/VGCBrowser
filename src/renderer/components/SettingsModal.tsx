@@ -16,7 +16,9 @@ function updateLabel(s: UpdateStatus | null): string {
     case 'checking':
       return '⏳ Đang kiểm tra cập nhật…'
     case 'available':
-      return `⬇ Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — đang tải…`
+      return s.manualDownloadUrl
+        ? `⬇ Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — bấm "Tải về" để cập nhật.`
+        : `⬇ Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — đang tải…`
     case 'downloading':
       return `⬇ Đang tải bản mới… ${s.percent ?? 0}%`
     case 'downloaded':
@@ -53,6 +55,8 @@ export function SettingsModal({
 
   const checking = update?.phase === 'checking' || update?.phase === 'downloading'
   const downloaded = update?.phase === 'downloaded'
+  // macOS: an unsigned build can't auto-install, so offer a manual download instead.
+  const manual = update?.phase === 'available' && !!update?.manualDownloadUrl
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -110,6 +114,10 @@ export function SettingsModal({
               {downloaded ? (
                 <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
                   ⟳ Khởi động lại để cập nhật
+                </button>
+              ) : manual ? (
+                <button className="btn primary" onClick={() => void window.vgc.openUpdateDownload()}>
+                  ⬇ Tải về để cập nhật
                 </button>
               ) : (
                 <button

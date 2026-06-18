@@ -1,7 +1,7 @@
 {
   "name": "vgc-browser",
-  "version": "0.1.42",
-  "description": "VGC Browser ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â antidetect browser & multi-account profile manager (GoLogin-style) by VGC Group",
+  "version": "0.1.43",
+  "description": "VGC Browser ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â antidetect browser & multi-account profile manager (GoLogin-style) by VGC Group",
   "author": "VGC Group",
   "license": "UNLICENSED",
   "private": true,

@@ -75,14 +75,17 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  // When a new version finishes downloading, surface a restart-to-update banner.
+  // Surface an update banner: Windows shows it once the new version finished
+  // downloading (restart to install); macOS can't auto-install an unsigned build,
+  // so it shows as soon as a newer version is available, with a manual download link.
   useEffect(() => {
-    void window.vgc.getUpdateStatus().then((s) => {
-      if (s.phase === 'downloaded') setUpdateReady(s)
-    })
-    return window.vgc.onUpdateStatus((s) => {
-      if (s.phase === 'downloaded') setUpdateReady(s)
-    })
+    const show = (s: UpdateStatus): void => {
+      if (s.phase === 'downloaded' || (s.phase === 'available' && s.manualDownloadUrl)) {
+        setUpdateReady(s)
+      }
+    }
+    void window.vgc.getUpdateStatus().then(show)
+    return window.vgc.onUpdateStatus(show)
   }, [])
 
   // Toast for cloud profile-data sync (download on open / upload on close).
@@ -463,13 +466,27 @@ export default function App(): JSX.Element {
             boxShadow: '0 4px 14px rgba(0,0,0,.3)'
           }}
         >
-          <span>
-            🎉 Đã tải bản mới
-            {updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — khởi động lại để cập nhật.
-          </span>
-          <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
-            ⟳ Khởi động lại ngay
-          </button>
+          {updateReady.manualDownloadUrl ? (
+            <>
+              <span>
+                🎉 Có bản mới
+                {updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — tải về để cập nhật (Mac).
+              </span>
+              <button className="btn primary" onClick={() => void window.vgc.openUpdateDownload()}>
+                ⬇ Tải về
+              </button>
+            </>
+          ) : (
+            <>
+              <span>
+                🎉 Đã tải bản mới
+                {updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — khởi động lại để cập nhật.
+              </span>
+              <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
+                ⟳ Khởi động lại ngay
+              </button>
+            </>
+          )}
           <button className="btn ghost" onClick={() => setUpdateReady(null)}>
             Để sau
           </button>

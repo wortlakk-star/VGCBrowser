@@ -184,6 +184,12 @@ export interface UpdateStatus {
   percent?: number
   /** Human message (errors / dev note). */
   message?: string
+  /**
+   * When set (macOS only), auto-install isn't possible — the app isn't code-signed
+   * with an Apple Developer ID, so the user must download + install manually. The UI
+   * shows a "Tải về" button that opens this URL instead of "Khởi động lại".
+   */
+  manualDownloadUrl?: string
 }
 
 /** Progress of the on-demand engine download. */

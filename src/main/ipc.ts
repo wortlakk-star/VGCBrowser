@@ -21,7 +21,7 @@ import { createProfile, updateProfile } from './profiles-service'
 import { getSettings, saveSettings, regenerateToken, type AppSettings } from './settings'
 import { restartApiServer } from './api-manager'
 import { ensureEngine, isEngineInstalled, type EngineProgress } from './engine-download'
-import { checkForUpdates, getUpdateStatus, installUpdate } from './updater'
+import { checkForUpdates, getUpdateStatus, installUpdate, openDownloadPage } from './updater'
 import {
   listProfiles,
   getProfile,
@@ -243,6 +243,7 @@ export function registerIpc(): void {
   ipcMain.handle('update:statusGet', () => getUpdateStatus())
   ipcMain.handle('update:check', () => checkForUpdates())
   ipcMain.handle('update:install', () => installUpdate())
+  ipcMain.handle('update:openDownload', () => openDownloadPage())
 
   ipcMain.handle('engine:installed', () => isEngineInstalled())
 

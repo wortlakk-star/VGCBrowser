@@ -115,6 +115,8 @@ const api = {
 
   installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
 
+  openUpdateDownload: (): Promise<void> => ipcRenderer.invoke('update:openDownload'),
+
   onUpdateStatus: (cb: (s: UpdateStatus) => void): (() => void) => {
     const listener = (_e: unknown, s: UpdateStatus): void => cb(s)
     ipcRenderer.on('update:status', listener)
