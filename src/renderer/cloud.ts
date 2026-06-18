@@ -38,11 +38,60 @@ export async function pullCloudProfileList(): Promise<number> {
   if (!c) return -1
   const { data: sess } = await c.auth.getSession()
   if (!sess.session) return -1
-  const { data, error } = await c.from('profiles_cloud').select('data')
-  if (error) throw new Error(error.message)
-  const profiles = (data ?? []).map((r) => (r as { data: Profile }).data)
-  await window.vgc.bulkUpsertProfiles(profiles)
-  return profiles.length
+
+  // Prefer the tombstone-aware query (needs the `deleted` column from
+  // supabase/add-soft-delete.sql). If that column doesn't exist yet, fall back to
+  // the plain pull so the app still works before the migration is run.
+  const withDel = await c.from('profiles_cloud').select('profile_id,data,deleted')
+  if (withDel.error) {
+    const plain = await c.from('profiles_cloud').select('data')
+    if (plain.error) throw new Error(plain.error.message)
+    const profiles = (plain.data ?? []).map((r) => (r as { data: Profile }).data)
+    await window.vgc.bulkUpsertProfiles(profiles)
+    return profiles.length
+  }
+
+  const rows = (withDel.data ?? []) as Array<{ profile_id: string; data: Profile; deleted?: boolean }>
+  const live = rows.filter((r) => !r.deleted).map((r) => r.data)
+  const deletedIds = rows.filter((r) => r.deleted).map((r) => r.profile_id)
+  await window.vgc.bulkUpsertProfiles(live)
+  // Apply deletions from other machines: a profile tombstoned in the cloud is
+  // removed locally so it stops re-appearing on every "Làm mới".
+  if (deletedIds.length) await window.vgc.removeProfiles(deletedIds)
+  return live.length
+}
+
+/**
+ * Mark a profile as deleted in the cloud (a tombstone) so the deletion propagates
+ * to the account's other machines. We tombstone instead of hard-deleting the row
+ * because another machine that still has the profile locally would otherwise
+ * re-create it on its next auto-push — the tombstone survives that push (the push
+ * never sets `deleted`) and tells every machine to drop the profile on pull.
+ *
+ * If the `deleted` column doesn't exist yet (migration not run), we hard-delete the
+ * row as a best-effort fallback. Also removes the heavy session zip from Storage.
+ */
+export async function deleteCloudProfile(id: string): Promise<void> {
+  const c = await getCloud()
+  if (!c) return
+  const { data: sess } = await c.auth.getSession()
+  if (!sess.session) return
+  const owner = sess.session.user.id
+  const upd = await c
+    .from('profiles_cloud')
+    .update({ deleted: true, updated_at: new Date().toISOString() })
+    .eq('owner', owner)
+    .eq('profile_id', id)
+  if (upd.error) {
+    // Column missing (pre-migration) → fall back to a hard delete.
+    await c.from('profiles_cloud').delete().eq('owner', owner).eq('profile_id', id)
+  }
+  // Drop the session data zip regardless (best-effort; ignore failures).
+  try {
+    await c.storage.from('profiles').remove([`${owner}/${id}.zip`])
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -85,11 +134,40 @@ export async function pullCloudProxies(): Promise<number> {
   if (!c) return -1
   const { data: sess } = await c.auth.getSession()
   if (!sess.session) return -1
-  const { data, error } = await c.from('proxies_cloud').select('data')
-  if (error) throw new Error(error.message)
-  const proxies = (data ?? []).map((r) => (r as { data: SavedProxy }).data)
-  await window.vgc.saveManyProxies(proxies)
-  return proxies.length
+
+  const withDel = await c.from('proxies_cloud').select('proxy_id,data,deleted')
+  if (withDel.error) {
+    const plain = await c.from('proxies_cloud').select('data')
+    if (plain.error) throw new Error(plain.error.message)
+    const proxies = (plain.data ?? []).map((r) => (r as { data: SavedProxy }).data)
+    await window.vgc.saveManyProxies(proxies)
+    return proxies.length
+  }
+
+  const rows = (withDel.data ?? []) as Array<{ proxy_id: string; data: SavedProxy; deleted?: boolean }>
+  const live = rows.filter((r) => !r.deleted).map((r) => r.data)
+  const deletedIds = rows.filter((r) => r.deleted).map((r) => r.proxy_id)
+  await window.vgc.saveManyProxies(live)
+  if (deletedIds.length) await window.vgc.removeProxies(deletedIds)
+  return live.length
+}
+
+/** Tombstone a proxy in the cloud so the deletion syncs to other machines.
+ * Mirrors deleteCloudProfile; hard-deletes as a fallback before the migration. */
+export async function deleteCloudProxy(id: string): Promise<void> {
+  const c = await getCloud()
+  if (!c) return
+  const { data: sess } = await c.auth.getSession()
+  if (!sess.session) return
+  const owner = sess.session.user.id
+  const upd = await c
+    .from('proxies_cloud')
+    .update({ deleted: true, updated_at: new Date().toISOString() })
+    .eq('owner', owner)
+    .eq('proxy_id', id)
+  if (upd.error) {
+    await c.from('proxies_cloud').delete().eq('owner', owner).eq('proxy_id', id)
+  }
 }
 
 /**

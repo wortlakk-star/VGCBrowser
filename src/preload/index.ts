@@ -50,6 +50,9 @@ const api = {
   bulkUpsertProfiles: (profiles: Profile[]): Promise<void> =>
     ipcRenderer.invoke('profiles:bulkUpsert', profiles),
 
+  removeProfiles: (ids: string[]): Promise<void> =>
+    ipcRenderer.invoke('profiles:removeMany', ids),
+
   launchProfile: (id: string): Promise<ProfileRuntimeState> =>
     ipcRenderer.invoke('profiles:launch', id),
 
@@ -76,6 +79,7 @@ const api = {
   saveManyProxies: (items: SavedProxy[]): Promise<number> =>
     ipcRenderer.invoke('proxies:saveMany', items),
   deleteProxy: (id: string): Promise<void> => ipcRenderer.invoke('proxies:delete', id),
+  removeProxies: (ids: string[]): Promise<void> => ipcRenderer.invoke('proxies:removeMany', ids),
 
   cookieRobot: (id: string, urls?: string[]): Promise<void> =>
     ipcRenderer.invoke('profiles:cookieRobot', id, urls),

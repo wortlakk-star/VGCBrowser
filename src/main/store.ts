@@ -93,6 +93,19 @@ export async function deleteProfile(id: string): Promise<void> {
   await writeAll(all.filter((p) => p.id !== id))
 }
 
+/**
+ * Remove many profiles at once by id. Used by the cloud pull to apply deletions
+ * that happened on another machine (tombstoned rows), so a profile deleted on one
+ * machine disappears here too instead of re-appearing on every "Làm mới".
+ */
+export async function removeMany(ids: string[]): Promise<void> {
+  if (!ids.length) return
+  const all = await listProfiles()
+  const set = new Set(ids)
+  const next = all.filter((p) => !set.has(p.id))
+  if (next.length !== all.length) await writeAll(next)
+}
+
 /** Upsert many profiles at once (used by import + cloud pull). */
 export async function saveMany(profiles: Profile[]): Promise<void> {
   const all = await listProfiles()

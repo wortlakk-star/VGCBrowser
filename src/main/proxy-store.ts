@@ -63,3 +63,16 @@ export async function deleteProxy(id: string): Promise<void> {
   const all = await listProxies()
   await writeAll(all.filter((p) => p.id !== id))
 }
+
+/**
+ * Remove many proxies at once by id. Used by the cloud pull to apply deletions made
+ * on another machine (tombstoned rows), so a proxy removed on one machine doesn't
+ * keep coming back on every "Làm mới".
+ */
+export async function removeManyProxies(ids: string[]): Promise<void> {
+  if (!ids.length) return
+  const all = await listProxies()
+  const set = new Set(ids)
+  const next = all.filter((p) => !set.has(p.id))
+  if (next.length !== all.length) await writeAll(next)
+}

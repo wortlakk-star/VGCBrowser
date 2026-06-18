@@ -20,7 +20,8 @@ import {
   pullCloudProfileList,
   pushCloudProfileList,
   pullCloudProxies,
-  pushCloudProxies
+  pushCloudProxies,
+  deleteCloudProfile
 } from './cloud'
 
 export default function App(): JSX.Element {
@@ -311,6 +312,12 @@ export default function App(): JSX.Element {
     async (id: string) => {
       if (!window.confirm('Xoá profile này?')) return
       await window.vgc.deleteProfile(id)
+      // Also tombstone in the cloud so it doesn't come back on "Làm mới" / other machines.
+      try {
+        await deleteCloudProfile(id)
+      } catch (e) {
+        console.error('[cloud-delete]', e)
+      }
       await refresh()
     },
     [refresh]
@@ -369,7 +376,16 @@ export default function App(): JSX.Element {
   }, [selected])
   const bulkDelete = useCallback(async () => {
     if (!window.confirm(`Xoá ${selected.size} profile đã chọn?`)) return
-    for (const id of selected) await window.vgc.deleteProfile(id)
+    for (const id of selected) {
+      await window.vgc.deleteProfile(id)
+      // Tombstone each in the cloud so the deletion sticks across machines + "Làm mới".
+      try {
+        await deleteCloudProfile(id)
+      } catch (e) {
+        console.error('[cloud-delete]', e)
+      }
+    }
+    setSelected(new Set())
     await refresh()
   }, [selected, refresh])
   const exportSelected = useCallback(async () => {

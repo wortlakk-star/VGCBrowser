@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Profile, ProxyType, SavedProxy } from '../../shared/types'
+import { deleteCloudProxy } from '../cloud'
 
 const genId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
@@ -194,8 +195,18 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     await refresh()
   }
 
-  const del = async (id: string): Promise<void> => {
+  // Delete a proxy both locally AND in the cloud (tombstone) so it doesn't come
+  // back on "Làm mới" or on the account's other machines.
+  const delOne = async (id: string): Promise<void> => {
     await window.vgc.deleteProxy(id)
+    try {
+      await deleteCloudProxy(id)
+    } catch (e) {
+      console.error('[cloud-delete-proxy]', e)
+    }
+  }
+  const del = async (id: string): Promise<void> => {
+    await delOne(id)
     await refresh()
   }
   const rename = async (p: SavedProxy, label: string): Promise<void> => {
@@ -205,19 +216,19 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     await refresh()
   }
   const delSelected = async (): Promise<void> => {
-    for (const id of checked) await window.vgc.deleteProxy(id)
+    for (const id of checked) await delOne(id)
     setChecked(new Set())
     await refresh()
   }
   const delErrors = async (): Promise<void> => {
-    for (const p of proxies.filter((p) => p.lastStatus === 'error')) await window.vgc.deleteProxy(p.id)
+    for (const p of proxies.filter((p) => p.lastStatus === 'error')) await delOne(p.id)
     await refresh()
   }
   const dedupe = async (): Promise<void> => {
     const seen = new Set<string>()
     for (const p of proxies) {
       const key = `${p.type}://${p.host}:${p.port}:${p.username ?? ''}`
-      if (seen.has(key)) await window.vgc.deleteProxy(p.id)
+      if (seen.has(key)) await delOne(p.id)
       else seen.add(key)
     }
     await refresh()

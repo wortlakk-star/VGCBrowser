@@ -27,6 +27,7 @@ import {
   getProfile,
   saveProfile,
   deleteProfile,
+  removeMany,
   saveMany
 } from './store'
 import {
@@ -41,7 +42,8 @@ import {
   listProxies,
   saveProxy,
   saveManyProxies,
-  deleteProxy
+  deleteProxy,
+  removeManyProxies
 } from './proxy-store'
 import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { setCloudSession } from './session'
@@ -149,6 +151,8 @@ export function registerIpc(): void {
 
   ipcMain.handle('profiles:bulkUpsert', (_e, profiles: Profile[]) => saveMany(profiles))
 
+  ipcMain.handle('profiles:removeMany', (_e, ids: string[]) => removeMany(ids))
+
   ipcMain.handle('profiles:launch', (_e, id: string) => launchProfile(id))
 
   ipcMain.handle('profiles:stop', (_e, id: string) => {
@@ -169,6 +173,7 @@ export function registerIpc(): void {
   ipcMain.handle('proxies:save', (_e, p: SavedProxy) => saveProxy(p))
   ipcMain.handle('proxies:saveMany', (_e, items: SavedProxy[]) => saveManyProxies(items))
   ipcMain.handle('proxies:delete', (_e, id: string) => deleteProxy(id))
+  ipcMain.handle('proxies:removeMany', (_e, ids: string[]) => removeManyProxies(ids))
 
   ipcMain.handle('profiles:cookieRobot', (_e, id: string, urls?: string[]) =>
     cookieRobot(id, urls)
