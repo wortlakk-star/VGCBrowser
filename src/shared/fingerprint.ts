@@ -138,6 +138,32 @@ function fontSubset(all: string[]): string[] {
   return [...core, ...rest]
 }
 
+// Map an ISO-3166 country code (from the proxy's IP geo) to the locale a real user
+// in that country would run Chrome with. Used at launch to keep navigator.language /
+// Accept-Language coherent with the proxy's exit country.
+const LOCALE_BY_COUNTRY: Record<string, string> = {
+  US: 'en-US', GB: 'en-GB', CA: 'en-CA', AU: 'en-AU', NZ: 'en-NZ', IE: 'en-IE',
+  IN: 'en-IN', SG: 'en-SG', PH: 'en-PH', ZA: 'en-ZA',
+  FR: 'fr-FR', DE: 'de-DE', AT: 'de-AT', CH: 'de-CH',
+  ES: 'es-ES', MX: 'es-MX', AR: 'es-AR', CO: 'es-CO',
+  IT: 'it-IT', NL: 'nl-NL', BE: 'nl-BE', PT: 'pt-PT', BR: 'pt-BR',
+  RU: 'ru-RU', UA: 'uk-UA', PL: 'pl-PL', SE: 'sv-SE', NO: 'nb-NO', DK: 'da-DK',
+  FI: 'fi-FI', CZ: 'cs-CZ', RO: 'ro-RO', HU: 'hu-HU', GR: 'el-GR', TR: 'tr-TR',
+  JP: 'ja-JP', KR: 'ko-KR', CN: 'zh-CN', TW: 'zh-TW', HK: 'zh-HK',
+  VN: 'vi-VN', TH: 'th-TH', ID: 'id-ID', MY: 'ms-MY'
+}
+
+/** Coherent locale for a proxy's country code, or null if unknown (keep current). */
+export function localeForCountry(
+  countryCode?: string
+): { language: string; languages: string[] } | null {
+  if (!countryCode) return null
+  const locale = LOCALE_BY_COUNTRY[countryCode.toUpperCase()]
+  if (!locale) return null
+  const base = locale.split('-')[0]
+  return { language: locale, languages: [locale, base] }
+}
+
 /** Generate a self-consistent fingerprint for the given OS. */
 export function generateFingerprint(os: OsType = 'windows'): Fingerprint {
   const preset = OS_PRESETS[os] ?? OS_PRESETS.windows

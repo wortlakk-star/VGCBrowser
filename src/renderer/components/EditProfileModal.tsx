@@ -128,6 +128,14 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
     setFp(fresh)
   }
 
+  // Changing OS must re-roll the OS-bound fingerprint (UA, platform, WebGL/GPU,
+  // fonts, screen) so a "macOS" profile never keeps a Windows GPU/UA — that mismatch
+  // is a dead giveaway. (Timezone/geo get re-aligned to the proxy again at launch.)
+  const changeOs = async (next: OsType): Promise<void> => {
+    setOs(next)
+    setFp(await window.vgc.generateFingerprint(next))
+  }
+
   const checkProxyNow = async (): Promise<void> => {
     setChecking(true)
     setProxyResult(null)
@@ -239,7 +247,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               </label>
               <label>
                 OS
-                <select value={os} onChange={(e) => setOs(e.target.value as OsType)}>
+                <select value={os} onChange={(e) => void changeOs(e.target.value as OsType)}>
                   {OS_OPTIONS.map((o) => (
                     <option key={o} value={o}>
                       {o}
