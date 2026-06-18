@@ -19,6 +19,7 @@ import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
 import { resolveSystemBrowser } from './engine'
+import { brandedMacEngine } from './engine-brand'
 import { checkProxy } from './proxy-check'
 import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, saveProfile } from './store'
@@ -213,6 +214,11 @@ export async function launchProfile(
     broadcast({ id, status: 'error', error: msg })
     throw new Error(msg)
   }
+
+  // macOS: launch from a VGC-branded clone of Chrome so the profile shows the VGC
+  // logo on the Dock instead of the Chrome icon. No-op / fallback on non-mac or error.
+  const branded = brandedMacEngine(enginePath)
+  if (branded) enginePath = branded
 
   const userDataDir = profileDataDir(id)
 
