@@ -11,7 +11,7 @@ import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
-import { resolveEnginePath, isDedicatedEngine } from './engine'
+import { resolveEnginePath, isDedicatedEngine, macVgcCoreEngine } from './engine'
 import type { EngineProgress } from '../shared/types'
 
 export type { EngineProgress }
@@ -42,6 +42,11 @@ export async function ensureEngine(
   // 2. Explicit override (e.g. local dev build).
   const override = process.env.VGC_ENGINE_PATH
   if (override && existsSync(override)) return override
+
+  // 2b. macOS: prefer the locally-built VGC Core engine (own Dock icon, isolated from
+  //     the user's Chrome, CDP works) over the system Chrome.
+  const macCore = macVgcCoreEngine()
+  if (macCore) return macCore
 
   // 3. Engine BUNDLED with the installer (electron-builder win.extraResources →
   //    resources/engine/chromium). A fresh machine then has the antidetect engine

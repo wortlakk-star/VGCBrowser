@@ -75,3 +75,24 @@ export function resolveEnginePath(): string | null {
 export function isDedicatedEngine(path: string): boolean {
   return path.toLowerCase().includes(join('engine', 'chromium').toLowerCase())
 }
+
+/**
+ * macOS: the locally-installed VGC Core engine — a separately-BUILT Chromium (bundle
+ * id org.chromium.Chromium, VGC-branded) at userData/engine/VGC Core.app. Preferred
+ * over the system Chrome on Mac because it's a distinct browser (own Dock icon, not
+ * mixed with the user's Chrome) AND its CDP works (cloning the system Chrome doesn't —
+ * the clone relaunches to /Applications and loses --remote-debugging-port).
+ * Returns the binary path, or null when not installed / non-mac.
+ */
+export function macVgcCoreEngine(): string | null {
+  if (process.platform !== 'darwin') return null
+  const bin = join(
+    app.getPath('userData'),
+    'engine',
+    'VGC Core.app',
+    'Contents',
+    'MacOS',
+    'Chromium'
+  )
+  return existsSync(bin) ? bin : null
+}
