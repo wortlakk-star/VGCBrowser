@@ -1,0 +1,32 @@
+# VGC Core — gn build args (release, no PGO, codecs like real Chrome).
+# Use with:  gn gen out/vgc   (after copying this to out/vgc/args.gn)
+#
+# target_cpu: "arm64" for Apple Silicon, "x64" for Intel/Windows. For a Universal
+# macOS app build both and `lipo`/`universalize`, or build per-arch.
+
+is_debug = false
+is_official_build = true        # full optimizations (release-grade)
+chrome_pgo_phase = 0            # skip PGO so no profile data is required
+
+target_cpu = "arm64"           # ← arm64 (Apple Silicon) | x64 (Intel/Windows)
+
+symbol_level = 0               # no debug symbols → smaller, faster link
+blink_symbol_level = 0
+is_component_build = false     # single self-contained binary (what we ship)
+
+# Match real Chrome's media so sites behave identically (H.264/AAC).
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+enable_nacl = false            # dead weight for us
+dcheck_always_on = false
+
+# Chromium (not google-chrome) branding base; the BRANDING patch renames it to
+# "VGC Browser". Leaving google_api_key empty disables Google sign-in/sync — fine
+# (and more antidetect-neutral) for profile browsers.
+# google_api_key = ""
+# google_default_client_id = ""
+# google_default_client_secret = ""
+
+# Windows only (uncomment when target_cpu="x64" on Windows):
+# target_os = "win"

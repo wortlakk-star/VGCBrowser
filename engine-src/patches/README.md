@@ -1,0 +1,48 @@
+# VGC Core — fingerprint patch specification
+
+Each profile launch passes `--vgc-*` switches (see `src/main/profile-manager.ts`).
+These patches make Chromium **read those switches and override the value natively**,
+so there is no JS-detectable tampering (the difference vs the Phase-1 CDP injection).
+
+**How to read a switch** (in any of the .cc files below):
+```cpp
+#include "base/command_line.h"
+// ...
+const auto* cmd = base::CommandLine::ForCurrentProcess();
+std::string v = cmd->GetSwitchValueASCII("vgc-webgl-vendor");   // etc.
+if (!v.empty()) { /* use v instead of the real value */ }
+```
+Switch names (no leading `--` in the API): `vgc-webgl-vendor`, `vgc-webgl-renderer`,
+`vgc-hardware-concurrency`, `vgc-device-memory`, `vgc-seed`.
+
+> Paths are for Chromium ~149; exact lines drift per version — match by **method
+> name**, not line number. Each row = one patch commit.
+
+| Vector | File | Method / hook | What to do |
+|---|---|---|---|
+| **WebGL vendor/renderer** | `third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc` | `WebGLRenderingContextBase::getParameter` (and the unmasked path) | For `GL_VENDOR` (0x1F00), `GL_RENDERER` (0x1F01), `UNMASKED_VENDOR_WEBGL` (0x9245), `UNMASKED_RENDERER_WEBGL` (0x9246) → return `--vgc-webgl-vendor` / `--vgc-webgl-renderer` as a `WebGLString`. |
+| **hardwareConcurrency** | `third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc` | `NavigatorConcurrentHardware::hardwareConcurrency()` | Return `atoi(--vgc-hardware-concurrency)` when set. |
+| **deviceMemory** | `third_party/blink/renderer/core/frame/navigator_device_memory.cc` | `NavigatorDeviceMemory::deviceMemory()` | Return `--vgc-device-memory` (GB; Chrome caps to {0.25,0.5,1,2,4,8}). |
+| **Canvas noise** | `third_party/blink/renderer/core/html/canvas/html_canvas_element.cc` (+ `modules/canvas/...` `getImageData`, and WebGL `readPixels`) | the pixel **readback** paths (`ToDataURLInternal`, `toBlob`, `getImageData`) | Perturb pixels by a deterministic ±1 seeded from `--vgc-seed` (mulberry32). Mirror the JS algorithm in `src/main/fingerprint-script.ts` so profiles stay stable. |
+| **Audio noise** | `third_party/blink/renderer/modules/webaudio/audio_buffer.cc` (or `analyser_node.cc`) | `AudioBuffer::getChannelData` / `AnalyserNode::getFloatFrequencyData` | Add tiny seeded noise (`--vgc-seed ^ const`) on the read path. |
+| **Fonts** | `third_party/blink/renderer/platform/fonts/font_cache.cc` / platform font enumeration | font availability lookup | Restrict detectable fonts to a per-OS allowlist (the app already generates one in `fingerprint.ts`). Hardest vector — schedule last. |
+| **WebRTC IP** | `third_party/blink/renderer/modules/peerconnection/...` / webrtc port allocator | ICE candidate gathering | Only surface the proxy's public IP / use mDNS host candidates; never leak the real local IP. (App passes the proxy IP via the fingerprint; consider a `--vgc-webrtc-ip` switch.) |
+| **navigator.platform / UA-CH** | already handled natively via CDP `setUserAgentOverride` | — | Keep as-is; no patch needed. |
+
+## Branding (name + icon)
+| Target | Change |
+|---|---|
+| `chrome/app/theme/chromium/BRANDING` | `PRODUCT_FULLNAME=VGC Browser`, `PRODUCT_SHORTNAME=VGC Browser`, company fields → VGC Group. |
+| `chrome/app/theme/chromium/mac/app.icns` | replace with the VGC icon (use `resources/vgc.ico` → convert to `.icns`; or `iconutil` from a `.iconset`). |
+| `chrome/app/theme/chromium/win/chromium.ico` (+ size PNGs) | replace with `resources/vgc.ico`. |
+| product strings (`chrome/app/chromium_strings.grd`) | "Chromium" → "VGC Browser" where user-visible (window title, About). |
+
+## Suggested order (incremental, each builds + validates on its own)
+1. Branding (name + icon) — quick visible win, proves the build pipeline.
+2. WebGL vendor/renderer — highest detector signal, easiest patch.
+3. hardwareConcurrency + deviceMemory — trivial.
+4. Canvas + Audio noise (seeded) — the spoof core.
+5. WebRTC IP.
+6. Fonts — hardest, last.
+
+Validate after each on `creepjs` / `browserleaks` to confirm **no JS-override tells**.
