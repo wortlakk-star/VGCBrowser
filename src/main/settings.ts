@@ -25,7 +25,11 @@ function defaults(): AppSettings {
     apiToken: makeToken(),
     supabaseUrl: 'https://pwiledrttvbnmytghyip.supabase.co',
     supabaseAnonKey: 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO',
-    engineUrl: 'https://vgcbrowser.com/dl/vgc-core-149.zip'
+    engineUrl: 'https://vgcbrowser.com/dl/vgc-core-149.zip',
+    // Set once the macOS VGC Core engine is hosted (scripts/package-mac-engine.sh →
+    // upload). Empty → other Macs fall back to system Chrome; the build machine uses
+    // its local userData/engine/VGC Core.app regardless.
+    engineUrlMac: ''
   }
 }
 

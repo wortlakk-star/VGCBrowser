@@ -171,6 +171,9 @@ export interface AppSettings {
   supabaseAnonKey: string
   /** URL of the VGC Core engine .zip on the server; downloaded on first run. */
   engineUrl: string
+  /** URL of the macOS VGC Core engine .zip (a built Chromium .app); downloaded on
+   *  first run on Mac. Empty → fall back to the system Chrome. */
+  engineUrlMac?: string
 }
 
 /** State of the app auto-update flow (check → download → install). */

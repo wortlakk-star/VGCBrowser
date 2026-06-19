@@ -1,0 +1,7 @@
+{
+  "fill" : { "solid" : "extended-srgb:0.04706,0.44706,0.84314,1.00000" },
+  "groups" : [
+    { "layers" : [ { "image-name" : "vgc.png", "name" : "VGC" } ] }
+  ],
+  "supported-platforms" : { "circles" : [ "watch" ], "squares" : "shared" }
+}

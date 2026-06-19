@@ -1,0 +1,23 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index faf8c2e79b..025c763320 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2854,6 +2854,18 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+   };
+   command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
+ 
++  // VGC: forward antidetect fingerprint switches to every child process (the
++  // renderer reads them — e.g. WebGL UNMASKED vendor/renderer is answered there).
++  static const char* const kVgcSwitches[] = {
++      "vgc-webgl-vendor",
++      "vgc-webgl-renderer",
++      "vgc-hardware-concurrency",
++      "vgc-device-memory",
++      "vgc-platform",
++      "vgc-seed",
++  };
++  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
++
+   static const char* const kDinosaurEasterEggSwitches[] = {
+       error_page::switches::kDisableDinosaurEasterEgg,
+       error_page::switches::kEnableDinosaurEasterEggAltGameImages,

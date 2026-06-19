@@ -7,6 +7,7 @@
 import { app } from 'electron'
 import { promises as fs, existsSync, createWriteStream } from 'fs'
 import { join } from 'path'
+import { execFileSync } from 'child_process'
 import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import AdmZip from 'adm-zip'
@@ -26,6 +27,65 @@ export function downloadedEngineExe(): string {
 
 export function isEngineInstalled(): boolean {
   return existsSync(downloadedEngineExe()) || Boolean(process.env.VGC_ENGINE_PATH)
+}
+
+/**
+ * macOS: download + install the VGC Core engine zip (a built Chromium .app, made by
+ * scripts/package-mac-engine.sh) into userData/engine/VGC Core.app, ad-hoc sign it,
+ * and return its binary path. Returns null on any failure (→ fall back to Chrome).
+ */
+async function downloadMacEngine(
+  url: string,
+  onProgress?: (p: EngineProgress) => void
+): Promise<string | null> {
+  const dir = join(app.getPath('userData'), 'engine')
+  await fs.mkdir(dir, { recursive: true })
+  const zipPath = join(dir, 'vgc-core-mac.zip')
+
+  onProgress?.({ phase: 'check', message: 'Chuẩn bị tải engine VGC Core…' })
+  const res = await fetch(url)
+  if (!res.ok || !res.body) return null
+  const total = Number(res.headers.get('content-length') || 0)
+  let received = 0
+  let lastPct = -1
+  const counter = new Transform({
+    transform(chunk, _enc, cb) {
+      received += chunk.length
+      if (total) {
+        const pct = Math.round((received / total) * 100)
+        if (pct !== lastPct) {
+          lastPct = pct
+          onProgress?.({ phase: 'download', percent: pct, message: `Đang tải engine ${pct}%` })
+        }
+      }
+      cb(null, chunk)
+    }
+  })
+  await pipeline(
+    Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
+    counter,
+    createWriteStream(zipPath)
+  )
+
+  onProgress?.({ phase: 'extract', message: 'Đang giải nén engine…' })
+  // `ditto` preserves the .app bundle (symlinks + code signature) correctly.
+  execFileSync('/usr/bin/ditto', ['-x', '-k', zipPath, dir])
+  try {
+    await fs.unlink(zipPath)
+  } catch {
+    // ignore
+  }
+  const appPath = join(dir, 'VGC Core.app')
+  if (existsSync(appPath)) {
+    // Ad-hoc sign so Gatekeeper allows launch (best-effort; usually already signed).
+    try {
+      execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appPath])
+    } catch {
+      // ignore
+    }
+  }
+  onProgress?.({ phase: 'done', percent: 100, message: 'Engine VGC Core sẵn sàng' })
+  return macVgcCoreEngine()
 }
 
 /**
@@ -55,8 +115,16 @@ export async function ensureEngine(
   const resolved = resolveEnginePath()
   if (resolved && isDedicatedEngine(resolved)) return resolved
 
-  // 4. Non-Windows (macOS/Linux): the downloadable VGC Core engine is Windows-only,
-  // so use a system Chromium as the engine (CDP fingerprint injection still applies).
+  // 4. macOS: download the native VGC Core engine (a built Chromium .app) if it's
+  //    hosted (settings.engineUrlMac) and not yet installed; else fall back to the
+  //    system Chrome. (Linux always uses the system browser.)
+  if (process.platform === 'darwin') {
+    const sMac = await getSettings()
+    if (sMac.engineUrlMac) {
+      const dl = await downloadMacEngine(sMac.engineUrlMac, onProgress).catch(() => null)
+      if (dl) return dl
+    }
+  }
   if (process.platform !== 'win32') {
     if (resolved) return resolved // resolveEnginePath() already falls back to system Chrome/Edge
     throw new Error(

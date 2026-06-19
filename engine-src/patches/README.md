@@ -1,5 +1,14 @@
 # VGC Core — fingerprint patch specification
 
+## Applied so far (committed as .patch files here — re-apply to a clean Chromium checkout)
+- **`01-webgl-vendor-renderer.patch`** ✅ — WebGL `UNMASKED_VENDOR/RENDERER_WEBGL` read `--vgc-webgl-vendor` / `--vgc-webgl-renderer`. Verified: page-side WebGL returns the spoofed value (native, no JS tell).
+- **`02-forward-vgc-switches.patch`** ✅ — `ChromeContentBrowserClient::AppendExtraCommandLineSwitches` forwards the `--vgc-*` switches to **child (renderer) processes**. REQUIRED: WebGL runs in the renderer; without forwarding the renderer never sees the switch and returns the real GPU.
+- **`AppIcon.icon/`** — the VGC `.icon` source (macOS). NOTE: macOS 26 still prefers the compiled `Assets.car` AppIcon, so the build alone does NOT change the Dock icon. The reliable fix is applied at **package time** (`scripts/package-mac-engine.sh`): delete `CFBundleIconName` from `Info.plist` → macOS falls back to `CFBundleIconFile=app.icns`, which is the VGC logo.
+
+> Apply order on a fresh `out/vgc` checkout: `git apply engine-src/patches/01-*.patch engine-src/patches/02-*.patch`, copy `AppIcon.icon` over `chrome/app/theme/chromium/mac/AppIcon.icon`, rebuild `chrome`, then `scripts/package-mac-engine.sh`.
+
+---
+
 Each profile launch passes `--vgc-*` switches (see `src/main/profile-manager.ts`).
 These patches make Chromium **read those switches and override the value natively**,
 so there is no JS-detectable tampering (the difference vs the Phase-1 CDP injection).
