@@ -324,6 +324,10 @@ export async function launchProfile(
   // just like the Mac build, so the profile still opens (CDP fingerprint injection
   // still applies; stock Chrome ignores the unknown --vgc-* flags).
   let proc: ChildProcess
+  // The engine that ACTUALLY ran (may differ from enginePath if we fall back to a
+  // system browser). Drives nativeWebgl below: only the VGC Core engine spoofs
+  // WebGL in C++, so only then do we skip the JS getParameter override.
+  let actualEngine = enginePath
   try {
     proc = await spawnAndWait(enginePath, args)
   } catch (err) {
@@ -344,6 +348,7 @@ export async function launchProfile(
     })
     try {
       proc = await spawnAndWait(fallback, args)
+      actualEngine = fallback
     } catch (err2) {
       relay?.close()
       const msg =
@@ -388,7 +393,21 @@ export async function launchProfile(
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.
   try {
-    entry.injector = await attachInjector({ ...profile, fingerprint: fp }, debugPort)
+    // Only the VGC Core engine (.app on Mac) spoofs WebGL natively → skip the JS
+    // override there to avoid a redundant, detectable getParameter patch.
+    const nativeWebgl = process.platform === 'darwin' && actualEngine.includes('VGC Core.app')
+    const injector = await attachInjector({ ...profile, fingerprint: fp }, debugPort, {
+      nativeWebgl
+    })
+    // The browser may have exited while we were attaching (user closed the lone
+    // window, engine crashed on a bad flag). The exit handler already ran and
+    // removed us from `running`; assigning + polling now would leak the CDP socket
+    // and a 5s interval against a dead port. Bail out cleanly.
+    if (!running.has(id)) {
+      injector.dispose()
+      return state
+    }
+    entry.injector = injector
     // Tab sync: reopen the tabs that were open last time (synced from any machine
     // via the cloud data zip). First-ever open (no saved tabs) → use start URLs.
     const savedTabs = await readSavedTabs(id)

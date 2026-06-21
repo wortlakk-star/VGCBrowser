@@ -25,7 +25,19 @@ export function seedFromString(s: string): number {
   return h >>> 0
 }
 
-export function buildStealthScript(fp: Fingerprint, seed: number): string {
+export interface StealthOptions {
+  /** True when the browser is the patched VGC Core engine, which spoofs WebGL
+   *  UNMASKED vendor/renderer natively (C++). In that case we MUST NOT also
+   *  override getParameter in JS — the native value is already correct and a JS
+   *  override only re-introduces the detectable tell the native patch removes. */
+  nativeWebgl?: boolean
+}
+
+export function buildStealthScript(
+  fp: Fingerprint,
+  seed: number,
+  opts: StealthOptions = {}
+): string {
   const cfg = {
     seed,
     hardwareConcurrency: fp.hardwareConcurrency,
@@ -38,6 +50,7 @@ export function buildStealthScript(fp: Fingerprint, seed: number): string {
     devicePixelRatio: fp.devicePixelRatio,
     webglVendor: fp.webgl.vendor,
     webglRenderer: fp.webgl.renderer,
+    nativeWebgl: opts.nativeWebgl === true,
     canvasNoise: fp.canvasNoise,
     audioNoise: fp.audioNoise,
     webrtc: fp.webrtc,
@@ -100,20 +113,25 @@ try {
   } catch(e){}
 
   // ── WebGL vendor/renderer (UNMASKED) ──
-  try {
-    var GL_VENDOR = 37445, GL_RENDERER = 37446;
-    function patchGetParam(proto){
-      if(!proto) return;
-      var orig = proto.getParameter;
-      proto.getParameter = mask(function(p){
-        if(p === GL_VENDOR) return CFG.webglVendor;
-        if(p === GL_RENDERER) return CFG.webglRenderer;
-        return orig.call(this, p);
-      }, 'getParameter');
-    }
-    patchGetParam(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
-    patchGetParam(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
-  } catch(e){}
+  // Skipped on the VGC Core engine: it spoofs these natively (C++), so a JS
+  // getParameter override here would be redundant AND re-introduce a detectable
+  // JS tell. On stock Chrome (fallback) we still need the JS override.
+  if (!CFG.nativeWebgl) {
+    try {
+      var GL_VENDOR = 37445, GL_RENDERER = 37446;
+      function patchGetParam(proto){
+        if(!proto) return;
+        var orig = proto.getParameter;
+        proto.getParameter = mask(function(p){
+          if(p === GL_VENDOR) return CFG.webglVendor;
+          if(p === GL_RENDERER) return CFG.webglRenderer;
+          return orig.call(this, p);
+        }, 'getParameter');
+      }
+      patchGetParam(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+      patchGetParam(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+    } catch(e){}
+  }
 
   // ── Canvas noise (deterministic) ──
   if (CFG.canvasNoise) {

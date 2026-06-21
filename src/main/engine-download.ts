@@ -38,6 +38,16 @@ async function downloadMacEngine(
   url: string,
   onProgress?: (p: EngineProgress) => void
 ): Promise<string | null> {
+  // Arch guard: the engine is a native Mach-O. Installing an arm64 build on an
+  // Intel Mac (or vice-versa) yields a binary that can't launch AND permanently
+  // shadows the working system-Chrome fallback (macVgcCoreEngine() would return
+  // it on every later launch). Refuse the mismatched download → fall back to Chrome.
+  const wantsArm = /arm64|aarch64/i.test(url)
+  const wantsIntel = /x86_64|x64|intel/i.test(url)
+  if ((wantsArm && process.arch !== 'arm64') || (wantsIntel && process.arch !== 'x64')) {
+    return null
+  }
+
   const dir = join(app.getPath('userData'), 'engine')
   await fs.mkdir(dir, { recursive: true })
   const zipPath = join(dir, 'vgc-core-mac.zip')
@@ -68,14 +78,23 @@ async function downloadMacEngine(
   )
 
   onProgress?.({ phase: 'extract', message: 'Đang giải nén engine…' })
-  // `ditto` preserves the .app bundle (symlinks + code signature) correctly.
-  execFileSync('/usr/bin/ditto', ['-x', '-k', zipPath, dir])
-  try {
-    await fs.unlink(zipPath)
-  } catch {
-    // ignore
-  }
   const appPath = join(dir, 'VGC Core.app')
+  try {
+    // Remove any previous install first: `ditto -x -k` MERGES into an existing
+    // bundle, so a stale framework/helper from an older build would be left behind
+    // → a mixed-version, crash-on-launch .app. Replace it wholesale.
+    await fs.rm(appPath, { recursive: true, force: true })
+    // `ditto` preserves the .app bundle (symlinks + code signature) correctly.
+    execFileSync('/usr/bin/ditto', ['-x', '-k', zipPath, dir])
+  } finally {
+    // Always clean up the downloaded zip, even if extraction threw.
+    try {
+      await fs.unlink(zipPath)
+    } catch {
+      // ignore
+    }
+  }
+  if (!existsSync(join(appPath, 'Contents', 'MacOS', 'Chromium'))) return null
   if (existsSync(appPath)) {
     // Ad-hoc sign so Gatekeeper allows launch (best-effort; usually already signed).
     try {

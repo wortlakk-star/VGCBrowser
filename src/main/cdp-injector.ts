@@ -69,12 +69,15 @@ function buildUaMetadata(fp: Fingerprint): Record<string, unknown> {
 
 export async function attachInjector(
   profile: Profile,
-  port: number
+  port: number,
+  opts: { nativeWebgl?: boolean } = {}
 ): Promise<InjectorHandle> {
   const wsUrl = await getBrowserWsUrl(port)
   const conn = await CdpConnection.connect(wsUrl)
   const fp = profile.fingerprint
-  const script = buildStealthScript(fp, seedFromString(profile.id))
+  const script = buildStealthScript(fp, seedFromString(profile.id), {
+    nativeWebgl: opts.nativeWebgl
+  })
   const isMobile = fp.userAgent.includes('Mobile') || fp.platform.includes('armv')
   let cookiesApplied = false
 

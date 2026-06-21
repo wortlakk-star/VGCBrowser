@@ -31,6 +31,18 @@ export class CdpConnection {
   private constructor(ws: WebSocket) {
     this.ws = ws
     this.ws.on('message', (data: WebSocket.RawData) => this.onMessage(data.toString()))
+    // If the browser dies, the socket closes/errors. Without this, every in-flight
+    // send() (and any future one) would hang forever — wedging attachInjector and
+    // leaking promises. Reject all pending and mark the connection dead.
+    this.ws.on('close', () => this.failAllPending('CDP connection closed'))
+    this.ws.on('error', () => this.failAllPending('CDP connection error'))
+  }
+
+  private failAllPending(reason: string): void {
+    if (this.pending.size === 0) return
+    const err = new Error(reason)
+    for (const p of this.pending.values()) p.reject(err)
+    this.pending.clear()
   }
 
   static async connect(wsUrl: string): Promise<CdpConnection> {

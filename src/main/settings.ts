@@ -39,7 +39,13 @@ export async function getSettings(): Promise<AppSettings> {
   if (cache) return cache
   try {
     const raw = await fs.readFile(settingsFile(), 'utf-8')
-    cache = { ...defaults(), ...(JSON.parse(raw) as Partial<AppSettings>) }
+    const d = defaults()
+    cache = { ...d, ...(JSON.parse(raw) as Partial<AppSettings>) }
+    // A persisted EMPTY engine URL must not defeat a newer non-empty default
+    // (the spread above would keep ''). Coalesce empties back to the default so a
+    // machine that once saved '' still picks up the now-hosted engine.
+    if (!cache.engineUrl) cache.engineUrl = d.engineUrl
+    if (!cache.engineUrlMac) cache.engineUrlMac = d.engineUrlMac
   } catch {
     cache = defaults()
     await fs.writeFile(settingsFile(), JSON.stringify(cache, null, 2), 'utf-8')
