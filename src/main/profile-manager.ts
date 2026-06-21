@@ -14,6 +14,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import net from 'net'
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { mkdirSync, promises as fs } from 'fs'
 import { app, BrowserWindow } from 'electron'
@@ -98,6 +99,20 @@ function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
       if (dataLocks.get(id) === run) dataLocks.delete(id)
     })
   return run
+}
+
+/**
+ * Stable per-profile secret for the VGC Core engine's PORTABLE os_crypt key
+ * (--vgc-crypt-secret). Derived from the cloud account uid + profile id, so it is
+ * IDENTICAL on every machine signed into the same account → cookies + saved
+ * passwords encrypted on one machine decrypt on another (macOS ⇄ Windows, both
+ * running a patched VGC Core engine). Empty when signed out — cross-machine sync is
+ * off then anyway, so the engine keeps its normal machine-bound key.
+ */
+function cryptSecretFor(id: string): string {
+  const uid = getCloudSession()?.uid ?? ''
+  if (!uid) return ''
+  return createHash('sha256').update(`vgc-os-crypt:${uid}:${id}`).digest('hex')
 }
 
 function profileDataDir(id: string): string {
@@ -363,6 +378,11 @@ export async function launchProfile(
     // Unique per-profile seed → engine seeds canvas/audio noise so every Chrome differs.
     `--vgc-seed=${seedFromString(id)}`
   ]
+
+  // Portable os_crypt key (VGC Core engine): same secret on every machine of this
+  // account → saved passwords + cookies encrypted on one machine decrypt on another.
+  const cryptSecret = cryptSecretFor(id)
+  if (cryptSecret) args.push(`--vgc-crypt-secret=${cryptSecret}`)
 
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local
   // relay because Chromium can't pass credentials via the flag; no-auth proxies

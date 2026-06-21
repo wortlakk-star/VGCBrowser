@@ -1,0 +1,54 @@
+diff --git a/components/os_crypt/async/browser/dpapi_key_provider.cc b/components/os_crypt/async/browser/dpapi_key_provider.cc
+index 0bfbac71af..b53370eb21 100644
+--- a/components/os_crypt/async/browser/dpapi_key_provider.cc
++++ b/components/os_crypt/async/browser/dpapi_key_provider.cc
+@@ -9,8 +9,12 @@
+ 
+ #include <wincrypt.h>
+ 
++#include <array>
++
+ #include "base/base64.h"
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
++#include "base/containers/span.h"
+ #include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/notreached.h"
+@@ -18,6 +22,8 @@
+ #include "base/win/scoped_localalloc.h"
+ #include "components/os_crypt/async/common/algorithm.mojom.h"
+ #include "components/prefs/pref_service.h"
++#include "crypto/kdf.h"
++#include "crypto/subtle_passkey.h"
+ 
+ namespace os_crypt_async {
+ 
+@@ -65,6 +71,27 @@ DPAPIKeyProvider::~DPAPIKeyProvider() = default;
+ 
+ base::expected<Encryptor::Key, DPAPIKeyProvider::KeyStatus>
+ DPAPIKeyProvider::GetKeyInternal() {
++  // VGC Core: portable cross-machine key. When --vgc-crypt-secret is set, derive
++  // the SAME key the macOS keychain_key_provider derives — PBKDF2-SHA1(secret,
++  // "saltysalt", 1003) → 16-byte AES-128-CBC key, tag "v10" (see GetKey below) —
++  // so cookies + saved passwords cross macOS ⇄ Windows. The App-Bound provider is
++  // not registered when this switch is present (browser_process_impl.cc), so this
++  // DPAPI provider is the primary encryptor.
++  {
++    const std::string vgc_secret =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            "vgc-crypt-secret");
++    if (!vgc_secret.empty()) {
++      static constexpr auto kVgcSalt =
++          std::to_array<uint8_t>({'s', 'a', 'l', 't', 'y', 's', 'a', 'l', 't'});
++      std::array<uint8_t, 16> key_bytes;
++      crypto::kdf::Pbkdf2HmacSha1({.iterations = 1003},
++                                  base::as_byte_span(vgc_secret), kVgcSalt,
++                                  key_bytes, crypto::SubtlePassKey{});
++      return Encryptor::Key(key_bytes, mojom::Algorithm::kAES128CBC);
++    }
++  }
++
+   if (!local_state_->HasPrefPath(kOsCryptEncryptedKeyPrefName)) {
+     return base::unexpected(KeyStatus::kKeyNotFound);
+   }

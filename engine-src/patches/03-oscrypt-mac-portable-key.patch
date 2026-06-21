@@ -1,0 +1,34 @@
+diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
+index f240dc22ee..b9403a1b87 100644
+--- a/components/os_crypt/common/keychain_password_mac.mm
++++ b/components/os_crypt/common/keychain_password_mac.mm
+@@ -11,6 +11,7 @@
+ #include "base/apple/osstatus_logging.h"
+ #include "base/apple/scoped_cftyperef.h"
+ #include "base/base64.h"
++#include "base/command_line.h"
+ #include "base/containers/span.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/no_destructor.h"
+@@ -126,6 +127,21 @@
+ KeychainPassword::~KeychainPassword() = default;
+ 
+ std::string KeychainPassword::GetPassword() const {
++  // VGC Core: portable cross-machine os_crypt password. When --vgc-crypt-secret is
++  // provided, use it instead of the per-machine Keychain secret so cookies + saved
++  // passwords encrypted on one machine (including a Windows machine running the same
++  // secret) decrypt here, and vice-versa. The derivation downstream (PBKDF2-SHA1 +
++  // "saltysalt" → AES-128-CBC, tag "v10") is identical on every platform, so the
++  // ciphertext is cross-compatible. Falls back to the real Keychain when absent.
++  {
++    const std::string vgc_secret =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            "vgc-crypt-secret");
++    if (!vgc_secret.empty()) {
++      return vgc_secret;
++    }
++  }
++
+   auto password =
+       GetPasswordImpl(*keychain_, GetServiceName(), GetAccountName());
+ 
