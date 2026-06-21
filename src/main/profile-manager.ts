@@ -26,7 +26,12 @@ import { getProfile, saveProfile } from './store'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
 import { seedFromString } from './fingerprint-script'
-import { downloadProfileData, uploadProfileData } from './cloud-data'
+import {
+  downloadProfileData,
+  uploadProfileData,
+  downloadProfileCookies,
+  uploadProfileCookies
+} from './cloud-data'
 import { getCloudSession } from './session'
 
 interface RunningProfile {
@@ -42,6 +47,10 @@ interface RunningProfile {
 const DEFAULT_TEST_URL = 'https://abrahamjuliot.github.io/creepjs/'
 
 const running = new Map<string, RunningProfile>()
+// Latest decrypted-cookie snapshot per running profile (refreshed by a poll), so
+// the close handler can upload it even when the browser is already gone (the user
+// closed the window directly → CDP is dead by the time 'exit' fires).
+const lastCookieSnapshot = new Map<string, Cookie[]>()
 const DEBUG_PORT_BASE = 9333
 
 /** True if a TCP port on 127.0.0.1 is free to bind right now. */
@@ -179,6 +188,17 @@ async function syncDataOnClose(id: string): Promise<void> {
     // Per-profile lock: a re-open of this profile won't extract the cloud zip over
     // the dir while we're still reading it to build the upload zip.
     await withDataLock(id, () => uploadProfileData(id))
+    // Cross-machine login: upload the decrypted cookies separately (plaintext) so
+    // they survive the trip to a different-OS machine where the encrypted Cookies
+    // DB can't be read.
+    const cookies = lastCookieSnapshot.get(id)
+    if (cookies && cookies.length) {
+      try {
+        await uploadProfileCookies(id, cookies)
+      } catch (e) {
+        console.error('[vgc] upload cookies lỗi:', e)
+      }
+    }
     broadcastData({ id, phase: 'done' })
   } catch (err) {
     broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -201,6 +221,8 @@ export async function stopAllAndSync(): Promise<void> {
       try {
         broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud trước khi thoát…' })
         await uploadProfileData(id)
+        const cookies = lastCookieSnapshot.get(id)
+        if (cookies && cookies.length) await uploadProfileCookies(id, cookies)
         broadcastData({ id, phase: 'done' })
       } catch {
         // best-effort — don't block quit on a single failure
@@ -270,12 +292,16 @@ export async function launchProfile(
   // session (cookies/logins/storage) from the cloud before opening — the cloud is
   // the source of truth. 404 (nothing uploaded yet, e.g. a brand-new profile) is
   // fine and we just open with whatever is local.
+  let syncedCookies: Cookie[] = []
   if (getCloudSession()) {
     try {
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
       // Held under the per-profile data lock so a still-running close-upload of the
       // SAME profile finishes before we extract the cloud zip over its dir.
       const got = await withDataLock(id, () => downloadProfileData(id))
+      // Plaintext cookies synced from any machine → seeded into the engine below so
+      // the profile is already logged in even across macOS ⇄ Windows.
+      syncedCookies = await downloadProfileCookies(id).catch(() => [])
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
       broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -449,7 +475,8 @@ export async function launchProfile(
     // override there to avoid a redundant, detectable getParameter patch.
     const nativeWebgl = process.platform === 'darwin' && actualEngine.includes('VGC Core.app')
     const injector = await attachInjector({ ...profile, fingerprint: fp }, debugPort, {
-      nativeWebgl
+      nativeWebgl,
+      seedCookies: syncedCookies
     })
     // The browser may have exited while we were attaching (user closed the lone
     // window, engine crashed on a bad flag). The exit handler already ran and
@@ -473,6 +500,14 @@ export async function launchProfile(
       void (async () => {
         const urls = await fetchOpenTabs(debugPort)
         if (urls.length > 0) await writeSavedTabs(id, urls)
+        // Snapshot decrypted cookies for cross-machine login sync. Kept in memory and
+        // uploaded on close (when the browser — and CDP — may already be gone).
+        try {
+          const ck = await entry.injector?.getCookies()
+          if (ck && ck.length) lastCookieSnapshot.set(id, ck)
+        } catch {
+          // ignore
+        }
       })()
     }, 5000)
   } catch (err) {

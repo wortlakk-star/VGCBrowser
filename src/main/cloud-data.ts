@@ -19,6 +19,7 @@ import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
 import { getProfile, saveProfile } from './store'
 import { getCloudSession } from './session'
+import type { Cookie } from '../shared/types'
 
 const BUCKET = 'profiles'
 
@@ -200,4 +201,63 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   const zip = new AdmZip(buf)
   zip.extractAllTo(root, /* overwrite */ true)
   return true
+}
+
+// ── Cross-machine COOKIES (plaintext, engine-agnostic) ───────────────────────
+// Chrome encrypts the Cookies/Login Data DBs with a key bound to the machine
+// (Keychain on macOS, DPAPI on Windows), so the encrypted files in the session
+// zip don't decrypt on another machine → the user looks logged OUT. Cookies ARE
+// the login session, so we sync them SEPARATELY as plaintext: read them decrypted
+// over CDP on the source machine, store them as JSON, and re-inject them on the
+// target machine (where Chrome re-encrypts with ITS own key). Works across macOS
+// ⇄ Windows with no engine rebuild. (Saved-password autofill ENTRIES still need
+// the portable-key engine patch on both platforms — that's separate.)
+
+function cookiesObjectPath(uid: string, id: string): string {
+  return `${uid}/${id}.cookies.json`
+}
+
+/** Upload the profile's decrypted cookies (captured via CDP) to the cloud. */
+export async function uploadProfileCookies(id: string, cookies: Cookie[]): Promise<void> {
+  if (!cookies.length) return
+  const session = getCloudSession()
+  if (!session) return
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(session.uid, id)}`
+  const body = Buffer.from(JSON.stringify(cookies), 'utf-8')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      apikey: s.supabaseAnonKey,
+      'Content-Type': 'application/json',
+      'x-upsert': 'true'
+    },
+    body: body as unknown as BodyInit
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Upload cookie lỗi HTTP ${res.status} ${detail}`)
+  }
+}
+
+/** Fetch the profile's cloud cookies (plaintext JSON). [] if none uploaded yet. */
+export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
+  const session = getCloudSession()
+  if (!session) return []
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return []
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(session.uid, id)}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+  })
+  if (res.status === 404 || res.status === 400) return []
+  if (!res.ok) return []
+  try {
+    const data = (await res.json()) as Cookie[]
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
 }
