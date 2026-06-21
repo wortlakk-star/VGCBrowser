@@ -111,7 +111,15 @@ export async function pushCloudProfileList(): Promise<number> {
   const owner = sess.session.user.id
   const locals = await window.vgc.listProfiles()
   if (!locals.length) return 0
-  const rows = locals.map((p) => ({
+  // Only push profiles whose `updatedAt` changed since we last pushed them this
+  // session. Opening a profile bumps `lastUsedAt` but NOT `updatedAt` (see
+  // store.saveProfile), so an open no longer re-pushes the profile's full data —
+  // which previously could overwrite another machine's genuine edit with this
+  // machine's stale copy (last-writer-wins). First push of a session sends all
+  // (the map is empty), keeping the cloud complete.
+  const changed = locals.filter((p) => lastPushedAt.get(p.id) !== p.updatedAt)
+  if (!changed.length) return 0
+  const rows = changed.map((p) => ({
     owner,
     team_id: p.cloudTeamId || null,
     profile_id: p.id,
@@ -121,7 +129,32 @@ export async function pushCloudProfileList(): Promise<number> {
   }))
   const { error } = await c.from('profiles_cloud').upsert(rows, { onConflict: 'owner,profile_id' })
   if (error) throw new Error(error.message)
+  for (const p of changed) lastPushedAt.set(p.id, p.updatedAt)
   return rows.length
+}
+
+/** Per-session memory of the `updatedAt` we last pushed for each profile, so a
+ *  push skips profiles that only had `lastUsedAt` bumped (e.g. by opening them). */
+const lastPushedAt = new Map<string, string>()
+
+/**
+ * Apply ONLY cloud tombstones (deletions) locally, without pulling/overwriting
+ * live profile data. Safe to run even while a local edit-push is pending: a
+ * deletion can't clobber an unpushed edit, and this is what stops a profile
+ * deleted on another machine from lingering (or being re-pushed) on a machine
+ * that's continuously editing (where the full auto-pull is paused). Returns the
+ * count removed, or -1 when not signed in / cloud not configured.
+ */
+export async function applyCloudTombstones(): Promise<number> {
+  const c = await getCloud()
+  if (!c) return -1
+  const { data: sess } = await c.auth.getSession()
+  if (!sess.session) return -1
+  const res = await c.from('profiles_cloud').select('profile_id,deleted').eq('deleted', true)
+  if (res.error) return 0 // pre-migration: no `deleted` column → nothing to apply
+  const ids = (res.data ?? []).map((r) => (r as { profile_id: string }).profile_id)
+  if (ids.length) await window.vgc.removeProfiles(ids)
+  return ids.length
 }
 
 /**

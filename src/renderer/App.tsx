@@ -22,7 +22,8 @@ import {
   pushCloudProfileList,
   pullCloudProxies,
   pushCloudProxies,
-  deleteCloudProfile
+  deleteCloudProfile,
+  applyCloudTombstones
 } from './cloud'
 
 export default function App(): JSX.Element {
@@ -134,6 +135,7 @@ export default function App(): JSX.Element {
   // True while a local change is waiting to be pushed — the periodic auto-pull skips
   // those windows so it can't overwrite an edit that hasn't reached the cloud yet.
   const pendingPushRef = useRef(false)
+  const pullingRef = useRef(false)
 
   // Auto-PULL: App only mounts once signed in (see Gate), so this runs right after
   // login — fetch the account's profiles AND proxy pool from the cloud so a fresh
@@ -227,9 +229,22 @@ export default function App(): JSX.Element {
     const sig = (list: Profile[]): string =>
       list.map((p) => `${p.id}:${p.updatedAt}`).sort().join('|')
     const id = setInterval(() => {
-      if (loading || pendingPushRef.current) return
+      if (loading || pullingRef.current) return // a previous pull is still running
       void (async () => {
+        pullingRef.current = true
         try {
+          // While a local edit-push is in flight we must NOT pull+overwrite live data
+          // (it could clobber the unpushed edit). But DELETIONS must still apply, or a
+          // profile deleted on another machine lingers forever on a machine that's
+          // continuously editing. Apply tombstones only; skip the full pull this tick.
+          if (pendingPushRef.current) {
+            const removed = await applyCloudTombstones()
+            if (removed > 0) {
+              justPulledRef.current = true
+              await refresh()
+            }
+            return
+          }
           const before = sig(await window.vgc.listProfiles())
           const n = await pullCloudProfileList()
           if (n < 0) return // not signed in / cloud not configured
@@ -240,6 +255,8 @@ export default function App(): JSX.Element {
           }
         } catch (e) {
           console.error('[auto-sync:pull]', e)
+        } finally {
+          pullingRef.current = false
         }
       })()
     }, 12 * 1000)

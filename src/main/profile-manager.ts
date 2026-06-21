@@ -13,6 +13,7 @@
 //   • proxy authentication via local relay — Phase 3
 
 import { spawn, type ChildProcess } from 'child_process'
+import net from 'net'
 import { join } from 'path'
 import { mkdirSync, promises as fs } from 'fs'
 import { app, BrowserWindow } from 'electron'
@@ -41,7 +42,54 @@ interface RunningProfile {
 const DEFAULT_TEST_URL = 'https://abrahamjuliot.github.io/creepjs/'
 
 const running = new Map<string, RunningProfile>()
-let nextDebugPort = 9333
+const DEBUG_PORT_BASE = 9333
+
+/** True if a TCP port on 127.0.0.1 is free to bind right now. */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = net.createServer()
+    srv.once('error', () => resolve(false))
+    srv.once('listening', () => srv.close(() => resolve(true)))
+    srv.listen(port, '127.0.0.1')
+  })
+}
+
+/**
+ * Pick a debug port that is BOTH not used by another running profile AND actually
+ * bindable. The old `nextDebugPort++` leaked ports forever and never checked
+ * availability — if the port was taken, Chromium silently failed to open the debug
+ * endpoint, CDP never connected, and the profile launched with NO fingerprint
+ * injection (a detectable, silent failure). Reuses freed ports each call.
+ */
+async function pickDebugPort(): Promise<number> {
+  const used = new Set([...running.values()].map((r) => r.state.debugPort))
+  for (let port = DEBUG_PORT_BASE; port < DEBUG_PORT_BASE + 500; port++) {
+    if (used.has(port)) continue
+    if (await isPortFree(port)) return port
+  }
+  throw new Error('Không tìm được cổng debug trống cho profile')
+}
+
+/**
+ * Serialize the session-data operations (cloud download-before-open and
+ * upload-on-close) PER profile. Without this, closing a profile (which waits then
+ * zips+uploads the live user-data-dir) can race a re-open of the same profile
+ * (which extracts the cloud zip over that same dir) → a half-written zip is
+ * uploaded, or the freshly-launched Chromium has its SQLite files overwritten
+ * underneath it → a corrupt / logged-out session.
+ */
+const dataLocks = new Map<string, Promise<unknown>>()
+function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = (dataLocks.get(id) ?? Promise.resolve()).catch(() => {})
+  const run = prev.then(fn)
+  dataLocks.set(id, run)
+  void run
+    .catch(() => {})
+    .finally(() => {
+      if (dataLocks.get(id) === run) dataLocks.delete(id)
+    })
+  return run
+}
 
 function profileDataDir(id: string): string {
   const dir = join(app.getPath('userData'), 'profiles', id)
@@ -128,7 +176,9 @@ async function syncDataOnClose(id: string): Promise<void> {
     // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
     await new Promise((r) => setTimeout(r, 1200))
     broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
-    await uploadProfileData(id)
+    // Per-profile lock: a re-open of this profile won't extract the cloud zip over
+    // the dir while we're still reading it to build the upload zip.
+    await withDataLock(id, () => uploadProfileData(id))
     broadcastData({ id, phase: 'done' })
   } catch (err) {
     broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -223,14 +273,16 @@ export async function launchProfile(
   if (getCloudSession()) {
     try {
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
-      const got = await downloadProfileData(id)
+      // Held under the per-profile data lock so a still-running close-upload of the
+      // SAME profile finishes before we extract the cloud zip over its dir.
+      const got = await withDataLock(id, () => downloadProfileData(id))
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
       broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  const debugPort = nextDebugPort++
+  const debugPort = await pickDebugPort()
 
   // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
   // the proxy's EXIT IP so they can't contradict each other. A US proxy reporting a

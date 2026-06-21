@@ -90,10 +90,10 @@ function walk(zip: AdmZip, root: string, dir: string): void {
   }
 }
 
-function buildZip(id: string): Buffer {
+function buildZip(id: string): AdmZip {
   const zip = new AdmZip()
   const root = profileDir(id)
-  if (!existsSync(root)) return zip.toBuffer()
+  if (!existsSync(root)) return zip
 
   // ALLOWLIST approach: a Chromium user-data-dir root also holds big, auto-refetched
   // component/model downloads (TranslateKit, WasmTtsEngine, optimization_guide_*,
@@ -110,7 +110,26 @@ function buildZip(id: string): Buffer {
   }
   const defaultDir = join(root, 'Default')
   if (existsSync(defaultDir)) walk(zip, root, defaultDir)
-  return zip.toBuffer()
+  return zip
+}
+
+/**
+ * Guard against uploading a PARTIAL session that would overwrite good cloud data.
+ * `walk()` skips files that are locked mid-zip; if Chromium still held the cookie
+ * DB, the zip would be missing it → downloading it elsewhere looks "logged out".
+ * Returns true if it's safe to upload: either the profile has no cookie DB on disk
+ * yet (brand-new), or at least one cookie DB that DOES exist on disk made it into
+ * the zip.
+ */
+function zipHasCriticalSession(zip: AdmZip, id: string): boolean {
+  const root = profileDir(id)
+  const cookieDbs = [
+    join(root, 'Default', 'Network', 'Cookies'),
+    join(root, 'Default', 'Cookies')
+  ].filter((p) => existsSync(p))
+  if (cookieDbs.length === 0) return true // nothing to protect yet
+  const inZip = new Set(zip.getEntries().map((e) => e.entryName))
+  return cookieDbs.some((p) => inZip.has(relative(root, p).split(sep).join('/')))
 }
 
 /** Zip the profile's user-data-dir and upload it to the user's cloud bucket. */
@@ -120,7 +139,14 @@ export async function uploadProfileData(id: string): Promise<void> {
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) throw new Error('Chưa cấu hình Supabase')
 
-  const body = buildZip(id)
+  const zip = buildZip(id)
+  // Don't overwrite a good cloud session with a partial one (locked cookie DB).
+  if (!zipHasCriticalSession(zip, id)) {
+    throw new Error(
+      'Bỏ qua lưu phiên: cookie đang bị khoá (Chromium chưa nhả file). Giữ nguyên bản cloud cũ.'
+    )
+  }
+  const body = zip.toBuffer()
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(session.uid, id)}`
   const res = await fetch(url, {
     method: 'POST',
