@@ -1,0 +1,1588 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🎱 Quản Lý Giải Đấu Bi-a</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap');
+  :root {
+    --bg1:#070b1c; --bg2:#121a3a; --felt:#0d7a57; --felt2:#075c41;
+    --gold:#ffd84d; --gold-deep:#f5a623; --gold-soft:#ffe9a3;
+    --card:rgba(255,255,255,0.055); --card-brd:rgba(255,255,255,0.10);
+    --line:rgba(255,255,255,0.10); --txt:#eef1ff; --mut:rgba(238,241,255,0.6);
+    --shadow:0 10px 40px rgba(0,0,0,0.45); --r:16px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html { scroll-behavior:smooth; }
+  body { font-family:"Be Vietnam Pro",-apple-system,"Segoe UI",Roboto,Arial,sans-serif; min-height:100vh;
+    color:var(--txt); position:relative; overflow-x:hidden;
+    background:linear-gradient(160deg,#070b1c 0%,#0d1430 45%,#0a1228 100%); }
+  .bg { position:fixed; inset:0; z-index:-2; overflow:hidden; pointer-events:none; }
+  .bg span { position:absolute; border-radius:50%; filter:blur(70px); opacity:.5; animation:float 18s ease-in-out infinite; }
+  .bg span:nth-child(1){ width:420px; height:420px; background:#1b8f6b; top:-120px; left:-80px; }
+  .bg span:nth-child(2){ width:380px; height:380px; background:#caa12a; bottom:-120px; right:-60px; animation-delay:-6s; }
+  .bg span:nth-child(3){ width:320px; height:320px; background:#3a59c9; top:40%; left:55%; animation-delay:-11s; opacity:.32; }
+  .bg::after { content:''; position:absolute; inset:0; background:radial-gradient(circle at 50% 0%, transparent 60%, rgba(0,0,0,.35)); }
+  @keyframes float { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(40px,30px) scale(1.08);} 66%{transform:translate(-30px,20px) scale(.95);} }
+  a { color:var(--gold); text-decoration:none; }
+  h1,h2,h3 { line-height:1.15; font-family:"Sora","Be Vietnam Pro",sans-serif; letter-spacing:-0.01em; }
+  .wrap { max-width:1320px; margin:0 auto; padding:20px 16px 60px; animation:rise .4s ease both; }
+  @keyframes rise { from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:none;} }
+
+  /* Top bar */
+  .topbar { display:flex; align-items:center; gap:12px; padding:14px 20px;
+    background:rgba(10,15,35,0.55); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:20; }
+  .topbar .brand { font-family:"Sora",sans-serif; font-weight:800; font-size:1.15rem; letter-spacing:-0.02em;
+    background:linear-gradient(90deg,var(--gold),#fff 60%,var(--gold-soft)); -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 2px 10px rgba(255,216,77,.25)); }
+  .topbar .spacer { flex:1; }
+  .badge { font-size:0.68rem; padding:4px 10px; border-radius:99px; font-weight:800; letter-spacing:.04em;
+    background:linear-gradient(135deg,rgba(255,216,77,.25),rgba(245,166,35,.18)); color:var(--gold); border:1px solid rgba(255,216,77,.35); }
+  .badge.athlete { background:linear-gradient(135deg,rgba(74,168,255,.25),rgba(58,89,201,.18)); color:#9fd0ff; border-color:rgba(74,168,255,.4); }
+  .who { font-size:0.92rem; color:var(--mut); font-weight:600; }
+
+  /* Buttons */
+  button { font-family:inherit; cursor:pointer; border:none; border-radius:11px; font-weight:700; transition:transform .12s, box-shadow .2s, filter .2s; position:relative; }
+  button:active { transform:translateY(1px) scale(0.99); }
+  button:disabled { opacity:0.45; cursor:default; filter:grayscale(.3); }
+  .btn { padding:11px 16px; font-size:0.9rem; }
+  .btn-pri { background:linear-gradient(135deg,var(--gold-soft),var(--gold) 45%,var(--gold-deep)); color:#4a3000;
+    box-shadow:0 6px 18px rgba(245,166,35,.35), inset 0 1px 0 rgba(255,255,255,.5); }
+  .btn-pri:hover:not(:disabled) { box-shadow:0 10px 26px rgba(245,166,35,.5), inset 0 1px 0 rgba(255,255,255,.6); transform:translateY(-1px); }
+  .btn-ghost { background:rgba(255,255,255,0.08); color:#fff; border:1px solid var(--card-brd); }
+  .btn-ghost:hover:not(:disabled) { background:rgba(255,255,255,0.14); }
+  .btn-dan { background:linear-gradient(135deg,#ff6b5e,#e2402f); color:#fff; box-shadow:0 6px 16px rgba(226,64,47,.35); }
+  .btn-sm { padding:7px 12px; font-size:0.8rem; border-radius:9px; }
+  .fmt-btn, .gmode-btn { background:rgba(255,255,255,0.08); color:#fff; border:1px solid var(--card-brd); }
+  .fmt-btn.on, .gmode-btn.on { background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); color:#4a3000; box-shadow:0 4px 12px rgba(245,166,35,.35); }
+
+  input, select, textarea {
+    width:100%; background:rgba(0,0,0,0.28); color:var(--txt); border:1px solid var(--card-brd);
+    border-radius:11px; padding:11px 13px; font-size:0.95rem; font-family:inherit; transition:border .2s, box-shadow .2s, background .2s;
+  }
+  input::placeholder, textarea::placeholder { color:rgba(238,241,255,.35); }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--gold); background:rgba(0,0,0,0.4); box-shadow:0 0 0 4px rgba(255,216,77,.15); }
+  label.fld { display:block; font-size:0.78rem; color:var(--mut); font-weight:600; margin:12px 0 5px; text-transform:uppercase; letter-spacing:.04em; }
+  select option { color:#000; }
+
+  /* Modal (nhập liệu / xác nhận) */
+  .modal-ov { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:20px;
+    background:rgba(4,7,18,.62); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); animation:mfade .18s ease both; }
+  .modal-ov.closing { opacity:0; transition:opacity .15s ease; }
+  @keyframes mfade { from{opacity:0;} to{opacity:1;} }
+  .modal-box { width:100%; max-width:430px; background:linear-gradient(165deg,#16204a,#0d1430); border:1px solid var(--card-brd);
+    border-radius:var(--r); padding:22px; box-shadow:0 24px 70px rgba(0,0,0,.6); position:relative; overflow:hidden;
+    animation:mpop .24s cubic-bezier(.2,.9,.3,1.25) both; }
+  .modal-ov.closing .modal-box { transform:translateY(8px) scale(.97); transition:transform .15s ease; }
+  @keyframes mpop { from{opacity:0; transform:translateY(16px) scale(.95);} to{opacity:1; transform:none;} }
+  .modal-box::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,var(--gold),transparent); }
+  .modal-title { font-family:"Sora",sans-serif; font-weight:800; font-size:1.16rem; }
+  .modal-sub { color:var(--mut); font-size:.86rem; margin-top:5px; }
+  .modal-sub.err { color:#ffb4ab; }
+  .modal-box input { margin-top:15px; }
+  .modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+
+  .card { background:var(--card); border:1px solid var(--card-brd); border-radius:var(--r); padding:18px;
+    box-shadow:var(--shadow); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); position:relative; overflow:hidden; }
+  .card::before { content:''; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+  @media (max-width:780px){ .grid2 { grid-template-columns:1fr; } }
+
+  /* Auth */
+  .auth { max-width:430px; margin:7vh auto; padding:0 16px; animation:rise .5s ease both; }
+  .auth h1 { text-align:center; font-size:2rem; margin-bottom:6px;
+    background:linear-gradient(90deg,var(--gold),#fff,var(--gold-soft)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .auth .sub { text-align:center; color:var(--mut); margin-bottom:20px; font-size:0.92rem; }
+  .tabs { display:flex; gap:6px; margin-bottom:16px; background:rgba(0,0,0,.25); padding:5px; border-radius:13px; border:1px solid var(--line); }
+  .tabs button { flex:1; padding:11px; background:transparent; color:var(--mut); }
+  .tabs button.on { background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); color:#4a3000; box-shadow:0 4px 12px rgba(245,166,35,.35); }
+  .err { color:#ff9a8f; font-size:0.85rem; margin-top:10px; min-height:1rem; }
+  .hint { color:var(--mut); font-size:0.8rem; text-align:center; margin-top:14px; }
+
+  /* Lists */
+  .sec-title { font-family:"Sora",sans-serif; font-size:1.02rem; font-weight:800; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .list { display:flex; flex-direction:column; gap:9px; margin-top:12px; }
+  .item { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px;
+    background:rgba(255,255,255,0.04); border:1px solid var(--line); transition:transform .12s, background .2s, border .2s; }
+  .item:hover { background:rgba(255,255,255,0.08); border-color:var(--card-brd); transform:translateX(2px); }
+  .item .nm { font-weight:600; }
+  .item .meta2 { font-size:0.78rem; color:var(--mut); }
+  .item .spacer { flex:1; }
+  .empty { color:var(--mut); font-size:0.88rem; padding:14px 4px; text-align:center; }
+  .pill { font-size:0.7rem; padding:3px 9px; border-radius:99px; background:rgba(255,255,255,0.1); border:1px solid var(--line); font-weight:700; }
+  .inline { display:flex; gap:8px; }
+  .inline input { flex:1; }
+  .back { background:none; color:var(--gold); padding:6px 0; font-size:0.92rem; font-weight:700; }
+  .back:hover { text-decoration:underline; }
+  .crumbs { font-size:0.85rem; color:var(--mut); margin-bottom:8px; }
+
+  /* Wheel + bracket (engine) */
+  .play { display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start; margin-top:8px; }
+  .play .left { flex:0 0 auto; width:min(90vw,340px); }
+  .play .right { flex:1 1 460px; min-width:300px; }
+  .stage { position:relative; width:100%; aspect-ratio:1; margin-bottom:10px; }
+  .stage::after { content:''; position:absolute; inset:-6%; border-radius:50%; z-index:-1;
+    background:radial-gradient(circle, rgba(255,216,77,.28), transparent 65%); filter:blur(14px); animation:pulseGlow 3.5s ease-in-out infinite; }
+  @keyframes pulseGlow { 0%,100%{opacity:.5;} 50%{opacity:.9;} }
+  .pointer { position:absolute; top:-6px; left:50%; transform:translateX(-50%); width:0; height:0;
+    border-left:16px solid transparent; border-right:16px solid transparent; border-top:30px solid var(--gold);
+    filter:drop-shadow(0 4px 8px rgba(0,0,0,0.6)); z-index:6; }
+  canvas { width:100%; height:100%; border-radius:50%;
+    box-shadow:0 0 0 7px var(--gold-deep),0 0 0 13px #8a5a0c,0 0 0 15px rgba(255,216,77,.25),0 18px 50px rgba(0,0,0,0.6); background:#0c1730; }
+  .hub { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:80px; height:80px; border-radius:50%;
+    background:radial-gradient(circle at 35% 28%, #fff7d6, var(--gold) 52%, var(--gold-deep)); color:#5a3b00; font-family:"Sora",sans-serif; font-weight:800; font-size:0.95rem; letter-spacing:.02em;
+    z-index:5; box-shadow:0 6px 20px rgba(0,0,0,0.5), inset 0 -3px 8px rgba(0,0,0,0.25), inset 0 3px 6px rgba(255,255,255,.5); border:2px solid rgba(255,255,255,.4); }
+  .hub:hover { filter:brightness(1.06); }
+  .hub:active { transform:translate(-50%,-50%) scale(0.93); }
+  .draw-result { text-align:center; min-height:1.7rem; font-weight:700; font-size:1.08rem; margin:8px 0;
+    opacity:0; transform:scale(0.85); transition:all .35s cubic-bezier(.2,1.4,.4,1); }
+  .draw-result.show { opacity:1; transform:scale(1); }
+  .draw-result b { color:var(--gold); }
+  #nextBtn { width:100%; margin:6px 0 8px; padding:13px; font-size:1rem; animation:rise .3s ease both; }
+
+  .bracket-wrap { position:relative; overflow-x:auto; border-radius:18px; padding:20px;
+    background:radial-gradient(130% 90% at 50% -15%, rgba(255,255,255,.07), transparent 55%), linear-gradient(165deg,#0f6e50 0%,#0a5239 58%,#073e2b 100%);
+    border:1px solid rgba(255,255,255,.12); box-shadow:inset 0 0 90px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08), var(--shadow); }
+  .bracket-title { font-family:"Sora",sans-serif; font-size:1.05rem; font-weight:800; margin-bottom:14px; letter-spacing:-.01em; }
+  .bracket .card { background:rgba(5,26,18,.55); border:1px solid rgba(255,255,255,.10); border-radius:16px;
+    box-shadow:0 8px 26px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.06); }
+  .bracket .card .sec-title { font-size:1rem; }
+  .bracket { display:flex; gap:24px; min-width:max-content; align-items:stretch; }
+  .round { display:flex; flex-direction:column; justify-content:space-around; min-width:168px; gap:14px; padding:4px; border-radius:12px; transition:background .3s; }
+  .round.active { background:rgba(255,216,77,0.07); box-shadow:0 0 0 1px rgba(255,216,77,0.3) inset; }
+  .round-label { align-self:center; font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; font-weight:800; color:#0a3a2a;
+    background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); padding:3px 11px; border-radius:99px; margin-bottom:6px; box-shadow:0 2px 8px rgba(0,0,0,.3); }
+  .match { position:relative; display:flex; flex-direction:column; gap:4px; background:rgba(0,0,0,0.32); border-radius:12px; padding:5px; border:1px solid rgba(255,255,255,.07); }
+  .ko-round .match::after { content:''; position:absolute; right:-13px; top:50%; transform:translateY(-50%); width:13px; height:2px; background:rgba(255,255,255,.2); border-radius:2px; }
+  .match.live { box-shadow:0 0 0 1px rgba(255,170,70,.55), 0 0 16px rgba(255,150,50,.28); }
+  .live-tag { position:absolute; top:-8px; right:10px; z-index:2; font-size:.56rem; font-weight:800; letter-spacing:.05em; color:#fff;
+    background:linear-gradient(135deg,#ff8a5c,#e2402f); padding:2px 8px; border-radius:99px; box-shadow:0 2px 8px rgba(0,0,0,.4); animation:livePulse 1.5s ease-in-out infinite; }
+  @keyframes livePulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+  .slot { position:relative; background:linear-gradient(180deg,rgba(255,255,255,.11),rgba(255,255,255,.045)); border-radius:9px; padding:9px 11px; font-size:.88rem; white-space:nowrap;
+    display:flex; align-items:center; gap:8px; min-height:38px; border:1px solid rgba(255,255,255,.06); transition:all .18s; }
+  .slot .seed { font-size:.6rem; opacity:0.5; min-width:14px; text-align:right; font-weight:800; }
+  .slot.filled { background:linear-gradient(180deg,rgba(255,255,255,.17),rgba(255,255,255,.07)); }
+  .slot.just { background:linear-gradient(135deg,var(--gold-soft),var(--gold)); color:#4a3000; font-weight:800; border-color:#fff; box-shadow:0 0 18px rgba(255,216,77,.6); }
+  .slot.bye { opacity:0.5; font-style:italic; }
+  .slot.empty { opacity:0.4; }
+  .slot.pick { cursor:pointer; }
+  .slot.pick:hover { border-color:var(--gold); transform:translateX(2px); }
+  .slot.won { background:linear-gradient(135deg,#33d27f,#1c9a5b); color:#04210f; font-weight:800; border-color:rgba(191,255,216,.7); box-shadow:0 0 16px rgba(46,204,113,.4), inset 3px 0 0 #d6ffe7; }
+  .slot.lost { opacity:0.42; text-decoration:line-through; }
+  .slot.champ { background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); color:#4a3000; font-weight:800; min-height:46px; font-size:1rem; border:none; box-shadow:0 0 26px rgba(255,216,77,.7); animation:champPulse 2s ease-in-out infinite; }
+  @keyframes champPulse { 0%,100%{box-shadow:0 0 18px rgba(255,216,77,.5);} 50%{box-shadow:0 0 36px rgba(255,216,77,.9);} }
+  .champ-col { display:flex; flex-direction:column; justify-content:center; min-width:160px; }
+  .gp { flex:1; padding:7px 9px; border-radius:8px; background:rgba(255,255,255,.08); font-size:.82rem; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border:1px solid transparent; transition:all .15s; }
+  .gp.pick { cursor:pointer; }
+  .gp.pick:hover { background:rgba(255,216,77,.22); border-color:var(--gold); }
+  .gp.won { background:linear-gradient(135deg,#33d27f,#1c9a5b); color:#04210f; font-weight:800; }
+  .gp.lost { opacity:.45; text-decoration:line-through; }
+  .vs { opacity:.5; font-size:.75rem; }
+  .sc { width:46px; padding:5px 4px; font-size:.9rem; font-weight:800; text-align:center; color:#fff; background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.2); border-radius:8px; }
+  .sc:focus { outline:none; border-color:var(--gold); box-shadow:0 0 0 3px rgba(255,216,77,.25); }
+  .scv { margin-left:auto; color:var(--gold); font-weight:800; min-width:18px; text-align:right; font-size:1rem; }
+  .byefill { width:100%; padding:9px 11px; background:rgba(0,0,0,.3); color:#fff; border:1px dashed rgba(255,216,77,.55); border-radius:9px; font-size:.85rem; font-family:inherit; }
+  .byefill:focus { outline:none; border-style:solid; border-color:var(--gold); box-shadow:0 0 0 3px rgba(255,216,77,.2); }
+  .byefill::placeholder { color:rgba(255,216,77,.7); }
+  .ghead { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .gbadge { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; font-family:"Sora",sans-serif; font-weight:800; font-size:1.1rem; color:#3a2800; background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); box-shadow:0 4px 12px rgba(245,166,35,.4); flex:0 0 auto; }
+  .gname { font-family:"Sora",sans-serif; font-weight:800; font-size:1.05rem; }
+  .gchamp { margin-left:auto; font-size:.82rem; font-weight:700; color:#04210f; background:linear-gradient(135deg,#33d27f,#1c9a5b); padding:5px 11px; border-radius:99px; white-space:nowrap; }
+  .lockbtn { background:rgba(255,255,255,.08); border:1px solid var(--card-brd); color:#fff; border-radius:8px; padding:3px 9px; font-size:.78rem; font-weight:700; cursor:pointer; }
+  .lockbtn.on { background:rgba(255,216,77,.22); border-color:var(--gold); color:var(--gold); }
+  .assign-chip { display:flex; align-items:center; gap:4px; background:rgba(255,255,255,.08); border:1px solid var(--card-brd); border-radius:9px; padding:5px 6px 5px 11px; font-size:.82rem; }
+  .ab { padding:3px 8px; font-size:.72rem; border-radius:6px; background:rgba(255,216,77,.18); color:var(--gold); font-weight:800; border:none; cursor:pointer; }
+  .ab:hover { background:var(--gold); color:#4a3000; }
+  .ab-x { background:rgba(231,76,60,.2); color:#ff9a8f; }
+  .ab-x:hover { background:#e2402f; color:#fff; }
+  .spectator { max-width:1320px; margin:0 auto; padding:18px 16px 60px; animation:rise .4s ease both; }
+  .spec-top { display:flex; align-items:center; gap:12px; }
+  .spec-title { flex:1; text-align:center; font-family:"Sora",sans-serif; font-weight:800; font-size:clamp(1.3rem,3.5vw,2.1rem); background:linear-gradient(90deg,var(--gold),#fff,var(--gold-soft)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .spec-sub { text-align:center; color:var(--mut); margin-top:4px; font-size:.95rem; }
+  /* Danh sách VĐV ở màn khán giả */
+  .sa-head { text-align:center; font-family:"Sora",sans-serif; font-weight:800; font-size:clamp(1.05rem,2.2vw,1.5rem); margin:22px 0 16px; color:var(--gold-soft); }
+  .sa-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; max-width:1100px; margin:0 auto; }
+  .sa-item { display:flex; align-items:center; gap:12px; padding:13px 16px; border-radius:14px;
+    background:linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.03)); border:1px solid var(--card-brd);
+    box-shadow:0 6px 18px rgba(0,0,0,.25); transition:transform .15s, border-color .2s; }
+  .sa-item:hover { transform:translateY(-2px); border-color:rgba(255,216,77,.4); }
+  .sa-num { flex:none; width:34px; height:34px; display:flex; align-items:center; justify-content:center; border-radius:10px;
+    font-family:"Sora",sans-serif; font-weight:800; font-size:.95rem; color:#4a3000;
+    background:linear-gradient(135deg,var(--gold-soft),var(--gold) 45%,var(--gold-deep)); box-shadow:inset 0 1px 0 rgba(255,255,255,.5); }
+  .sa-name { font-weight:700; font-size:1.05rem; color:var(--txt); }
+  .rules { margin:22px 0 0; background:var(--card); border:1px solid var(--card-brd); border-radius:16px; padding:0 20px; box-shadow:var(--shadow); }
+  .rules-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:8px; }
+  @media (max-width:820px){ .rules-grid { grid-template-columns:1fr; } }
+  .rule-col { background:rgba(255,255,255,.035); border:1px solid var(--line); border-radius:13px; padding:4px 18px 16px; }
+  .champs { display:flex; flex-wrap:wrap; gap:18px; justify-content:center; padding:6px 0; }
+  .champ-badge { width:210px; text-align:center; padding:20px 14px 16px; border-radius:20px; border:2px solid var(--gold-deep); background:linear-gradient(165deg,#12244f,#0a1430); box-shadow:0 12px 32px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.1); }
+  .cb-emblem { line-height:0; }
+  .cb-emblem svg { filter:drop-shadow(0 6px 14px rgba(255,216,77,.45)); }
+  .cb-title { font-family:"Sora",sans-serif; font-weight:800; color:var(--gold); letter-spacing:.1em; margin-top:12px; font-size:1.05rem; }
+  .cb-sub { font-family:"Sora",sans-serif; font-weight:800; color:#fff; letter-spacing:.14em; font-size:1.35rem; line-height:1.1; }
+  .cb-name { margin-top:8px; font-weight:700; font-size:1.08rem; color:var(--gold-soft); }
+  .cb-season { display:inline-block; margin-top:12px; background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); color:#3a2800; font-weight:800; padding:6px 18px; border-radius:99px; letter-spacing:.06em; box-shadow:0 3px 10px rgba(245,166,35,.4); }
+  .cmark { display:inline-block; font-size:.66em; font-weight:800; color:#3a2800; background:linear-gradient(135deg,var(--gold-soft),var(--gold-deep)); padding:1px 6px; border-radius:99px; vertical-align:middle; margin-left:4px; box-shadow:0 1px 4px rgba(0,0,0,.3); }
+  .rules summary { cursor:pointer; padding:15px 0; font-family:"Sora",sans-serif; font-weight:700; list-style:none; }
+  .rules summary::-webkit-details-marker { display:none; }
+  .rules summary::before { content:'▸ '; color:var(--gold); }
+  .rules[open] summary::before { content:'▾ '; }
+  .rules[open] summary { border-bottom:1px solid var(--line); }
+  .rules-body { padding:14px 0 20px; font-size:.92rem; line-height:1.65; }
+  .rules-body h4 { font-family:"Sora",sans-serif; color:var(--gold); margin:16px 0 6px; font-size:.96rem; }
+  .rules-body h4:first-child { margin-top:0; }
+  .rules-body ul, .rules-body ol { padding-left:20px; margin:6px 0; }
+  .rules-body li { margin:5px 0; }
+  .rules-body p { margin:6px 0; color:var(--mut); }
+  .rule-note { background:linear-gradient(135deg,rgba(231,76,60,.2),rgba(245,166,35,.15)); border:1px solid rgba(255,160,90,.45); border-radius:12px; padding:12px 14px; margin:2px 0 8px; font-size:.92rem; line-height:1.55; color:#fff; }
+  .rule-note b { color:var(--gold-soft); }
+
+  .cfg { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .cfg label { font-size:0.72rem; color:var(--mut); font-weight:600; display:flex; flex-direction:column; gap:5px; }
+  .sched-tbl { width:100%; border-collapse:collapse; font-size:0.86rem; margin-top:10px; }
+  .sched-tbl th,.sched-tbl td { text-align:left; padding:9px 10px; border-bottom:1px solid rgba(255,255,255,0.08); }
+  .sched-tbl th { font-size:0.68rem; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); }
+  .sched-tbl tr:hover td { background:rgba(255,255,255,.04); }
+  .sched-tbl .t-time { font-weight:700; color:var(--gold); white-space:nowrap; }
+  .sched-tbl .vs { opacity:0.5; margin:0 5px; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { height:10px; width:10px; }
+  ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.15); border-radius:99px; }
+  ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,.25); }
+
+  /* ==== Sắp xếp bảng (kéo–thả) ==== */
+  .arrange-card { border:1px solid rgba(255,216,77,.45); }
+  .arrange-grid { display:flex; gap:12px; flex-wrap:wrap; }
+  .arr-col { flex:1 1 165px; min-width:155px; background:rgba(0,0,0,.24); border:1px solid var(--card-brd); border-radius:11px; padding:8px; }
+  .arr-title { width:100%; font-weight:700; color:var(--gold); background:rgba(255,255,255,.05); border:1px solid var(--card-brd); border-radius:8px; padding:6px 8px; margin-bottom:8px; text-align:center; }
+  .arr-drop { display:flex; flex-direction:column; gap:6px; min-height:46px; border-radius:9px; padding:4px; transition:background .12s, outline .12s; }
+  .arr-drop.arr-over { background:rgba(255,216,77,.12); outline:2px dashed rgba(255,216,77,.55); }
+  .arr-chip { display:flex; align-items:center; gap:7px; padding:7px 9px; background:rgba(255,255,255,.06); border:1px solid var(--card-brd); border-radius:9px; cursor:grab; touch-action:none; }
+  .arr-chip:active { cursor:grabbing; }
+  .arr-chip.dragging { opacity:.35; }
+  .arr-chip.arr-over { outline:2px solid var(--gold); background:rgba(255,216,77,.16); }
+  .arr-num { min-width:19px; height:19px; display:inline-flex; align-items:center; justify-content:center; font-size:.7rem; font-weight:700; background:rgba(255,255,255,.12); border-radius:50%; flex:none; }
+  .arr-nm { flex:1; font-size:.9rem; color:var(--txt); }
+  .arr-bye { font-size:.64rem; font-weight:800; color:#3a2600; background:var(--gold); padding:1px 6px; border-radius:20px; flex:none; }
+  .arr-empty { font-size:.8rem; opacity:.45; text-align:center; padding:8px 4px; }
+</style>
+</head>
+<body>
+  <div class="bg"><span></span><span></span><span></span></div>
+  <div id="root"></div>
+
+<script>
+(function () {
+  // =========================================================================
+  //  DATA LAYER (localStorage)
+  // =========================================================================
+  const BYE = '__BYE__';
+  const API = 'https://vgcbilliards.com/api.php';   // backend chung cho mọi thiết bị
+
+  // Dữ liệu chung lấy từ server (tất cả thiết bị xem chung)
+  let db = { tournaments: [], athletes: [] };
+  let adminToken = localStorage.getItem('biaAdminToken') || null;
+  let isAdmin = !!adminToken;
+  let snap = '';            // ảnh JSON bản ĐÃ CÔNG BỐ gần nhất (khán giả phát hiện thay đổi)
+  let dirty = false;        // admin có thay đổi chưa công bố?
+  let saveTimer = null;
+
+  function currentUser() { return isAdmin ? { role: 'admin', name: 'Admin' } : null; }
+  function setSession(on) {
+    if (on) isAdmin = true;
+    else { isAdmin = false; adminToken = null; dirty = false; localStorage.removeItem('biaAdminToken'); }
+  }
+
+  // PHP biến object rỗng {} thành mảng [] khi round-trip → ép lại về object để lưu tỉ số không mất
+  function fixObj(v) { return (v && !Array.isArray(v)) ? v : {}; }
+  function fixResults(database) {
+    (database.tournaments || []).forEach(t => {
+      const g = t && t.groups; if (!g) return;
+      const src = g.results || {}, out = {};
+      Object.keys(src).forEach(k => { out[k] = fixObj(src[k]); });
+      g.results = out;
+      g.finalResults = fixObj(g.finalResults);
+    });
+  }
+  // Khán giả: lấy bản ĐÃ CÔNG BỐ
+  async function pull() {
+    try {
+      const r = await fetch(API + '?t=' + Date.now(), { cache: 'no-store' });
+      const d = await r.json();
+      if (d && Array.isArray(d.tournaments)) {
+        const s = JSON.stringify(d);
+        if (s !== snap) { db = { tournaments: d.tournaments || [], athletes: d.athletes || [] }; snap = s; fixResults(db); return true; }
+      }
+    } catch (e) {}
+    return false;
+  }
+  // Admin: lấy bản NHÁP của mình từ server (luôn còn, F5/đổi máy không mất)
+  async function pullAdmin() {
+    try {
+      const r = await fetch(API + '?admin=' + encodeURIComponent(adminToken || '') + '&t=' + Date.now(), { cache: 'no-store' });
+      const d = await r.json();
+      if (d && d.working && Array.isArray(d.working.tournaments)) {
+        db = { tournaments: d.working.tournaments || [], athletes: d.working.athletes || [] };
+        fixResults(db);
+        dirty = JSON.stringify(d.working) !== JSON.stringify(d.published || {});
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  // Admin sửa => tự lưu NHÁP thẳng lên server (không mất), khán giả CHƯA thấy
+  function saveDB() {
+    if (!isAdmin) return;
+    dirty = true; updatePublishBtn();
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': adminToken || '' },
+        body: JSON.stringify({ action: 'save', data: { tournaments: db.tournaments, athletes: db.athletes } }) }).catch(() => {});
+    }, 400);
+  }
+  function updatePublishBtn() {
+    const b = $('publishBtn'); if (!b) return;
+    b.className = 'btn btn-sm ' + (dirty ? 'btn-pri' : 'btn-ghost');
+    b.textContent = dirty ? '📢 Công bố cho khán giả' : '✓ Đã công bố';
+    b.disabled = false;
+  }
+  // Bấm "Công bố" => đẩy bản hiện tại sang bản KHÁN GIẢ xem
+  async function publish() {
+    if (!isAdmin) return;
+    const b = $('publishBtn'); if (b) { b.disabled = true; b.textContent = 'Đang công bố…'; }
+    try {
+      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': adminToken || '' },
+        body: JSON.stringify({ action: 'publish', data: { tournaments: db.tournaments, athletes: db.athletes } }) });
+      const d = await r.json();
+      if (d && d.ok) { dirty = false; updatePublishBtn(); }
+      else { alert('Công bố thất bại — thử đăng nhập lại.'); updatePublishBtn(); }
+    } catch (e) { alert('Lỗi kết nối server.'); updatePublishBtn(); }
+  }
+
+  const uid = () => 'id' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // Cựu vô địch -> gắn ký hiệu sau tên
+  const CHAMPS = [['q. bảo', 1], ['việt anh', 2]];
+  function champMark(name) {
+    if (name == null) return '';
+    const n = String(name).trim().toLowerCase();
+    for (let i = 0; i < CHAMPS.length; i++) if (n === CHAMPS[i][0]) return ` <span class="cmark" title="Vô địch Mùa ${CHAMPS[i][1]}">🏆${CHAMPS[i][1]}</span>`;
+    return '';
+  }
+  const $ = id => document.getElementById(id);
+
+  // navigation state
+  let nav = { view: 'home', tid: null, authTab: 'login' };
+
+  // =========================================================================
+  //  ROOT RENDER
+  // =========================================================================
+  const root = $('root');
+  function render() {
+    const u = currentUser();
+    if (!u) {
+      if (nav.view === 'login') { renderAuth(); return; }
+      if (nav.view === 'spectator' && getT()) { renderSpectator(getT()); return; }
+      renderGuestHome(); return;
+    }
+    if (nav.view === 'spectator' && getT()) { renderSpectator(getT()); return; }
+    if (nav.view === 'tournament' && getT()) renderTournament(u);
+    else { nav.view = 'home'; nav.tid = null; (u.role === 'admin' ? renderAdminHome : renderAthleteHome)(u); }
+  }
+
+  function topbar(u) {
+    const role = u.role === 'admin'
+      ? '<span class="badge">ADMIN</span>'
+      : '<span class="badge athlete">NGƯỜI XEM</span>';
+    return `<div class="topbar">
+      <span class="brand">🎱 Giải Đấu Bi-a <small style="font-size:.6em;opacity:.55;font-weight:600">v6-cố-định</small></span>
+      <div class="spacer"></div>
+      ${u.role === 'admin' ? `<button class="btn btn-sm ${dirty ? 'btn-pri' : 'btn-ghost'}" id="publishBtn">${dirty ? '📢 Công bố cho khán giả' : '✓ Đã công bố'}</button>` : ''}
+      <span class="who">${esc(u.name || u.username)}</span> ${role}
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Đăng xuất</button>
+    </div>`;
+  }
+  function bindTop() {
+    const b = $('logoutBtn'); if (b) b.onclick = () => { setSession(null); render(); };
+    const p = $('publishBtn'); if (p) p.onclick = publish;
+  }
+
+  // =========================================================================
+  //  AUTH
+  // =========================================================================
+  function renderAuth() {
+    root.innerHTML = `
+      <div class="auth">
+        <div style="text-align:center">
+          <div style="width:76px;height:76px;margin:0 auto 14px;border-radius:22px;display:grid;place-items:center;font-size:2.3rem;
+            background:linear-gradient(135deg,var(--felt),#0a4d38);box-shadow:0 12px 34px rgba(13,122,87,.55),inset 0 1px 0 rgba(255,255,255,.3);
+            border:1px solid rgba(255,255,255,.15)">🎱</div>
+        </div>
+        <h1>Đăng nhập</h1>
+        <div class="sub">Dành cho Ban tổ chức (Admin)</div>
+        <div class="card">
+          ${loginForm()}
+          <div class="err" id="authErr"></div>
+        </div>
+        <div class="hint"><a href="#" id="backView">← Quay lại xem giải (không cần đăng nhập)</a></div>
+      </div>`;
+    $('doLogin').onclick = doLogin;
+    $('lpass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+    $('backView').onclick = e => { e.preventDefault(); nav.view = 'home'; render(); };
+  }
+  function loginForm() {
+    return `
+      <label class="fld">Tên đăng nhập</label>
+      <input id="luser" autocomplete="username" placeholder="vd: admin">
+      <label class="fld">Mật khẩu</label>
+      <input id="lpass" type="password" autocomplete="current-password" placeholder="••••••">
+      <div style="margin-top:14px"><button class="btn btn-pri" id="doLogin" style="width:100%">Đăng nhập</button></div>`;
+  }
+  async function doLogin() {
+    const u = $('luser').value.trim(), p = $('lpass').value;
+    $('authErr').textContent = 'Đang đăng nhập…';
+    try {
+      const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'login', username: u, password: p }) });
+      const d = await r.json();
+      if (d && d.ok) { adminToken = d.token; isAdmin = true; localStorage.setItem('biaAdminToken', adminToken); dirty = false; nav.view = 'home'; await pullAdmin(); render(); }
+      else { $('authErr').textContent = '❌ Sai tài khoản hoặc mật khẩu.'; }
+    } catch (e) { $('authErr').textContent = '❌ Lỗi kết nối server.'; }
+  }
+  // =========================================================================
+  //  ADMIN HOME — quản lý VĐV + giải đấu
+  // =========================================================================
+  function renderAdminHome(u) {
+    root.innerHTML = topbar(u) + `<div class="wrap"><div class="grid2">
+      <div class="card">
+        <div class="sec-title">🧑‍🤝‍🧑 Vận động viên <span class="pill">${db.athletes.length}</span></div>
+        <div class="inline">
+          <input id="newAth" placeholder="Tên vận động viên mới">
+          <button class="btn btn-pri" id="addAth">Thêm</button>
+        </div>
+        <div class="list" id="athList">${athleteRows()}</div>
+      </div>
+      <div class="card">
+        <div class="sec-title">🏆 Giải đấu <span class="pill">${db.tournaments.length}</span></div>
+        <div class="inline">
+          <input id="newTour" placeholder="Tên giải đấu mới">
+          <button class="btn btn-pri" id="addTour">Tạo giải</button>
+        </div>
+        <div class="list" id="tourList">${tournamentRows(true)}</div>
+      </div>
+    </div></div>`;
+    bindTop();
+    $('addAth').onclick = () => {
+      const v = $('newAth').value.trim(); if (!v) return;
+      db.athletes.push({ id: uid(), name: v }); saveDB(); render();
+    };
+    $('newAth').addEventListener('keydown', e => { if (e.key === 'Enter') $('addAth').click(); });
+    $('addTour').onclick = () => {
+      const v = $('newTour').value.trim(); if (!v) return;
+      db.tournaments.push({ id: uid(), name: v, createdAt: Date.now(), participantIds: [], format: null, draw: null, groups: null });
+      saveDB(); render();
+    };
+    $('newTour').addEventListener('keydown', e => { if (e.key === 'Enter') $('addTour').click(); });
+    root.querySelectorAll('[data-edit-ath]').forEach(b => b.onclick = () => renameAthlete(b.getAttribute('data-edit-ath')));
+    root.querySelectorAll('[data-del-ath]').forEach(b => b.onclick = () => {
+      const id = b.getAttribute('data-del-ath');
+      db.athletes = db.athletes.filter(a => a.id !== id);
+      db.tournaments.forEach(t => t.participantIds = t.participantIds.filter(p => p !== id));
+      saveDB(); render();
+    });
+    root.querySelectorAll('[data-open-tour]').forEach(b => b.onclick = () => {
+      nav.view = 'tournament'; nav.tid = b.getAttribute('data-open-tour'); render();
+    });
+    root.querySelectorAll('[data-del-tour]').forEach(b => b.onclick = () => {
+      if (!confirm('Xoá giải này?')) return;
+      const id = b.getAttribute('data-del-tour');
+      db.tournaments = db.tournaments.filter(t => t.id !== id); saveDB(); render();
+    });
+  }
+  function athleteRows() {
+    if (!db.athletes.length) return '<div class="empty">Chưa có VĐV nào. Thêm ở trên ↑</div>';
+    return db.athletes.map(a => `<div class="item">
+      <span class="nm">${esc(a.name)}${champMark(a.name)}</span>
+      ${a.username ? '<span class="pill">có tài khoản</span>' : ''}
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" data-edit-ath="${a.id}">Sửa</button>
+      <button class="btn btn-dan btn-sm" data-del-ath="${a.id}">Xoá</button>
+    </div>`).join('');
+  }
+  // Đổi tên VĐV: cập nhật bản ghi gốc + MỌI tên đã "đóng băng" trong draw/groups
+  // (bracket tham chiếu đấu thủ BẰNG TÊN, kể cả làm khoá trong groups.fixed/_pin).
+  // Modal nhập liệu (thay cho prompt). Trả Promise: chuỗi đã trim, hoặc null nếu huỷ.
+  function modalPrompt({ title, sub, subErr = false, value = '', placeholder = '', okText = 'Lưu', cancelText = 'Huỷ', maxlen = 80 }) {
+    return new Promise(resolve => {
+      const ov = document.createElement('div');
+      ov.className = 'modal-ov';
+      ov.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true">
+        <div class="modal-title">${esc(title || '')}</div>
+        ${sub ? `<div class="modal-sub${subErr ? ' err' : ''}">${esc(sub)}</div>` : ''}
+        <input id="mpInput" type="text" maxlength="${maxlen}" placeholder="${esc(placeholder)}" value="${esc(value)}">
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="mpCancel">${esc(cancelText)}</button>
+          <button class="btn btn-pri" id="mpOk">${esc(okText)}</button>
+        </div>
+      </div>`;
+      document.body.appendChild(ov);
+      const input = ov.querySelector('#mpInput');
+      let done = false;
+      const close = val => {
+        if (done) return; done = true;
+        document.removeEventListener('keydown', onKey);
+        ov.classList.add('closing');
+        setTimeout(() => { ov.remove(); resolve(val); }, 150);
+      };
+      const submit = () => { const v = input.value.trim(); close(v ? v : null); };
+      const onKey = e => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      };
+      ov.querySelector('#mpOk').onclick = submit;
+      ov.querySelector('#mpCancel').onclick = () => close(null);
+      ov.addEventListener('mousedown', e => { if (e.target === ov) close(null); });   // bấm nền tối để huỷ
+      document.addEventListener('keydown', onKey);
+      setTimeout(() => { input.focus(); input.select(); }, 30);
+    });
+  }
+  async function renameAthlete(id) {
+    const a = db.athletes.find(x => x.id === id);
+    if (!a) return;
+    const oldName = a.name;
+    let sub = 'Đổi tên sẽ tự cập nhật ở tất cả bảng đấu đang có.';
+    let subErr = false;
+    let value = oldName;
+    while (true) {
+      const newName = await modalPrompt({ title: 'Sửa tên vận động viên', sub, subErr, value, placeholder: 'Tên vận động viên', okText: 'Lưu' });
+      if (newName == null || newName === oldName) return;                       // huỷ / không đổi
+      // Bắt buộc tên khác nhau: bảng đấu dùng TÊN để phân biệt đấu thủ.
+      if (db.athletes.some(x => x.id !== id && x.name.trim().toLowerCase() === newName.toLowerCase())) {
+        sub = '⚠️ Đã có VĐV tên này — hãy đặt tên khác.'; subErr = true; value = newName; continue;   // báo lỗi ngay trong modal
+      }
+      renameEverywhere(oldName, newName);
+      saveDB(); render();
+      return;
+    }
+  }
+  // Thay thế tên ở mọi nơi trong draw/groups: cả GIÁ TRỊ (bins, remaining, slot a/b)
+  // lẫn KHOÁ (groups.fixed, _pin). Chỉ khớp tên ĐẦY ĐỦ chính xác để không đụng tên khác.
+  function renameEverywhere(oldName, newName) {
+    const walk = node => {
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          if (node[i] === oldName) node[i] = newName;
+          else if (node[i] && typeof node[i] === 'object') walk(node[i]);
+        }
+      } else if (node && typeof node === 'object') {
+        Object.keys(node).forEach(k => {
+          const val = node[k];
+          if (val && typeof val === 'object') walk(val);
+          else if (val === oldName) node[k] = newName;
+          if (k === oldName) { node[newName] = node[k]; delete node[k]; }   // khoá là tên
+        });
+      }
+    };
+    db.athletes.forEach(x => { if (x.name === oldName) x.name = newName; });
+    db.tournaments.forEach(t => { ['draw', 'groups', '_pin'].forEach(key => { if (t[key]) walk(t[key]); }); });
+  }
+  function tournamentRows(admin, list) {
+    list = list || db.tournaments;
+    if (!list.length) return '<div class="empty">Chưa có giải nào.</div>';
+    return list.map(t => {
+      const st = tourStatusText(t);
+      return `<div class="item">
+        <div><div class="nm">${esc(t.name)}</div><div class="meta2">${t.participantIds.length} VĐV · ${st}</div></div>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" data-open-tour="${t.id}">${admin ? 'Mở' : 'Xem'}</button>
+        ${admin ? `<button class="btn btn-dan btn-sm" data-del-tour="${t.id}">Xoá</button>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  // =========================================================================
+  //  ATHLETE HOME — xem giải mình tham gia
+  // =========================================================================
+  function renderAthleteHome(u) {
+    const ongoing = db.tournaments.filter(t => tourStarted(t) && !(t.draw && champOf(t.draw)));
+    const finished = db.tournaments.filter(t => t.draw && champOf(t.draw));
+    root.innerHTML = topbar(u) + `<div class="wrap">
+      <div class="card">
+        <div class="sec-title">🔴 Giải đang diễn ra <span class="pill">${ongoing.length}</span></div>
+        <div class="list">${ongoing.length ? tournamentRows(false, ongoing) : '<div class="empty">Hiện chưa có giải nào đang đánh.</div>'}</div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="sec-title">🏁 Đã kết thúc <span class="pill">${finished.length}</span></div>
+        <div class="list">${finished.length ? tournamentRows(false, finished) : '<div class="empty">Chưa có giải nào kết thúc.</div>'}</div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="sec-title">📋 Tất cả giải đấu</div>
+        <div class="list">${tournamentRows(false)}</div>
+      </div>
+    </div>`;
+    bindTop();
+    root.querySelectorAll('[data-open-tour]').forEach(b => b.onclick = () => {
+      nav.view = 'tournament'; nav.tid = b.getAttribute('data-open-tour'); render();
+    });
+  }
+
+  // =========================================================================
+  //  GUEST HOME — ai cũng xem được, không cần đăng nhập
+  // =========================================================================
+  function champEmblem(idx) {
+    const id = 'cbg' + idx;
+    return `<svg viewBox="0 0 120 120" width="116" height="116">
+      <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe9a3"/><stop offset=".5" stop-color="#ffd84d"/><stop offset="1" stop-color="#f5a623"/></linearGradient></defs>
+      <circle cx="60" cy="60" r="56" fill="none" stroke="url(#${id})" stroke-width="6"/>
+      <circle cx="60" cy="60" r="47" fill="#0b1b3a" stroke="#1b3a6b" stroke-width="3"/>
+      <g transform="rotate(40 60 60)"><rect x="57" y="16" width="6" height="88" rx="3" fill="#dfe6f2" opacity=".9"/><rect x="57" y="16" width="6" height="15" rx="3" fill="#9a6a32"/></g>
+      <path d="M60,34 L66.5,51 L84.7,52 L70.5,63.4 L75.3,81 L60,71 L44.7,81 L49.5,63.4 L35.3,52 L53.5,51 Z" fill="url(#${id})" stroke="#a9740f" stroke-width="1.2"/>
+    </svg>`;
+  }
+  function champBadge(season, name, idx) {
+    return `<div class="champ-badge">
+      <div class="cb-emblem">${champEmblem(idx)}</div>
+      <div class="cb-title">ĐƠN KIM</div>
+      <div class="cb-sub">VÔ ĐỊCH</div>
+      <div class="cb-name">${esc(name)}</div>
+      <div class="cb-season">MÙA ${season}</div>
+    </div>`;
+  }
+  function championsHtml() {
+    return `<div class="card" style="margin-top:16px">
+      <div class="sec-title">🏆 Nhà vô địch các mùa</div>
+      <div class="champs">
+        ${champBadge(1, 'Q. Bảo', 1)}
+        ${champBadge(2, 'Việt Anh', 2)}
+      </div>
+    </div>`;
+  }
+  function rulesHtml() {
+    return `<details class="rules" open>
+      <summary>📋 Điều lệ giải (Bi-a 9 bi) &amp; cách tính bảng</summary>
+      <div class="rules-body">
+        <div class="rule-note">🚫 <b>Giải đấu KHÔNG cá độ dưới mọi hình thức.</b> Toàn bộ tiền mặt (giải thưởng &amp; chi phí) đều do <b>nhà tài trợ và các nhà hảo tâm đóng góp</b>, dùng để <b>vận hành giải đấu</b> và <b>làm từ thiện</b>. 🤝❤️</div>
+        <div class="rules-grid">
+          <div class="rule-col">
+            <h4>🎱 Luật 9 bi (9-Ball — chuẩn WPA thế giới)</h4>
+            <ul>
+              <li>Mỗi cú đánh, bi cái phải <b>chạm bi số thấp nhất</b> đang còn trên bàn <b>trước tiên</b>.</li>
+              <li>Đưa <b>bi số 9</b> vào lỗ hợp lệ → <b>thắng ván</b>. Được phép thắng bằng <b>combo</b> (chạm bi thấp rồi bi 9 vào lỗ).</li>
+              <li><b>Phá (break):</b> đặt bi cái sau vạch; cú phá hợp lệ phải có <b>≥ 4 bi chạm băng</b> hoặc <b>1 bi được vào lỗ</b>.</li>
+              <li><b>Lỗi (foul):</b> không chạm bi thấp nhất trước; sau cú đánh không bi nào vào lỗ/chạm băng; bi cái vào lỗ (scratch) hoặc văng khỏi bàn → đối thủ được <b>"ball in hand"</b>.</li>
+              <li><b>3 lỗi liên tiếp</b> của một người → xử thua ván đó (tuỳ quy định BTC).</li>
+              <li><b>Race to N:</b> ai thắng đủ <b>N ván</b> trước thì <b>thắng trận</b> (số ván do BTC quy định).</li>
+              <li>Tác phong: đúng giờ, nghiêm túc, tôn trọng đối thủ &amp; trọng tài. <b>Trọng tài quyết định cuối cùng.</b></li>
+            </ul>
+          </div>
+          <div class="rule-col">
+            <h4>🧮 Cách tính bảng (vòng tròn tính điểm)</h4>
+            <p>Trong mỗi bảng, các VĐV gặp nhau <b>1 lượt</b>. Xếp hạng theo thứ tự ưu tiên:</p>
+            <ol>
+              <li><b>Số trận Thắng</b> nhiều hơn → xếp trên.</li>
+              <li>Bằng nhau → <b>hiệu số ván</b> (tổng ván thắng − tổng ván thua) cao hơn → xếp trên.</li>
+              <li>Vẫn bằng → <b>số trận Bại ít hơn</b> → xếp trên.</li>
+              <li><b>Đứng đầu bảng = Nhất bảng</b>, đi tiếp vào vòng trong.</li>
+            </ol>
+            <p>Với thể thức <b>Loại trực tiếp trong bảng</b>: <b>thua là loại</b>, mỗi bảng tìm ra <b>1 nhất bảng</b>; các nhất bảng vào <b>Vòng Chung Kết</b> để tìm <b>nhà vô địch</b>. Số lẻ → có suất <b>BYE</b> hoặc thêm người thay.</p>
+          </div>
+        </div>
+      </div>
+    </details>`;
+  }
+  function renderGuestHome() {
+    const ongoing = db.tournaments.filter(t => tourStarted(t) && !(t.draw && champOf(t.draw)));
+    root.innerHTML = `
+      <div class="topbar">
+        <span class="brand">🎱 Giải Đấu Bi-a</span>
+        <div class="spacer"></div>
+        <span class="who">Khán giả</span>
+        <button class="btn btn-pri btn-sm" id="loginBtn">Đăng nhập (BTC)</button>
+      </div>
+      <div class="wrap">
+        <div class="card">
+          <div class="sec-title">🧑‍🤝‍🧑 Danh sách vận động viên <span class="pill">${db.athletes.length}</span></div>
+          ${athleteListHtml()}
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="sec-title">🔴 Giải đang diễn ra <span class="pill">${ongoing.length}</span></div>
+          <div class="list">${ongoing.length ? tournamentRows(false, ongoing) : '<div class="empty">Hiện chưa có giải nào đang đánh.</div>'}</div>
+        </div>
+        ${rulesHtml()}
+      </div>`;
+    $('loginBtn').onclick = () => { nav.view = 'login'; render(); };
+    root.querySelectorAll('[data-open-tour]').forEach(b => b.onclick = () => { nav.view = 'spectator'; nav.tid = b.getAttribute('data-open-tour'); render(); });
+  }
+
+  // =========================================================================
+  //  TOURNAMENT DETAIL
+  // =========================================================================
+  function getT() { return db.tournaments.find(t => t.id === nav.tid) || null; }
+  function athName(id) { const a = db.athletes.find(x => x.id === id); return a ? a.name : '(đã xoá)'; }
+
+  function renderTournament(u) {
+    const T = getT(); if (!T) { nav.view = 'home'; render(); return; }
+    const admin = u.role === 'admin';
+    const started = tourStarted(T);
+    root.innerHTML = topbar(u) + `<div class="wrap">
+      <button class="back" id="backBtn">← Quay lại</button>
+      <div class="crumbs">Giải đấu</div>
+      <h2 style="margin-bottom:6px">${esc(T.name)}</h2>
+      <button class="btn btn-ghost btn-sm" id="specBtn" style="margin-bottom:8px">👁 Chế độ khán giả (màn hình lớn)</button>
+
+      ${admin && !started ? participantPanel(T) : ''}
+
+      <div class="card" style="margin-top:14px">
+        ${!started
+          ? (admin
+              ? `<div class="empty">Thêm tối thiểu 2 VĐV, chọn thể thức rồi bấm <b>“Bốc thăm & bắt đầu”</b> ở trên.</div>`
+              : `<div class="empty">Giải chưa bắt đầu. Vui lòng chờ ban tổ chức.</div>`)
+          : playBlock(T, admin)}
+      </div>
+    </div>`;
+    bindTop();
+    $('backBtn').onclick = () => { nav.view = 'home'; render(); };
+    { const spb = $('specBtn'); if (spb) spb.onclick = () => { nav.view = 'spectator'; render(); }; }
+    if (admin && !started) bindParticipantPanel(T);
+    if (started) {
+      if (T.format === 'groups') bindGroups(T, admin); else bindEngine(T, admin);
+      if (admin) { const rf = $('resetFmtBtn'); if (rf) rf.onclick = () => { if (confirm('Quay lại chọn thể thức? Giữ danh sách VĐV, xoá kết quả bốc hiện tại.')) { if (T.groups && T.groups.fixed) T._pin = T.groups.fixed; T.format = null; T.draw = null; T.groups = null; saveDB(); render(); } }; }
+    }
+  }
+
+  function playBlock(T, admin) {
+    const isG = T.format === 'groups';
+    const race = (T.cfg && T.cfg.race) || 1;
+    const raceTag = ` <small style="opacity:.7;font-weight:400">· 🎱 ${race > 1 ? 'đánh tối đa ' + race + ' ván' : 'đánh 1 ván'}</small>`;
+    const title = (isG ? '🔤 Chia bảng &amp; bảng xếp hạng' : '🗂️ Sơ đồ &amp; bốc thăm') + raceTag;
+    const viewerLine = isG
+      ? `${T.groups.count} bảng · ${T.participantIds.length} VĐV — xem bảng đấu bên dưới`
+      : (champOf(T.draw) ? '🏆 Vô địch: <b>' + esc(champOf(T.draw)) + '</b>' : 'Giải đang diễn ra');
+    const left = admin
+      ? `<div class="stage"><div class="pointer"></div><canvas id="wheel" width="600" height="600"></canvas><button class="hub" id="spinBtn">QUAY</button></div>
+         <div class="draw-result" id="drawResult"></div>
+         ${isG ? '' : '<button class="btn btn-pri" id="nextBtn" style="display:none"></button>'}
+         <div class="inline" style="margin-top:6px">
+           <button class="btn btn-ghost btn-sm" id="autoBtn" style="flex:1">${isG ? 'Bốc nhanh chia bảng' : 'Bốc nhanh cả vòng'}</button>
+           <button class="btn btn-dan btn-sm" id="redrawBtn" style="flex:1">Bốc lại từ đầu</button>
+         </div>
+         <button class="btn btn-ghost btn-sm" id="resetFmtBtn" style="width:100%;margin-top:6px">⚙️ Đổi thể thức / chọn lại</button>
+         ${schedulePanel()}`
+      : `<div class="card"><b>${esc(T.name)}</b><div class="draw-result show" style="margin-top:10px">${viewerLine}</div></div>`;
+    return `<div class="bracket-title">${title}</div>
+       <div class="play">
+         <div class="left">${left}</div>
+         <div class="right"><div class="bracket-wrap"><div class="bracket" id="bracket"></div></div><div id="scheduleWrap"></div></div>
+       </div>`;
+  }
+
+  function participantPanel(T) {
+    const inIds = new Set(T.participantIds);
+    const avail = db.athletes.filter(a => !inIds.has(a.id));
+    const cfg = T.cfg || (T.cfg = { fmt: 'knockout', count: 4, per: 5 });
+    return `<div class="card" style="margin-top:14px">
+      <div class="grid2">
+        <div>
+          <div class="sec-title">✅ VĐV trong giải <span class="pill">${T.participantIds.length}</span></div>
+          <div class="list" id="inList">${T.participantIds.length
+            ? T.participantIds.map(id => `<div class="item"><span class="nm">${esc(athName(id))}${champMark(athName(id))}</span><span class="spacer"></span>
+                <button class="btn btn-ghost btn-sm" data-rm="${id}">Bỏ ra</button></div>`).join('')
+            : '<div class="empty">Chưa có VĐV nào trong giải.</div>'}</div>
+        </div>
+        <div>
+          <div class="sec-title">➕ Thêm VĐV vào giải</div>
+          <div class="inline" style="margin-bottom:10px">
+            <input id="quickAth" placeholder="Gõ tên VĐV mới rồi Enter">
+            <button class="btn btn-pri" id="quickAddBtn">Thêm</button>
+          </div>
+          <div class="list" id="availList">${avail.length
+            ? avail.map(a => `<div class="item"><span class="nm">${esc(a.name)}${champMark(a.name)}</span><span class="spacer"></span>
+                <button class="btn btn-pri btn-sm" data-add="${a.id}">Thêm</button></div>`).join('')
+            : '<div class="empty">Chưa có VĐV sẵn — gõ tên ở trên để thêm thẳng vào giải.</div>'}</div>
+        </div>
+      </div>
+      <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+        <label class="fld">Thể thức thi đấu</label>
+        <div class="inline">
+          <button type="button" class="btn fmt-btn ${cfg.fmt === 'knockout' ? 'on' : ''}" data-fmt="knockout" style="flex:1">⚔️ Loại trực tiếp</button>
+          <button type="button" class="btn fmt-btn ${cfg.fmt === 'groups' ? 'on' : ''}" data-fmt="groups" style="flex:1">🔤 Chia bảng A·B·C·D</button>
+        </div>
+        <label class="fld" style="margin-top:12px">Số ván mỗi trận (đánh tối đa)</label>
+        <input id="raceCount" type="number" min="1" max="21" value="${cfg.race || 1}">
+        <div id="grpCfg" style="display:${cfg.fmt === 'groups' ? 'block' : 'none'};margin-top:12px">
+          <div class="cfg" style="grid-template-columns:1fr 1fr 1fr">
+            <label>Số người<input id="grpTotal" type="number" min="2" max="256" value="${cfg.count * cfg.per}"></label>
+            <label>Số bảng<input id="grpCount" type="number" min="2" max="16" value="${cfg.count}"></label>
+            <label>Người/bảng<input id="grpPer" type="number" min="1" max="32" value="${cfg.per}"></label>
+          </div>
+          <label class="fld" style="margin-top:10px">Trong mỗi bảng đánh kiểu</label>
+          <div class="inline">
+            <button type="button" class="btn gmode-btn ${cfg.gmode === 'ko' ? '' : 'on'}" data-gmode="rr" style="flex:1">🔁 Vòng tròn tính điểm</button>
+            <button type="button" class="btn gmode-btn ${cfg.gmode === 'ko' ? 'on' : ''}" data-gmode="ko" style="flex:1">⚔️ Loại trực tiếp</button>
+          </div>
+          <div id="grpInfo" class="meta2" style="margin-top:8px;text-align:center"></div>
+          <button class="btn btn-ghost btn-sm" id="grpFillBtn" style="width:100%;margin-top:8px"></button>
+        </div>
+      </div>
+      <div style="margin-top:14px; text-align:center">
+        <button class="btn btn-pri" id="startDrawBtn" ${T.participantIds.length < 2 ? 'disabled' : ''}>🎲 Bốc thăm &amp; bắt đầu (${T.participantIds.length} VĐV)</button>
+      </div>
+    </div>`;
+  }
+  function bindParticipantPanel(T) {
+    root.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { T.participantIds.push(b.getAttribute('data-add')); saveDB(); render(); });
+    root.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const id = b.getAttribute('data-rm'); T.participantIds = T.participantIds.filter(x => x !== id); saveDB(); render(); });
+    const qi = $('quickAth'), qa = $('quickAddBtn');
+    function quickAdd() { const nm = qi.value.trim(); if (!nm) return; const a = { id: uid(), name: nm }; db.athletes.push(a); T.participantIds.push(a.id); saveDB(); render(); }
+    if (qa) qa.onclick = quickAdd;
+    if (qi) qi.addEventListener('keydown', e => { if (e.key === 'Enter') quickAdd(); });
+    T.cfg = T.cfg || { fmt: 'knockout', count: 4, per: 5 };
+    const cntEl = $('grpCount'), perEl = $('grpPer'), totEl = $('grpTotal'), raceEl = $('raceCount');
+    const clampNum = (el, mn, mx, df) => { let v = parseInt(el.value); if (isNaN(v)) v = df; return Math.max(mn, Math.min(mx, v)); };
+    function refreshGrpInfo() {
+      if (!cntEl || !$('grpInfo')) return;
+      const count = clampNum(cntEl, 2, 16, 4), total = Math.max(0, parseInt(totEl.value) || 0), have = T.participantIds.length;
+      const base = Math.floor(total / count), rem = total % count, sizes = [];
+      for (let i = 0; i < count; i++) sizes.push(base + (i < rem ? 1 : 0));
+      $('grpInfo').innerHTML = `${count} bảng → <b style="color:var(--gold)">${sizes.join(' · ')}</b> người · đã thêm <b style="color:${have >= total ? '#34d17f' : '#ffd84d'}">${have}/${total}</b>`;
+      const fb = $('grpFillBtn'); if (fb) { const miss = total - have; fb.textContent = miss > 0 ? `+ Tạo nhanh ${miss} VĐV cho đủ ${total}` : (have > total ? `Đang dư ${have - total} người` : '✓ Đã đủ số VĐV'); fb.disabled = miss <= 0; }
+    }
+    function syncGrp(src) {
+      const count = clampNum(cntEl, 2, 16, 4);
+      if (src === 'total') { const total = clampNum(totEl, 2, 256, count * 5); perEl.value = Math.max(1, Math.ceil(total / count)); }
+      else { totEl.value = count * clampNum(perEl, 1, 32, 5); }
+      T.cfg.count = clampNum(cntEl, 2, 16, 4); T.cfg.per = clampNum(perEl, 1, 32, 5); saveDB();
+      refreshGrpInfo();
+    }
+    root.querySelectorAll('.fmt-btn').forEach(b => b.onclick = () => {
+      root.querySelectorAll('.fmt-btn').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      T.cfg.fmt = b.getAttribute('data-fmt'); saveDB();
+      $('grpCfg').style.display = T.cfg.fmt === 'groups' ? 'block' : 'none';
+      refreshGrpInfo();
+    });
+    root.querySelectorAll('.gmode-btn').forEach(b => b.onclick = () => {
+      root.querySelectorAll('.gmode-btn').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      T.cfg.gmode = b.getAttribute('data-gmode'); saveDB();
+    });
+    if (cntEl) cntEl.oninput = () => syncGrp('count');
+    if (perEl) perEl.oninput = () => syncGrp('per');
+    if (totEl) totEl.oninput = () => syncGrp('total');
+    if (raceEl) raceEl.oninput = () => { T.cfg.race = Math.max(1, Math.min(21, parseInt(raceEl.value) || 1)); saveDB(); };
+    if ($('grpFillBtn')) $('grpFillBtn').onclick = () => {
+      const total = Math.max(0, parseInt(totEl.value) || 0), have = T.participantIds.length, miss = total - have;
+      if (miss <= 0) return;
+      for (let i = 0; i < miss; i++) { const a = { id: uid(), name: 'Người chơi ' + (have + i + 1) }; db.athletes.push(a); T.participantIds.push(a.id); }
+      saveDB(); render();
+    };
+    refreshGrpInfo();
+    const sb = $('startDrawBtn'); if (sb) sb.onclick = () => {
+      const names = T.participantIds.map(athName);
+      const selBtn = root.querySelector('.fmt-btn.on');
+      const format = selBtn ? selBtn.getAttribute('data-fmt') : 'knockout';
+      if (raceEl) { T.cfg.race = Math.max(1, Math.min(21, parseInt(raceEl.value) || 1)); }
+      if (format === 'groups') {
+        const count = clampNum(cntEl, 2, 16, 4);
+        if (names.length < count) { alert('Số VĐV phải ≥ số bảng (' + count + ').'); return; }
+        const gmodeBtn = root.querySelector('.gmode-btn.on');
+        const gmode = gmodeBtn ? gmodeBtn.getAttribute('data-gmode') : (T.cfg.gmode || 'rr');
+        T.format = 'groups'; T.groups = beginGroups(names, count, gmode, (T.groups && T.groups.fixed) || T._pin); T.draw = null;
+      } else {
+        T.format = 'knockout'; T.draw = beginRound(null, names); T.groups = null;
+      }
+      saveDB(); render();
+    };
+  }
+
+  function schedulePanel() {
+    return `<div class="card" style="margin-top:12px">
+      <div class="sec-title">📅 Lịch (vòng hiện tại)</div>
+      <div class="cfg">
+        <label>Số bàn<input id="numTables" type="number" min="1" max="20" value="2"></label>
+        <label>Giờ bắt đầu<input id="startTime" type="time" value="08:00"></label>
+        <label>Phút/trận<input id="matchMins" type="number" min="5" max="180" value="20"></label>
+        <label>Nghỉ (phút)<input id="restMins" type="number" min="0" max="60" value="5"></label>
+      </div>
+      <button class="btn btn-pri btn-sm" id="scheduleBtn" style="margin-top:10px; width:100%">Tạo lịch vòng này</button>
+    </div>`;
+  }
+
+  // Danh sách toàn bộ VĐV (dùng cho màn khán giả) — lưới tên đẹp, hợp chiếu màn hình lớn
+  function athleteListHtml() {
+    if (!db.athletes.length) return '<div class="empty" style="max-width:520px;margin:0 auto">Chưa có vận động viên nào.</div>';
+    const rows = db.athletes.map((a, i) =>
+      `<div class="sa-item"><span class="sa-num">${i + 1}</span><span class="sa-name">${esc(a.name)}${champMark(a.name)}</span></div>`
+    ).join('');
+    return `<div class="sa-grid">${rows}</div>`;
+  }
+  // ---- Chế độ khán giả: xem-only, hợp để chiếu màn hình lớn ----
+  // Hiện DANH SÁCH VẬN ĐỘNG VIÊN (toàn bộ), ẩn sơ đồ bảng đấu.
+  function renderSpectator(T) {
+    root.innerHTML = `<div class="spectator">
+      <div class="spec-top">
+        <button class="btn btn-ghost btn-sm" id="specExit">← Thoát</button>
+        <div class="spec-title">${esc(T.name)}</div>
+        <button class="btn btn-ghost btn-sm" id="specFull">⛶ Toàn màn hình</button>
+      </div>
+      <div class="spec-sub">🧑‍🤝‍🧑 ${db.athletes.length} vận động viên</div>
+      <div class="sa-head">Danh sách vận động viên</div>
+      ${athleteListHtml()}
+      ${rulesHtml()}
+    </div>`;
+    $('specExit').onclick = () => { nav.view = currentUser() ? 'tournament' : 'home'; render(); };
+    $('specFull').onclick = () => { try { if (!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen(); } catch (e) {} };
+  }
+
+  // =========================================================================
+  //  DRAW ENGINE (redraw mỗi vòng) — thao tác trên T.draw, lưu localStorage
+  // =========================================================================
+  const COLORS = ['#e74c3c','#f39c12','#f1c40f','#2ecc71','#1abc9c','#3498db','#9b59b6','#e84393','#fd79a8','#00cec9','#6c5ce7','#fab1a0'];
+  const SIZE = 600, R = SIZE / 2;
+  let angle = 0, spinning = false; // transient animation state
+
+  function newRoundObj(list) {
+    const L = list.length, matches = [], full = Math.floor(L / 2);
+    for (let i = 0; i < full; i++) matches.push({ a: null, b: null, winner: null });
+    if (L % 2 === 1) matches.push({ a: null, b: BYE, winner: 0 });
+    const order = [];
+    for (let i = 0; i < matches.length; i++) { order.push([i, 'a']); if (matches[i].b !== BYE) order.push([i, 'b']); }
+    return { matches, order };
+  }
+  // Trả về draw object (mới hoặc nối thêm vòng). draw0=null nghĩa là tạo mới.
+  function beginRound(draw0, list) {
+    const draw = draw0 || { rounds: [], curIdx: -1, remaining: [], drawOrder: [], lastSlot: null };
+    const ro = newRoundObj(list);
+    draw.rounds.push({ matches: ro.matches });
+    draw.curIdx = draw.rounds.length - 1;
+    draw.remaining = list.slice();
+    draw.drawOrder = ro.order;
+    draw.lastSlot = null;
+    if (list.length === 2) { // chung kết: điền thẳng
+      const m = draw.rounds[draw.curIdx].matches[0];
+      m.a = list[0]; m.b = list[1];
+      draw.remaining = []; draw.drawOrder = [];
+    }
+    return draw;
+  }
+
+  function roundTitle(draw, i) {
+    const nm = draw.rounds[i].matches.length;
+    if (nm === 1) return 'Chung kết';
+    if (nm === 2) return 'Bán kết';
+    if (nm === 4) return 'Tứ kết';
+    return 'Vòng ' + (i + 1) + ' (' + nm + ' trận)';
+  }
+  function champOf(draw) {
+    if (!draw || !draw.rounds.length) return null;
+    const last = draw.rounds[draw.rounds.length - 1];
+    if (last.matches.length !== 1) return null;
+    const m = last.matches[0];
+    if (m.winner == null || m.a == null) return null;
+    return m.winner === 0 ? m.a : m.b;
+  }
+  function tourStarted(t) { return !!(t.draw || t.groups); }
+  function tourStatusText(t) {
+    if (t.format === 'groups' && t.groups) return t.groups.remaining.length ? '🔴 Đang chia bảng' : '📊 Chia ' + t.groups.count + ' bảng';
+    if (t.draw) return champOf(t.draw) ? '🏆 ' + esc(champOf(t.draw)) : '🔴 Đang thi đấu';
+    return 'Chưa bắt đầu';
+  }
+
+  let ctx = null;
+  function bindEngine(T, admin) {
+    const draw = T.draw;
+    refreshBracket(T, admin);
+    if (!admin) return;
+
+    const canvas = $('wheel'); ctx = canvas.getContext('2d');
+    angle = 0; spinning = false;
+    drawWheel(draw);
+
+    $('spinBtn').onclick = () => spin(T, false);
+    $('autoBtn').onclick = () => autoAll(T);
+    $('nextBtn').onclick = () => nextRound(T);
+    $('redrawBtn').onclick = () => { if (confirm('Bốc lại toàn bộ từ đầu?')) { T.draw = beginRound(null, T.participantIds.map(athName)); saveDB(); render(); } };
+    $('scheduleBtn').onclick = () => generateSchedule(T);
+
+    // trạng thái nút theo tiến độ
+    syncControls(T);
+    // nếu vòng hiện tại đã bốc xong -> kiểm tra hoàn tất
+    if (draw.drawOrder.length === 0) checkRoundComplete(T);
+  }
+
+  function syncControls(T) {
+    const draw = T.draw;
+    const spinB = $('spinBtn'), autoB = $('autoBtn');
+    const canDraw = draw.drawOrder.length > 0;
+    if (spinB) spinB.disabled = !canDraw || spinning;
+    if (autoB) autoB.disabled = !canDraw || spinning;
+  }
+
+  // Khi đang bốc: hiện người còn lại; bốc xong: hiện TẤT CẢ tên cho đẹp
+  function wheelNames(draw) {
+    if (draw.remaining && draw.remaining.length) return draw.remaining;
+    if (draw.bins) return draw.bins.flat();
+    if (draw.rounds && draw.rounds[draw.curIdx]) {
+      const ns = [];
+      draw.rounds[draw.curIdx].matches.forEach(m => { if (m.a && m.a !== BYE) ns.push(m.a); if (m.b && m.b !== BYE) ns.push(m.b); });
+      return ns;
+    }
+    return [];
+  }
+  function drawWheel(draw) {
+    if (!ctx) return;
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    const rem = wheelNames(draw), n = rem.length;
+    if (n === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = 'bold 26px Arial'; ctx.textAlign = 'center';
+      ctx.fillText('Chưa có người', R, R - 2); return;
+    }
+    const arc = (Math.PI * 2) / n;
+    for (let i = 0; i < n; i++) {
+      const s = angle + i * arc, e = s + arc;
+      ctx.beginPath(); ctx.moveTo(R, R); ctx.arc(R, R, R - 6, s, e); ctx.closePath();
+      ctx.fillStyle = COLORS[i % COLORS.length]; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.save(); ctx.translate(R, R); ctx.rotate(s + arc / 2);
+      ctx.textAlign = 'right'; ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(13, Math.min(28, 340 / n))}px -apple-system, Arial`;
+      ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 4;
+      const t = rem[i].length > 16 ? rem[i].slice(0, 15) + '…' : rem[i];
+      ctx.fillText(t, R - 22, 6); ctx.restore();
+    }
+  }
+
+  function spin(T, quick, done) {
+    const draw = T.draw;
+    if (spinning || draw.remaining.length === 0 || draw.drawOrder.length === 0) { if (done) done(); return; }
+    spinning = true; syncControls(T);
+    const dr = $('drawResult'); if (dr) dr.classList.remove('show');
+    const n = draw.remaining.length, arc = (Math.PI * 2) / n;
+    const idx = Math.floor(Math.random() * n), name = draw.remaining[idx];
+    const base = -Math.PI / 2 - (idx * arc + arc / 2);
+    const turns = quick ? 2 : (5 + Math.floor(Math.random() * 4));
+    let target = base + Math.ceil((angle + turns * Math.PI * 2 - base) / (Math.PI * 2)) * Math.PI * 2;
+    target += (Math.random() - 0.5) * arc * 0.5;
+    const a0 = angle, delta = target - a0, dur = quick ? 600 : (3800 + Math.random() * 800);
+    let t0 = null; const ease = t => 1 - Math.pow(1 - t, 3);
+    function frame(ts) {
+      if (t0 === null) t0 = ts;
+      const t = Math.min((ts - t0) / dur, 1);
+      angle = a0 + delta * ease(t); drawWheel(draw);
+      if (t < 1) requestAnimationFrame(frame);
+      else {
+        const slot = draw.drawOrder.shift();
+        draw.rounds[draw.curIdx].matches[slot[0]][slot[1]] = name;
+        draw.lastSlot = slot;
+        draw.remaining.splice(idx, 1);
+        spinning = false;
+        refreshBracket(T, true);
+        const drr = $('drawResult');
+        if (draw.drawOrder.length > 0) {
+          if (drr) { drr.innerHTML = `🎯 <b>${esc(name)}</b> → ${roundTitle(draw, draw.curIdx)} · Trận ${slot[0] + 1}`; drr.classList.add('show'); }
+          syncControls(T);
+        } else {
+          if (drr) { drr.innerHTML = `✅ Bốc xong ${roundTitle(draw, draw.curIdx)}! Bấm chọn <b>người thắng</b> mỗi trận.`; drr.classList.add('show'); }
+          syncControls(T); checkRoundComplete(T);
+        }
+        saveDB();
+        if (done) done();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function autoAll(T) {
+    if (spinning || T.draw.drawOrder.length === 0) return;
+    spin(T, true, function next() { if (T.draw.drawOrder.length > 0) setTimeout(() => spin(T, true, next), 120); });
+  }
+
+  function nextTitle(nm) { return nm === 1 ? 'Chung kết' : nm === 2 ? 'Bán kết' : nm === 4 ? 'Tứ kết' : 'vòng sau'; }
+
+  function checkRoundComplete(T) {
+    const draw = T.draw, rd = draw.rounds[draw.curIdx], nb = $('nextBtn');
+    if (draw.drawOrder.length > 0) { if (nb) nb.style.display = 'none'; return; }
+    if (!rd.matches.every(m => m.winner != null)) { if (nb) nb.style.display = 'none'; return; }
+    if (rd.matches.length === 1) {
+      const ch = champOf(draw); const drr = $('drawResult');
+      if (drr) { drr.innerHTML = `🏆 Vô địch: <b>${esc(ch)}</b> 🎉`; drr.classList.add('show'); }
+      if (nb) nb.style.display = 'none';
+    } else if (nb) {
+      nb.style.display = 'block';
+      const pool = rd.matches.length;
+      nb.textContent = pool === 2 ? 'Vào Chung kết →' : `Quay ${nextTitle(Math.floor(pool / 2))} →`;
+    }
+  }
+
+  function nextRound(T) {
+    const draw = T.draw, rd = draw.rounds[draw.curIdx];
+    if (draw.drawOrder.length > 0 || !rd.matches.every(m => m.winner != null)) return;
+    const winners = rd.matches.map(m => (m.winner === 0 ? m.a : m.b));
+    T.draw = beginRound(draw, winners); saveDB(); render();
+  }
+
+  // ---- bracket rendering ----
+  function slotHtml(info, o) {
+    o = o || {};
+    let cls = 'slot ' + (info.kind === 'name' ? 'filled' : info.kind === 'bye' ? 'bye' : 'empty');
+    if (o.pick) cls += ' pick';
+    if (o.won) cls += ' won';
+    if (o.lost) cls += ' lost';
+    if (o.just) cls += ' just';
+    const data = o.pick ? ` data-mi="${o.mi}" data-side="${o.side}"` : '';
+    const tag = o.num ? `<span class="seed">${o.num}</span>` : '<span class="seed"></span>';
+    return `<div class="${cls}"${data}>${tag}<span>${esc(info.text)}${champMark(info.text)}</span></div>`;
+  }
+  function renderMatch(draw, i, mi, mt, admin) {
+    const active = i === draw.curIdx;
+    const isBye = mt.b === BYE;
+    const aInfo = mt.a != null ? { kind: 'name', text: mt.a } : { kind: 'tbd', text: 'Chờ bốc…' };
+    const bInfo = isBye ? { kind: 'bye', text: 'BYE' } : (mt.b != null ? { kind: 'name', text: mt.b } : { kind: 'tbd', text: 'Chờ bốc…' });
+    const clickable = admin && active && !isBye && mt.a != null && mt.b != null;
+    const justA = active && draw.lastSlot && draw.lastSlot[0] === mi && draw.lastSlot[1] === 'a';
+    const justB = active && draw.lastSlot && draw.lastSlot[0] === mi && draw.lastSlot[1] === 'b';
+    const aO = { mi, side: 0, num: mi + 1, pick: clickable, won: mt.winner === 0 && mt.a != null, lost: mt.winner === 1, just: justA && mt.winner == null };
+    const bO = { mi, side: 1, pick: clickable, won: mt.winner === 1, lost: mt.winner === 0 && !isBye, just: justB && mt.winner == null };
+    const live = active && !isBye && mt.a != null && mt.b != null && mt.winner == null;
+    return `<div class="match${live ? ' live' : ''}">${live ? '<span class="live-tag">● đang đấu</span>' : ''}${slotHtml(aInfo, aO)}${slotHtml(bInfo, bO)}</div>`;
+  }
+  function refreshBracket(T, admin) {
+    const draw = T.draw, host = $('bracket'); if (!host) return;
+    let html = '';
+    for (let i = 0; i < draw.rounds.length; i++) {
+      html += `<div class="round${i === draw.curIdx ? ' active' : ''}"><div class="round-label">${roundTitle(draw, i)}</div>`;
+      draw.rounds[i].matches.forEach((mt, mi) => { html += renderMatch(draw, i, mi, mt, admin); });
+      html += '</div>';
+    }
+    const last = draw.rounds[draw.rounds.length - 1];
+    if (last.matches.length === 1) {
+      const ch = champOf(draw);
+      html += `<div class="round champ-col"><div class="round-label">🏆 Vô địch</div>
+        <div class="slot champ ${ch ? '' : 'empty'}"><span class="seed"></span><span>${ch ? esc(ch) : '?'}</span></div></div>`;
+    }
+    host.innerHTML = html;
+    if (admin) host.querySelectorAll('.slot.pick').forEach(s => s.onclick = () => {
+      const mi = +s.getAttribute('data-mi'), side = +s.getAttribute('data-side');
+      const mt = draw.rounds[draw.curIdx].matches[mi];
+      if (mt.b === BYE) return;
+      mt.winner = (mt.winner === side) ? null : side;
+      saveDB(); refreshBracket(T, true); checkRoundComplete(T);
+    });
+  }
+
+  // ---- schedule ----
+  const toMin = s => { const p = (s || '08:00').split(':'); return (+p[0]) * 60 + (+p[1]); };
+  const fmtMin = m => { m = ((Math.round(m) % 1440) + 1440) % 1440; return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+  function generateSchedule(T) {
+    const draw = T.draw; if (draw.drawOrder.length > 0) { alert('Hãy bốc xong cặp của vòng hiện tại trước.'); return; }
+    const rd = draw.rounds[draw.curIdx], play = rd.matches.filter(m => m.b !== BYE);
+    const Tb = Math.max(1, parseInt($('numTables').value) || 1), D = Math.max(1, parseInt($('matchMins').value) || 20),
+          rest = Math.max(0, parseInt($('restMins').value) || 0), start = toMin($('startTime').value);
+    const byeNames = rd.matches.filter(m => m.b === BYE).map(m => m.a).filter(Boolean);
+    let lastEnd = start;
+    const rows = play.map((m, i) => { const w = Math.floor(i / Tb), tb = i % Tb, time = start + w * (D + rest); lastEnd = Math.max(lastEnd, time + D); return { num: i + 1, a: m.a, b: m.b, table: tb + 1, time }; });
+    const race = (T.cfg && T.cfg.race) || 1;
+    let html = `<div class="card" style="margin-top:14px"><div class="bracket-title">📅 Lịch ${roundTitle(draw, draw.curIdx)} <small style="opacity:.7;font-weight:400">(${Tb} bàn${race > 1 ? ' · đánh ' + race + ' ván' : ''} · xong ~${fmtMin(lastEnd)})</small></div>`;
+    if (!rows.length) html += '<div class="empty">Vòng này không có trận (toàn BYE).</div>';
+    else {
+      html += '<table class="sched-tbl"><thead><tr><th>Giờ</th><th>Bàn</th><th>Trận</th><th>Cặp đấu</th></tr></thead><tbody>';
+      rows.forEach(r => html += `<tr><td class="t-time">${fmtMin(r.time)}</td><td>Bàn ${r.table}</td><td>Trận ${r.num}</td><td>${esc(r.a)} <span class="vs">vs</span> ${esc(r.b)}</td></tr>`);
+      html += '</tbody></table>';
+    }
+    if (byeNames.length) html += `<div style="opacity:.75;font-size:.84rem;margin-top:8px">🍀 Miễn đấu (BYE): <b>${byeNames.map(esc).join(', ')}</b></div>`;
+    html += '</div>';
+    $('scheduleWrap').innerHTML = html;
+  }
+
+  // =========================================================================
+  //  GROUPS ENGINE (chia bảng vòng tròn) — thao tác trên T.groups
+  // =========================================================================
+  function beginGroups(names, count, mode, prevFixed) {
+    const bins = []; for (let i = 0; i < count; i++) bins.push([]);
+    const fixed = {}, remaining = [];
+    const pf = prevFixed && typeof prevFixed === 'object' && !Array.isArray(prevFixed) ? prevFixed : {};
+    names.forEach(nm => {                       // người cố định: đặt thẳng vào bảng, KHÔNG cho vào vòng quay
+      const gi = pf[nm];
+      if (gi != null && gi >= 0 && gi < count) { bins[gi].push(nm); fixed[nm] = gi; }
+      else remaining.push(nm);
+    });
+    return { count, mode: mode || 'rr', bins, remaining, results: {}, lastPick: null, fixed };
+  }
+  const groupLetter = i => 'Bảng ' + String.fromCharCode(65 + i);
+  // Tên bảng tuỳ chỉnh (g.titles), mặc định "Bảng A/B/C/D"
+  function gTitle(g, gi) { const t = g && g.titles && g.titles[gi]; return (t && String(t).trim()) ? String(t) : ('Bảng ' + String.fromCharCode(65 + gi)); }
+  // Số suất miễn vòng đầu của 1 bảng (chỉ khi đánh loại trực tiếp) = các vị trí đầu danh sách
+  function gByes(g, gi) { if (!g || g.mode !== 'ko') return 0; const n = g.bins[gi].length; return Math.max(0, nextPow2(n) - n); }
+  function fixtures(m) { const r = []; for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) r.push([i, j]); return r; }
+  function standings(g, gi) {
+    const m = g.bins[gi], res = g.results[gi] || {};
+    const stat = m.map((nm, idx) => ({ name: nm, idx, w: 0, l: 0, gf: 0, ga: 0 }));
+    Object.keys(res).forEach(k => {
+      const p = k.split('-'), i = +p[0], j = +p[1], v = res[k], sd = wSide(v);
+      if (Array.isArray(v)) { stat[i].gf += +v[0] || 0; stat[i].ga += +v[1] || 0; stat[j].gf += +v[1] || 0; stat[j].ga += +v[0] || 0; }
+      if (sd === 0) { stat[i].w++; stat[j].l++; } else if (sd === 1) { stat[j].w++; stat[i].l++; }
+    });
+    return stat.slice().sort((a, b) => b.w - a.w || (b.gf - b.ga) - (a.gf - a.ga) || a.l - b.l || a.idx - b.idx);
+  }
+
+  function bindGroups(T, admin) {
+    renderGroups(T, admin);
+    if (!admin) return;
+    const canvas = $('wheel'); ctx = canvas.getContext('2d'); angle = 0; spinning = false;
+    drawWheel(T.groups);
+    $('spinBtn').onclick = () => spinGroup(T, false);
+    $('autoBtn').onclick = () => autoAllGroups(T);
+    $('redrawBtn').onclick = () => {
+      if (!confirm('Bốc lại? (giữ nguyên người đã gán cố định, tự random chia đều phần còn lại vào các bảng)')) return;
+      const gg = T.groups, fixed = gg.fixed || {}, newBins = Array.from({ length: gg.count }, () => []), pool = [];
+      gg.bins.flat().concat(gg.remaining).forEach(n => { const fg = fixed[n]; if (fg != null && fg < gg.count) newBins[fg].push(n); else pool.push(n); });
+      for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
+      gg.bins = newBins;
+      pool.forEach(n => { newBins[leastFullGroup(gg)].push(n); });   // chia đều ngẫu nhiên, bảng ít người nhất trước
+      gg.remaining = []; gg.results = {}; gg.finalResults = {}; gg.lastPick = null;
+      saveDB(); render();
+    };
+    $('scheduleBtn').onclick = () => generateGroupSchedule(T);
+    syncGroupControls(T);
+  }
+  function syncGroupControls(T) {
+    const g = T.groups, sb = $('spinBtn'), ab = $('autoBtn'), can = g.remaining.length > 0;
+    if (sb) sb.disabled = !can || spinning;
+    if (ab) ab.disabled = !can || spinning;
+  }
+  function spinGroup(T, quick, done) {
+    const g = T.groups;
+    if (spinning || g.remaining.length === 0) { if (done) done(); return; }
+    spinning = true; syncGroupControls(T);
+    const dr = $('drawResult'); if (dr) dr.classList.remove('show');
+    const n = g.remaining.length, arc = (Math.PI * 2) / n;
+    const idx = Math.floor(Math.random() * n), name = g.remaining[idx];
+    const base = -Math.PI / 2 - (idx * arc + arc / 2);
+    const turns = quick ? 2 : (5 + Math.floor(Math.random() * 4));
+    let target = base + Math.ceil((angle + turns * Math.PI * 2 - base) / (Math.PI * 2)) * Math.PI * 2;
+    target += (Math.random() - 0.5) * arc * 0.5;
+    const a0 = angle, delta = target - a0, dur = quick ? 600 : (3800 + Math.random() * 800);
+    let t0 = null; const ease = t => 1 - Math.pow(1 - t, 3);
+    function frame(ts) {
+      if (t0 === null) t0 = ts;
+      const t = Math.min((ts - t0) / dur, 1);
+      angle = a0 + delta * ease(t); drawWheel(g);
+      if (t < 1) requestAnimationFrame(frame);
+      else {
+        const gi = (g.fixed && g.fixed[name] != null && g.fixed[name] < g.count) ? g.fixed[name] : leastFullGroup(g);
+        g.bins[gi].push(name);
+        g.lastPick = [gi, g.bins[gi].length - 1];
+        g.remaining.splice(idx, 1);
+        spinning = false;
+        renderGroups(T, true);
+        const drr = $('drawResult');
+        if (drr) {
+          drr.innerHTML = g.remaining.length
+            ? `🎯 <b>${esc(name)}</b> → ${esc(gTitle(g, gi))}`
+            : `✅ Chia bảng xong! Bấm chọn <b>người thắng</b> từng trận để tính điểm.`;
+          drr.classList.add('show');
+        }
+        syncGroupControls(T); saveDB();
+        if (done) done();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  function autoAllGroups(T) {
+    if (spinning || T.groups.remaining.length === 0) return;
+    spinGroup(T, true, function next() { if (T.groups.remaining.length > 0) setTimeout(() => spinGroup(T, true, next), 120); });
+  }
+
+  function leastFullGroup(g) {
+    let best = 0, min = g.bins[0].length;
+    for (let i = 1; i < g.count; i++) if (g.bins[i].length < min) { min = g.bins[i].length; best = i; }
+    return best;
+  }
+
+  // ---- Loại trực tiếp trong bảng (nhánh cố định) ----
+  function nextPow2(n) { let p = 1; while (p < n) p <<= 1; return Math.max(p, 2); }
+  function seedOrder(n) {
+    let rounds = Math.log2(n), pls = [1, 2];
+    for (let r = 1; r < rounds; r++) { const sum = pls.length * 2 + 1, nx = []; for (const p of pls) { nx.push(p); nx.push(sum - p); } pls = nx; }
+    return pls;
+  }
+  function koEntrant(members, res, r, m, side) {
+    if (r === 0) {
+      const B = nextPow2(members.length), seed = seedOrder(B)[2 * m + side];
+      if (seed > members.length) return { kind: 'bye', text: 'BYE' };
+      return { kind: 'name', text: members[seed - 1] };
+    }
+    return koWinner(members, res, r - 1, 2 * m + side);
+  }
+  function koWinner(members, res, r, m) {
+    const a = koEntrant(members, res, r, m, 0), b = koEntrant(members, res, r, m, 1), tbd = { kind: 'tbd', text: '—' };
+    if (a.kind === 'bye' && b.kind === 'bye') return { kind: 'bye', text: 'BYE' };
+    if (a.kind === 'bye') return b.kind === 'name' ? b : tbd;
+    if (b.kind === 'bye') return a.kind === 'name' ? a : tbd;
+    if (a.kind === 'name' && b.kind === 'name') { const sd = wSide(res[r + '-' + m]); if (sd === 0) return a; if (sd === 1) return b; }
+    return tbd;
+  }
+  function koChamp(members, res) { const B = nextPow2(members.length), w = koWinner(members, res, Math.log2(B) - 1, 0); return w.kind === 'name' ? w.text : null; }
+  function koRoundName(nm, grp) { return nm === 1 ? (grp ? 'Chung kết bảng' : 'Chung kết') : nm === 2 ? 'Bán kết' : nm === 4 ? 'Tứ kết' : 'Vòng (' + nm + ')'; }
+  // ---- Tỉ số: result có thể là số 0/1 (cũ) hoặc [vánA, vánB] (mới) ----
+  function wSide(v) { if (Array.isArray(v)) { if (v[0] > v[1]) return 0; if (v[1] > v[0]) return 1; return null; } return (v === 0 || v === 1) ? v : null; }
+  function scoreVal(v, side) { return (Array.isArray(v) && v[side] != null) ? v[side] : ''; }
+  function koScoreSlot(info, scope, r, m, s, won, lost, editable, score, avail) {
+    // Ô BYE ở vòng đầu (chỉ bảng): cho chọn người thay thế
+    if (info.kind === 'bye' && avail && r === 0 && scope[0] === 'g') {
+      const gi = scope.slice(1), dl = `bf_${gi}_${r}_${m}_${s}`;
+      const opts = avail.map(a => `<option value="${esc(a.name)}"></option>`).join('');
+      return `<div class="slot bye"><input class="byefill" data-g="${gi}" list="${dl}" placeholder="＋ gõ tên người thay BYE" autocomplete="off"><datalist id="${dl}">${opts}</datalist></div>`;
+    }
+    let cls = 'slot ' + (info.kind === 'name' ? 'filled' : info.kind === 'bye' ? 'bye' : 'empty');
+    if (won) cls += ' won'; if (lost) cls += ' lost';
+    let right = '';
+    if (info.kind === 'name') {
+      if (editable) right = `<input class="sc" type="number" min="0" max="99" inputmode="numeric" value="${score}" data-sc="${scope}" data-r="${r}" data-m="${m}" data-s="${s}">`;
+      else if (score !== '') right = `<b class="scv">${score}</b>`;
+    }
+    return `<div class="${cls}"><span class="seed"></span><span>${esc(info.text)}${champMark(info.text)}</span><span class="spacer"></span>${right}</div>`;
+  }
+  function koMatch(scope, r, m, a, b, w, admin, avail) {
+    const side = wSide(w), editable = admin && a.kind === 'name' && b.kind === 'name';
+    const live = a.kind === 'name' && b.kind === 'name' && side == null;
+    return `<div class="match${live ? ' live' : ''}">${live ? '<span class="live-tag">● đang đấu</span>' : ''}${koScoreSlot(a, scope, r, m, 0, side === 0, side === 1, editable, scoreVal(w, 0), admin ? avail : null)}${koScoreSlot(b, scope, r, m, 1, side === 1, side === 0, editable, scoreVal(w, 1), admin ? avail : null)}</div>`;
+  }
+  function renderGroupKO(g, gi, admin) {
+    const members = g.bins[gi], res = g.results[gi] = g.results[gi] || {};
+    const B = nextPow2(members.length), rounds = Math.log2(B), champ = koChamp(members, res);
+    const used = new Set(g.bins.flat());
+    const avail = db.athletes.filter(a => !used.has(a.name));
+    let inner = '';
+    for (let r = 0; r < rounds; r++) {
+      const nm = B / Math.pow(2, r + 1);
+      inner += `<div class="round ko-round" style="min-width:172px"><div class="round-label">${koRoundName(nm, true)}</div>`;
+      for (let m = 0; m < nm; m++) {
+        const a = koEntrant(members, res, r, m, 0), b = koEntrant(members, res, r, m, 1);
+        inner += koMatch('g' + gi, r, m, a, b, res[r + '-' + m], admin, avail);
+      }
+      inner += '</div>';
+    }
+    inner += `<div class="round" style="justify-content:center"><div class="round-label">🥇 Nhất bảng</div><div class="slot ${champ ? 'won' : 'empty'}"><span class="seed"></span><span>${champ ? esc(champ) + champMark(champ) : '?'}</span></div></div>`;
+    return `<div class="card" style="padding:14px 16px"><div class="ghead"><span class="gbadge">${String.fromCharCode(65 + gi)}</span><span class="gname">${esc(gTitle(g, gi))}</span>${champ ? `<span class="gchamp">🥇 ${esc(champ)}</span>` : ''}</div><div style="display:flex;gap:14px;overflow-x:auto;padding-bottom:2px">${inner}</div></div>`;
+  }
+  // ---- Vòng Trong: ghép cặp gọn (sequential) trên danh sách đã xếp ----
+  function fCount(L, r) { let p = Math.max(L, 1); for (let i = 0; i < r; i++) p = Math.ceil(p / 2); return p; }
+  function fRounds(L) { return L <= 1 ? 1 : Math.ceil(Math.log2(L)); }
+  function fEntrant(list, res, r, m, side) {
+    const j = 2 * m + side;
+    if (r === 0) return j < list.length ? { kind: 'name', text: list[j] } : { kind: 'bye', text: 'BYE' };
+    return fWinner(list, res, r - 1, j);
+  }
+  function fWinner(list, res, r, m) {
+    const a = fEntrant(list, res, r, m, 0), b = fEntrant(list, res, r, m, 1), tbd = { kind: 'tbd', text: '—' };
+    if (a.kind === 'bye' && b.kind === 'bye') return { kind: 'bye', text: 'BYE' };
+    if (a.kind === 'bye') return b.kind === 'name' ? b : tbd;
+    if (b.kind === 'bye') return a.kind === 'name' ? a : tbd;
+    if (a.kind === 'name' && b.kind === 'name') { const sd = wSide(res[r + '-' + m]); if (sd === 0) return a; if (sd === 1) return b; }
+    return tbd;
+  }
+  function fChamp(list, res) { if (list.length <= 1) return list[0] || null; const w = fWinner(list, res, fRounds(list.length) - 1, 0); return w.kind === 'name' ? w.text : null; }
+  // Nhì bảng = người thua trận chung kết bảng
+  function koRunnerUp(members, res) {
+    const L = members.length; if (L < 2) return null;
+    const fr = Math.round(Math.log2(nextPow2(L))) - 1;
+    const a = koEntrant(members, res, fr, 0, 0), b = koEntrant(members, res, fr, 0, 1);
+    const sd = wSide(res[fr + '-0']);
+    if (sd === 0) return b.kind === 'name' ? b.text : null;
+    if (sd === 1) return a.kind === 'name' ? a.text : null;
+    return null;
+  }
+  // Tổng số ván thắng của mỗi người trong bảng (xếp vé vớt)
+  function koGamesWon(members, res) {
+    const won = {};
+    Object.keys(res).forEach(k => {
+      const v = res[k]; if (!Array.isArray(v)) return;
+      const p = k.split('-'), r = +p[0], m = +p[1];
+      const a = koEntrant(members, res, r, m, 0), b = koEntrant(members, res, r, m, 1);
+      if (a.kind === 'name') won[a.text] = (won[a.text] || 0) + (+v[0] || 0);
+      if (b.kind === 'name') won[b.text] = (won[b.text] || 0) + (+v[1] || 0);
+    });
+    return won;
+  }
+  // Lập danh sách vào Vòng Trong: Nhất + Nhì mỗi bảng (cài chéo bảng) + vé vớt cho đủ lũy thừa 2
+  function buildQualifiers(g) {
+    const G = g.count, firsts = [];
+    let okFirsts = 0;
+    for (let gi = 0; gi < G; gi++) { const c = koChamp(g.bins[gi], g.results[gi] || {}); firsts[gi] = c; if (c != null) okFirsts++; }
+    if (okFirsts < G) return { ready: false, info: `Cần xác định xong <b>Nhất bảng</b> tất cả ${G} bảng (hiện ${okFirsts}/${G}).` };
+    let quals = firsts.filter(Boolean);
+    const inSet = new Set(quals), target = nextPow2(quals.length);
+    let wild = 0;
+    if (quals.length < target) {
+      const cand = [];
+      for (let gi = 0; gi < G; gi++) { const won = koGamesWon(g.bins[gi], g.results[gi] || {}); g.bins[gi].forEach(n => { if (!inSet.has(n)) cand.push({ name: n, gw: won[n] || 0 }); }); }
+      cand.sort((a, b) => b.gw - a.gw);
+      for (let i = 0; i < cand.length && quals.length < target; i++) { quals.push(cand[i].name); inSet.add(cand[i].name); wild++; }
+    }
+    return { ready: true, list: quals, wild };
+  }
+  function renderFinalKO(g, quals, admin, wild) {
+    const res = g.finalResults = g.finalResults || {};
+    const rounds = fRounds(quals.length), gc = fChamp(quals, res);
+    let inner = '';
+    for (let r = 0; r < rounds; r++) {
+      const P = fCount(quals.length, r), nm = Math.ceil(P / 2);
+      inner += `<div class="round ko-round" style="min-width:172px"><div class="round-label">${koRoundName(nm, false)}</div>`;
+      for (let m = 0; m < nm; m++) {
+        const a = fEntrant(quals, res, r, m, 0), b = fEntrant(quals, res, r, m, 1);
+        inner += koMatch('F', r, m, a, b, res[r + '-' + m], admin, null);
+      }
+      inner += '</div>';
+    }
+    inner += `<div class="round champ-col"><div class="round-label">🏆 Vô địch</div><div class="slot champ ${gc ? '' : 'empty'}"><span class="seed"></span><span>${gc ? esc(gc) + champMark(gc) : '?'}</span></div></div>`;
+    return `<div class="card" style="padding:12px;border:1px solid rgba(255,216,77,.5)"><div class="sec-title">🏆 Vòng Trong — Nhất các bảng${wild ? ` + ${wild} vé vớt` : ''}${gc ? ` · 🏆 <span style="color:var(--gold)">${esc(gc)}</span>` : ''}</div><div style="display:flex;gap:14px;overflow-x:auto">${inner}</div></div>`;
+  }
+
+  function renderGroups(T, admin) {
+    const g = T.groups, host = $('bracket'); if (!host) return;
+    const done = g.remaining.length === 0, ko = g.mode === 'ko';
+    let body;
+    if (done && ko) {
+      let cards = ''; for (let gi = 0; gi < g.count; gi++) cards += renderGroupKO(g, gi, admin);
+      const q = buildQualifiers(g);
+      const finalSec = (g.count >= 2 && q.ready)
+        ? renderFinalKO(g, q.list, admin, q.wild)
+        : `<div class="card" style="padding:12px;border:1px solid rgba(255,216,77,.5)"><div class="sec-title">🏆 Vòng Trong — Nhất các bảng</div><div class="empty">${q.info || 'Cần ≥ 2 bảng.'}</div></div>`;
+      body = cards + finalSec;
+    } else {
+    let cols = '';
+    for (let gi = 0; gi < g.count; gi++) {
+      const members = g.bins[gi];
+      cols += `<div class="round" style="min-width:190px"><div class="round-label">${esc(gTitle(g, gi))} · ${members.length} người</div>`;
+      if (!done) {
+        if (members.length) members.forEach((nm, k) => {
+          const just = g.lastPick && g.lastPick[0] === gi && g.lastPick[1] === k;
+          cols += `<div class="slot filled${just ? ' just' : ''}"><span class="seed">${k + 1}</span><span>${esc(nm)}${champMark(nm)}</span>${admin ? `<span class="spacer"></span><button class="ab ab-x" data-ug="${gi}" data-uk="${k}" title="Bỏ khỏi bảng">✕</button>` : ''}</div>`;
+        });
+        else cols += '<div class="slot empty"><span class="seed"></span><span>Chờ chia…</span></div>';
+      } else {
+        standings(g, gi).forEach((row, r) => {
+          const medal = r === 0 ? '🥇' : r === 1 ? '🥈' : (r + 1);
+          const dh = row.gf - row.ga, dhs = (dh > 0 ? '+' : '') + dh;
+          cols += `<div class="slot filled"><span class="seed">${medal}</span><span>${esc(row.name)}${champMark(row.name)}</span><span class="spacer"></span><b style="color:var(--gold)">${row.w}T-${row.l}B</b><span class="meta2" style="margin-left:4px">ván ${row.gf}-${row.ga} (${dhs})</span></div>`;
+        });
+        const fx = fixtures(members);
+        if (fx.length) {
+          cols += `<div class="round-label" style="margin-top:10px;opacity:.7">Trận vòng tròn (nhập tỉ số)</div>`;
+          fx.forEach(pair => {
+            const i = pair[0], j = pair[1], res = g.results[gi] || {}, v = res[i + '-' + j], side = wSide(v);
+            const slot = (idx, nm, won, lost) => `<div class="slot ${won ? 'won' : lost ? 'lost' : 'filled'}" style="font-size:.82rem;padding:6px 8px"><span>${esc(nm)}${champMark(nm)}</span><span class="spacer"></span>${admin ? `<input class="sc" type="number" min="0" max="99" value="${scoreVal(v, idx)}" data-sc="rr${gi}" data-i="${i}" data-j="${j}" data-s="${idx}">` : (scoreVal(v, idx) !== '' ? `<b class="scv">${scoreVal(v, idx)}</b>` : '')}</div>`;
+            const live = side == null;
+            cols += `<div class="match${live ? ' live' : ''}" style="gap:3px">${live ? '<span class="live-tag">● đang đấu</span>' : ''}${slot(0, members[i], side === 0, side === 1)}${slot(1, members[j], side === 1, side === 0)}</div>`;
+          });
+        }
+      }
+      cols += '</div>';
+    }
+    body = `<div style="display:flex;gap:18px;flex-wrap:wrap">${cols}</div>`;
+    }
+    let assign = '';
+    if (admin && !done) {
+      assign = `<div class="card" style="padding:12px;background:rgba(0,0,0,.22)">
+        <div class="round-label" style="text-align:left;margin-bottom:8px">Chưa chia (${g.remaining.length}) — bấm chữ bảng để gán tay, hoặc <b>QUAY</b> để random</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${g.remaining.map((nm, ri) => `<div class="assign-chip"><span>${esc(nm)}${champMark(nm)}</span>${g.bins.map((_, gi) => `<button class="ab" data-ri="${ri}" data-gi="${gi}">${String.fromCharCode(65 + gi)}</button>`).join('')}</div>`).join('')}
+        </div></div>`;
+    }
+    host.innerHTML = `<div style="display:flex;flex-direction:column;gap:14px;width:100%">${assign}${body}</div>`;
+    if (!admin) return;
+    host.querySelectorAll('.ab[data-ri]').forEach(b => b.onclick = () => {
+      const ri = +b.getAttribute('data-ri'), gi = +b.getAttribute('data-gi'), name = g.remaining[ri];
+      if (name == null) return;
+      g.bins[gi].push(name); g.lastPick = [gi, g.bins[gi].length - 1];
+      g.remaining.splice(ri, 1);
+      if (!g.fixed) g.fixed = {}; g.fixed[name] = gi;     // gán tay = cố định
+      saveDB(); renderGroups(T, true); drawWheel(g); syncGroupControls(T);
+      const drr = $('drawResult'); if (drr) { drr.innerHTML = g.remaining.length ? `✍️ Gán tay <b>${esc(name)}</b> → ${esc(gTitle(g, gi))}` : `✅ Chia bảng xong! Bấm chọn <b>người thắng</b> từng trận.`; drr.classList.add('show'); }
+    });
+    host.querySelectorAll('.ab-x').forEach(b => b.onclick = () => {
+      const gi = +b.getAttribute('data-ug'), k = +b.getAttribute('data-uk'), name = g.bins[gi][k];
+      if (name == null) return;
+      g.bins[gi].splice(k, 1); g.remaining.push(name); g.lastPick = null;
+      if (g.fixed) delete g.fixed[name];                 // bỏ khỏi bảng = bỏ cố định
+      saveDB(); renderGroups(T, true); drawWheel(g); syncGroupControls(T);
+    });
+    // Nhập tỉ số ván => người nhiều ván hơn thắng (vòng tròn / loại trực tiếp / chung kết)
+    host.querySelectorAll('input.sc').forEach(inp => inp.onchange = () => {
+      const scope = inp.getAttribute('data-sc');
+      if (scope.slice(0, 2) === 'rr') {
+        const gi = +scope.slice(2), i = +inp.getAttribute('data-i'), j = +inp.getAttribute('data-j'), key = i + '-' + j;
+        const store = g.results[gi] = fixObj(g.results[gi]);
+        const a = host.querySelector(`input.sc[data-sc="rr${gi}"][data-i="${i}"][data-j="${j}"][data-s="0"]`);
+        const b = host.querySelector(`input.sc[data-sc="rr${gi}"][data-i="${i}"][data-j="${j}"][data-s="1"]`);
+        const av = a.value.trim(), bv = b.value.trim();
+        if (av === '' && bv === '') delete store[key]; else store[key] = [av === '' ? 0 : +av, bv === '' ? 0 : +bv];
+        saveDB(); renderGroups(T, true);
+      } else {
+        const r = +inp.getAttribute('data-r'), m = +inp.getAttribute('data-m'), key = r + '-' + m, isF = scope === 'F';
+        const store = isF ? (g.finalResults = fixObj(g.finalResults)) : (g.results[+scope.slice(1)] = fixObj(g.results[+scope.slice(1)]));
+        const a = host.querySelector(`input.sc[data-sc="${scope}"][data-r="${r}"][data-m="${m}"][data-s="0"]`);
+        const b = host.querySelector(`input.sc[data-sc="${scope}"][data-r="${r}"][data-m="${m}"][data-s="1"]`);
+        const av = a.value.trim(), bv = b.value.trim();
+        if (av === '' && bv === '') delete store[key]; else store[key] = [av === '' ? 0 : +av, bv === '' ? 0 : +bv];
+        const rounds = isF ? fRounds(buildQualifiers(g).list.length) : Math.round(Math.log2(nextPow2(g.bins[+scope.slice(1)].length)));
+        let pr = r + 1, pm = Math.floor(m / 2); while (pr < rounds) { delete store[pr + '-' + pm]; pm = Math.floor(pm / 2); pr++; }
+        saveDB(); renderGroups(T, true);
+      }
+    });
+    // Thêm cầu thủ thay thế vào ô BYE: gõ tên (gợi ý dự bị) -> thêm người mới hoặc dùng người có sẵn
+    host.querySelectorAll('input.byefill').forEach(inp => inp.onchange = () => {
+      const gi = +inp.getAttribute('data-g'), name = inp.value.trim();
+      if (!name) return;
+      if (g.bins.flat().some(n => n.toLowerCase() === name.toLowerCase())) { inp.value = ''; alert('"' + name + '" đã ở trong giải rồi.'); return; }
+      let ath = db.athletes.find(a => a.name.toLowerCase() === name.toLowerCase());
+      if (!ath) { ath = { id: uid(), name }; db.athletes.push(ath); }
+      g.bins[gi].push(ath.name);
+      if (!g.fixed) g.fixed = {}; g.fixed[ath.name] = gi;   // thêm tay vào BYE = cố định
+      if (!T.participantIds.includes(ath.id)) T.participantIds.push(ath.id);
+      saveDB(); renderGroups(T, true);
+    });
+  }
+
+  function generateGroupSchedule(T) {
+    const g = T.groups; if (g.remaining.length > 0) { alert('Hãy chia bảng xong trước.'); return; }
+    const Tb = Math.max(1, parseInt($('numTables').value) || 1), D = Math.max(1, parseInt($('matchMins').value) || 20),
+          rest = Math.max(0, parseInt($('restMins').value) || 0), start = toMin($('startTime').value);
+    const all = [];
+    if (g.mode === 'ko') {
+      for (let gi = 0; gi < g.count; gi++) { const mem = g.bins[gi], nm = nextPow2(mem.length) / 2; for (let m = 0; m < nm; m++) { const a = koEntrant(mem, {}, 0, m, 0), b = koEntrant(mem, {}, 0, m, 1); if (a.kind === 'name' && b.kind === 'name') all.push({ gi, a: a.text, b: b.text }); } }
+    } else {
+      for (let gi = 0; gi < g.count; gi++) fixtures(g.bins[gi]).forEach(pair => all.push({ gi, a: g.bins[gi][pair[0]], b: g.bins[gi][pair[1]] }));
+    }
+    if (!all.length) { $('scheduleWrap').innerHTML = '<div class="card" style="margin-top:14px"><div class="empty">Chưa đủ người để có trận.</div></div>'; return; }
+    let lastEnd = start;
+    const rows = all.map((m, k) => { const w = Math.floor(k / Tb), tb = k % Tb, time = start + w * (D + rest); lastEnd = Math.max(lastEnd, time + D); return { gi: m.gi, a: m.a, b: m.b, table: tb + 1, time }; });
+    const race = (T.cfg && T.cfg.race) || 1;
+    let html = `<div class="card" style="margin-top:14px"><div class="bracket-title">📅 Lịch ${g.mode === 'ko' ? 'vòng 1 các bảng' : 'vòng tròn'} <small style="opacity:.7;font-weight:400">(${Tb} bàn · ${all.length} trận${race > 1 ? ' · đánh ' + race + ' ván' : ''} · xong ~${fmtMin(lastEnd)})</small></div>`;
+    html += '<table class="sched-tbl"><thead><tr><th>Giờ</th><th>Bàn</th><th>Bảng</th><th>Cặp đấu</th></tr></thead><tbody>';
+    rows.forEach(r => html += `<tr><td class="t-time">${fmtMin(r.time)}</td><td>Bàn ${r.table}</td><td>${String.fromCharCode(65 + r.gi)}</td><td>${esc(r.a)} <span class="vs">vs</span> ${esc(r.b)}</td></tr>`);
+    html += '</tbody></table></div>';
+    $('scheduleWrap').innerHTML = html;
+  }
+
+  // =========================================================================
+  // Khởi tạo: đọc dữ liệu chung từ server rồi tự cập nhật mỗi 4 giây
+  async function init() {
+    if (isAdmin) await pullAdmin(); else await pull();
+    render();
+    setInterval(async () => {
+      if (isAdmin) return;                         // admin tự lưu nháp lên server, không tự kéo về
+      if (spinning) return;
+      const a = document.activeElement;
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT')) return;
+      if (await pull()) render();
+    }, 4000);
+  }
+  init();
+})();
+</script>
+</body>
+</html>
