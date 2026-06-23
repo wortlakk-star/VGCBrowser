@@ -31,12 +31,17 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run dist # electron-vite build && electron-builder --win (nsis-web)
+      - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
       - name: Collect Windows artifacts
         shell: bash
         run: |
           mkdir -p out-dl
-          cp release/nsis-web/*.exe release/nsis-web/*.7z release/nsis-web/latest.yml out-dl/
+          # Target is "nsis" (one-file installer) → output is in release/ directly,
+          # NOT release/nsis-web/ and there is no .7z. (This path mismatch is what
+          # silently failed every Windows release since 0.1.46.)
+          cp release/*.exe release/latest.yml out-dl/
+          cp release/*.blockmap out-dl/ 2>/dev/null || true
+          ls -la out-dl/
       - uses: actions/upload-artifact@v4
         with:
           name: win
