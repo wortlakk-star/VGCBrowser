@@ -155,6 +155,20 @@ async function writeSavedTabs(id: string, urls: string[]): Promise<void> {
   }
 }
 
+/**
+ * Remove Chromium's OWN session-restore state so it doesn't reopen tabs natively.
+ * We restore tabs ourselves (readSavedTabs → openUrl); without this, a synced
+ * profile gets DOUBLE tabs — Chromium restores the synced session AND we reopen the
+ * saved set. Deletes both the freshly-extracted (synced) and any stale local copy.
+ */
+async function clearChromiumSession(id: string): Promise<void> {
+  const def = join(profileDataDir(id), 'Default')
+  const targets = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']
+  await Promise.all(
+    targets.map((t) => fs.rm(join(def, t), { recursive: true, force: true }).catch(() => {}))
+  )
+}
+
 /** Read the currently-open page tabs straight from the CDP HTTP endpoint
  *  (http://127.0.0.1:<port>/json/list) — robust, independent of the injector. */
 async function fetchOpenTabs(port: number): Promise<string[]> {
@@ -329,6 +343,11 @@ export async function launchProfile(
     }
   }
 
+  // We reopen tabs ourselves (readSavedTabs → openUrl), so strip Chromium's own
+  // session-restore state — otherwise a synced profile opens every tab TWICE
+  // (Chromium restores the synced session AND we reopen the saved set).
+  await clearChromiumSession(id)
+
   const debugPort = await pickDebugPort()
 
   // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
@@ -373,6 +392,8 @@ export async function launchProfile(
     '--no-default-browser-check',
     '--disable-background-networking',
     '--disable-sync',
+    // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
+    '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,
     `--window-size=${fp.screen.width},${fp.screen.height}`,
     `--user-agent=${fp.userAgent}`,

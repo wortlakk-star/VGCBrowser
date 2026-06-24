@@ -45,8 +45,14 @@ const SKIP_DIRS = new Set<string>([
   'segmentation_platform',
   'Subresource Filter',
   'SwReporter',
-  'GraphiteDawnCache'
+  'GraphiteDawnCache',
+  // Chromium's tab/session restore state — excluded so a synced profile doesn't
+  // restore tabs natively (we reopen them ourselves; otherwise tabs open twice).
+  'Sessions'
 ])
+
+// Individual session-restore FILES (not folders) to drop for the same reason.
+const SKIP_FILES = new Set<string>(['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'])
 
 function shouldSkipDir(name: string): boolean {
   // any cache-like folder + the explicit list above
@@ -82,6 +88,7 @@ function walk(zip: AdmZip, root: string, dir: string): void {
     } else if (e.isFile()) {
       // .pma = sparse memory-mapped metrics files (huge on disk, useless for the session)
       if (e.name.endsWith('.pma')) continue
+      if (SKIP_FILES.has(e.name)) continue // tab/session restore → avoid double tabs
       const relDir = relative(root, dir).split(sep).join('/')
       try {
         zip.addLocalFile(full, relDir, e.name)
