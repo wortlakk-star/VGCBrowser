@@ -31,6 +31,17 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Pre-fetch the ~357MB engine with retries — a flaky download from the host was
+      # the most likely cause of build-win failing on every release after 0.1.58
+      # (Mac, which doesn't fetch the engine, kept publishing fine). npm run dist's
+      # own fetch-engine then skips because engine/chromium/chrome.exe already exists.
+      - name: Fetch engine (with retry)
+        shell: bash
+        run: |
+          for i in 1 2 3 4; do
+            node scripts/fetch-engine.mjs && break || { echo "fetch attempt $i failed; retrying in 20s"; sleep 20; }
+          done
+          test -f engine/chromium/chrome.exe || { echo "engine still missing after retries"; exit 1; }
       - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
       - name: Collect Windows artifacts
         shell: bash
