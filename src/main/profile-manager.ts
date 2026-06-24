@@ -388,6 +388,11 @@ export async function launchProfile(
     `--remote-debugging-port=${debugPort}`,
     // Required by recent Chromium to allow our CDP WebSocket to connect.
     '--remote-allow-origins=*',
+    // Engine-level automation hiding — the single biggest signal for Google's
+    // "this browser or app may not be secure" block. Removes navigator.webdriver
+    // natively AND the other AutomationControlled behaviours that a JS override
+    // can't reach. Required (alongside no Runtime.enable) for Google sign-in.
+    '--disable-blink-features=AutomationControlled',
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
