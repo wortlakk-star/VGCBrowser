@@ -5,6 +5,7 @@
 // overrides into every tab the user opens — not just the first.
 
 import WebSocket from 'ws'
+import type { Readable, Writable } from 'node:stream'
 
 interface Pending {
   resolve: (value: unknown) => void
@@ -23,19 +24,16 @@ interface CdpMessage {
 }
 
 export class CdpConnection {
-  private ws: WebSocket
   private nextId = 1
   private pending = new Map<number, Pending>()
   private handlers = new Map<string, EventHandler[]>()
+  // Transport-agnostic core: WebSocket (port mode) OR a pipe (--remote-debugging-pipe).
+  private writeRaw: (data: string) => void
+  private closeRaw: () => void
 
-  private constructor(ws: WebSocket) {
-    this.ws = ws
-    this.ws.on('message', (data: WebSocket.RawData) => this.onMessage(data.toString()))
-    // If the browser dies, the socket closes/errors. Without this, every in-flight
-    // send() (and any future one) would hang forever — wedging attachInjector and
-    // leaking promises. Reject all pending and mark the connection dead.
-    this.ws.on('close', () => this.failAllPending('CDP connection closed'))
-    this.ws.on('error', () => this.failAllPending('CDP connection error'))
+  private constructor(writeRaw: (data: string) => void, closeRaw: () => void) {
+    this.writeRaw = writeRaw
+    this.closeRaw = closeRaw
   }
 
   private failAllPending(reason: string): void {
@@ -45,6 +43,7 @@ export class CdpConnection {
     this.pending.clear()
   }
 
+  /** Connect over the browser-level WebSocket (requires --remote-debugging-port). */
   static async connect(wsUrl: string): Promise<CdpConnection> {
     const ws = new WebSocket(wsUrl, {
       perMessageDeflate: false,
@@ -54,7 +53,61 @@ export class CdpConnection {
       ws.once('open', () => resolve())
       ws.once('error', (e) => reject(e instanceof Error ? e : new Error(String(e))))
     })
-    return new CdpConnection(ws)
+    const conn = new CdpConnection(
+      (data) => ws.send(data),
+      () => {
+        try {
+          ws.close()
+        } catch {
+          // ignore
+        }
+      }
+    )
+    ws.on('message', (data: WebSocket.RawData) => conn.onMessage(data.toString()))
+    // If the browser dies, the socket closes/errors. Without this, every in-flight
+    // send() (and any future one) would hang forever — wedging attachInjector and
+    // leaking promises. Reject all pending and mark the connection dead.
+    ws.on('close', () => conn.failAllPending('CDP connection closed'))
+    ws.on('error', () => conn.failAllPending('CDP connection error'))
+    return conn
+  }
+
+  /**
+   * Connect over a PIPE (browser launched with --remote-debugging-pipe). CDP JSON
+   * messages are NUL-delimited on the child's inherited fds: we WRITE commands to
+   * fd 3 (writeStream) and READ events/results from fd 4 (readStream). There is NO
+   * TCP debug port, so Google's "this browser or app may not be secure" debug-port
+   * detection has nothing to find — the standard antidetect/Puppeteer approach.
+   */
+  static connectPipe(writeStream: Writable, readStream: Readable): CdpConnection {
+    const conn = new CdpConnection(
+      (data) => {
+        writeStream.write(data + '\0')
+      },
+      () => {
+        try {
+          writeStream.end()
+        } catch {
+          // ignore
+        }
+      }
+    )
+    // Accumulate raw bytes and split on NUL (0x00) — binary-safe across chunk
+    // boundaries (a multi-byte UTF-8 char can straddle two 'data' events).
+    let buf = Buffer.alloc(0)
+    readStream.on('data', (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk])
+      let nul = buf.indexOf(0)
+      while (nul !== -1) {
+        const msg = buf.subarray(0, nul).toString('utf8')
+        buf = buf.subarray(nul + 1)
+        if (msg) conn.onMessage(msg)
+        nul = buf.indexOf(0)
+      }
+    })
+    readStream.on('close', () => conn.failAllPending('CDP pipe closed'))
+    readStream.on('error', () => conn.failAllPending('CDP pipe error'))
+    return conn
   }
 
   on(method: string, handler: EventHandler): void {
@@ -76,12 +129,12 @@ export class CdpConnection {
         resolve: resolve as (v: unknown) => void,
         reject
       })
-      this.ws.send(JSON.stringify(msg), (err) => {
-        if (err) {
-          this.pending.delete(id)
-          reject(err)
-        }
-      })
+      try {
+        this.writeRaw(JSON.stringify(msg))
+      } catch (err) {
+        this.pending.delete(id)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
     }) as Promise<Record<string, unknown>>
   }
 
@@ -108,11 +161,7 @@ export class CdpConnection {
   }
 
   close(): void {
-    try {
-      this.ws.close()
-    } catch {
-      // ignore
-    }
+    this.closeRaw()
   }
 }
 

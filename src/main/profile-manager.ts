@@ -13,7 +13,7 @@
 //   • proxy authentication via local relay — Phase 3
 
 import { spawn, type ChildProcess } from 'child_process'
-import net from 'net'
+import type { Readable, Writable } from 'node:stream'
 import { createHash } from 'crypto'
 import { join } from 'path'
 import { mkdirSync, promises as fs } from 'fs'
@@ -53,33 +53,6 @@ const running = new Map<string, RunningProfile>()
 // the close handler can upload it even when the browser is already gone (the user
 // closed the window directly → CDP is dead by the time 'exit' fires).
 const lastCookieSnapshot = new Map<string, Cookie[]>()
-const DEBUG_PORT_BASE = 9333
-
-/** True if a TCP port on 127.0.0.1 is free to bind right now. */
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = net.createServer()
-    srv.once('error', () => resolve(false))
-    srv.once('listening', () => srv.close(() => resolve(true)))
-    srv.listen(port, '127.0.0.1')
-  })
-}
-
-/**
- * Pick a debug port that is BOTH not used by another running profile AND actually
- * bindable. The old `nextDebugPort++` leaked ports forever and never checked
- * availability — if the port was taken, Chromium silently failed to open the debug
- * endpoint, CDP never connected, and the profile launched with NO fingerprint
- * injection (a detectable, silent failure). Reuses freed ports each call.
- */
-async function pickDebugPort(): Promise<number> {
-  const used = new Set([...running.values()].map((r) => r.state.debugPort))
-  for (let port = DEBUG_PORT_BASE; port < DEBUG_PORT_BASE + 500; port++) {
-    if (used.has(port)) continue
-    if (await isPortFree(port)) return port
-  }
-  throw new Error('Không tìm được cổng debug trống cho profile')
-}
 
 /**
  * Serialize the session-data operations (cloud download-before-open and
@@ -169,21 +142,6 @@ async function clearChromiumSession(id: string): Promise<void> {
   )
 }
 
-/** Read the currently-open page tabs straight from the CDP HTTP endpoint
- *  (http://127.0.0.1:<port>/json/list) — robust, independent of the injector. */
-async function fetchOpenTabs(port: number): Promise<string[]> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/list`)
-    if (!res.ok) return []
-    const list = (await res.json()) as Array<{ type?: string; url?: string }>
-    const urls = list
-      .filter((t) => t.type === 'page' && typeof t.url === 'string' && /^https?:\/\//i.test(t.url))
-      .map((t) => t.url as string)
-    return [...new Set(urls)]
-  } catch {
-    return []
-  }
-}
 function broadcast(state: ProfileRuntimeState): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('profile:status', state)
@@ -279,7 +237,13 @@ function spawnAndWait(exe: string, args: string[]): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let proc: ChildProcess
     try {
-      proc = spawn(exe, args, { detached: false })
+      // stdio fds 3 & 4 are the CDP pipe (--remote-debugging-pipe): we WRITE
+      // commands to fd 3 and READ events from fd 4. No TCP debug port is opened, so
+      // Google's "browser may not be secure" debug-port detection has nothing to find.
+      proc = spawn(exe, args, {
+        detached: false,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe']
+      })
     } catch (e) {
       reject(e instanceof Error ? e : new Error(String(e)))
       return
@@ -348,8 +312,6 @@ export async function launchProfile(
   // (Chromium restores the synced session AND we reopen the saved set).
   await clearChromiumSession(id)
 
-  const debugPort = await pickDebugPort()
-
   // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
   // the proxy's EXIT IP so they can't contradict each other. A US proxy reporting a
   // Vietnam timezone (or leaking the real public IP via WebRTC) is a classic bot
@@ -385,9 +347,10 @@ export async function launchProfile(
 
   const args: string[] = [
     `--user-data-dir=${userDataDir}`,
-    `--remote-debugging-port=${debugPort}`,
-    // Required by recent Chromium to allow our CDP WebSocket to connect.
-    '--remote-allow-origins=*',
+    // CDP over a PIPE, not a TCP port. Google's sign-in blocks browsers launched
+    // with --remote-debugging-port ("this browser or app may not be secure"); the
+    // pipe has no port to detect. We talk to it over the child's fds 3/4 (see spawn).
+    '--remote-debugging-pipe',
     // Engine-level automation hiding — the single biggest signal for Google's
     // "this browser or app may not be secure" block. Removes navigator.webdriver
     // natively AND the other AutomationControlled behaviours that a JS override
@@ -443,7 +406,7 @@ export async function launchProfile(
   // navigation; start URLs are opened via CDP once the injector is attached.
   args.push('about:blank')
 
-  broadcast({ id, status: 'starting', debugPort })
+  broadcast({ id, status: 'starting' })
 
   // Spawn the engine. CRITICAL: on Windows a CreateProcess failure (errno UNKNOWN
   // — the unsigned VGC Core engine.exe blocked/quarantined by antivirus, locked,
@@ -493,7 +456,6 @@ export async function launchProfile(
     id,
     status: 'running',
     pid: proc.pid,
-    debugPort,
     startedAt: new Date().toISOString()
   }
   const entry: RunningProfile = { proc, state, relay }
@@ -526,10 +488,11 @@ export async function launchProfile(
     // Only the VGC Core engine (.app on Mac) spoofs WebGL natively → skip the JS
     // override there to avoid a redundant, detectable getParameter patch.
     const nativeWebgl = process.platform === 'darwin' && actualEngine.includes('VGC Core.app')
-    const injector = await attachInjector({ ...profile, fingerprint: fp }, debugPort, {
-      nativeWebgl,
-      seedCookies: syncedCookies
-    })
+    const injector = await attachInjector(
+      { ...profile, fingerprint: fp },
+      { write: proc.stdio[3] as Writable, read: proc.stdio[4] as Readable },
+      { nativeWebgl, seedCookies: syncedCookies }
+    )
     // The browser may have exited while we were attaching (user closed the lone
     // window, engine crashed on a bad flag). The exit handler already ran and
     // removed us from `running`; assigning + polling now would leak the CDP socket
@@ -550,7 +513,7 @@ export async function launchProfile(
     // (covers the user opening/closing tabs, even when they close the window directly).
     entry.tabPoll = setInterval(() => {
       void (async () => {
-        const urls = await fetchOpenTabs(debugPort)
+        const urls = (await entry.injector?.getOpenTabs()) ?? []
         if (urls.length > 0) await writeSavedTabs(id, urls)
         // Snapshot decrypted cookies for cross-machine login sync. Kept in memory and
         // uploaded on close (when the browser — and CDP — may already be gone).
