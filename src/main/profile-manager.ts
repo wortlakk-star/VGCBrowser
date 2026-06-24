@@ -34,6 +34,7 @@ import {
   uploadProfileCookies
 } from './cloud-data'
 import { getCloudSession } from './session'
+import { getAccountSecret } from './account-secret'
 
 interface RunningProfile {
   proc: ChildProcess
@@ -109,7 +110,12 @@ function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
  * running a patched VGC Core engine). Empty when signed out — cross-machine sync is
  * off then anyway, so the engine keeps its normal machine-bound key.
  */
-function cryptSecretFor(id: string): string {
+async function cryptSecretFor(id: string): Promise<string> {
+  // Prefer the random per-account secret (not derivable from public ids).
+  const accSecret = await getAccountSecret()
+  if (accSecret) return createHash('sha256').update(`${accSecret}:${id}`).digest('hex')
+  // Fallback before supabase/account-secrets.sql is run: derive from uid. Still
+  // works cross-machine, just derivable; auto-upgrades once the secret exists.
   const uid = getCloudSession()?.uid ?? ''
   if (!uid) return ''
   return createHash('sha256').update(`vgc-os-crypt:${uid}:${id}`).digest('hex')
@@ -147,6 +153,20 @@ async function writeSavedTabs(id: string, urls: string[]): Promise<void> {
   } catch {
     // best-effort — tab sync must never break a launch
   }
+}
+
+/**
+ * Remove Chromium's OWN session-restore state so it doesn't reopen tabs natively.
+ * We restore tabs ourselves (readSavedTabs → openUrl); without this, a synced
+ * profile gets DOUBLE tabs — Chromium restores the synced session AND we reopen the
+ * saved set. Deletes both the freshly-extracted (synced) and any stale local copy.
+ */
+async function clearChromiumSession(id: string): Promise<void> {
+  const def = join(profileDataDir(id), 'Default')
+  const targets = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']
+  await Promise.all(
+    targets.map((t) => fs.rm(join(def, t), { recursive: true, force: true }).catch(() => {}))
+  )
 }
 
 /** Read the currently-open page tabs straight from the CDP HTTP endpoint
@@ -323,6 +343,11 @@ export async function launchProfile(
     }
   }
 
+  // We reopen tabs ourselves (readSavedTabs → openUrl), so strip Chromium's own
+  // session-restore state — otherwise a synced profile opens every tab TWICE
+  // (Chromium restores the synced session AND we reopen the saved set).
+  await clearChromiumSession(id)
+
   const debugPort = await pickDebugPort()
 
   // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
@@ -367,6 +392,8 @@ export async function launchProfile(
     '--no-default-browser-check',
     '--disable-background-networking',
     '--disable-sync',
+    // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
+    '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,
     `--window-size=${fp.screen.width},${fp.screen.height}`,
     `--user-agent=${fp.userAgent}`,
@@ -381,7 +408,7 @@ export async function launchProfile(
 
   // Portable os_crypt key (VGC Core engine): same secret on every machine of this
   // account → saved passwords + cookies encrypted on one machine decrypt on another.
-  const cryptSecret = cryptSecretFor(id)
+  const cryptSecret = await cryptSecretFor(id)
   if (cryptSecret) args.push(`--vgc-crypt-secret=${cryptSecret}`)
 
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local

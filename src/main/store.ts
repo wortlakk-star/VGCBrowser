@@ -58,6 +58,20 @@ export async function listProfiles(): Promise<Profile[]> {
   return []
 }
 
+// Serialize every read-modify-write so concurrent mutations (launch bumping
+// lastUsedAt, an auto-pull saveMany, a proxy-check updateProfile, a cloudDataAt
+// write) can't interleave and lose each other's changes. Each serialized fn runs
+// listProfiles()→mutate→writeAll() atomically vs other mutations.
+let writeChain: Promise<unknown> = Promise.resolve()
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn)
+  writeChain = run.then(
+    () => {},
+    () => {}
+  )
+  return run
+}
+
 async function writeAll(profiles: Profile[]): Promise<void> {
   await fs.mkdir(dataDir(), { recursive: true })
   const plain = JSON.stringify(profiles, null, 2)
@@ -80,17 +94,21 @@ export async function getProfile(id: string): Promise<Profile | null> {
 }
 
 export async function saveProfile(profile: Profile): Promise<Profile> {
-  const all = await listProfiles()
-  const idx = all.findIndex((p) => p.id === profile.id)
-  if (idx >= 0) all[idx] = profile
-  else all.push(profile)
-  await writeAll(all)
-  return profile
+  return serialize(async () => {
+    const all = await listProfiles()
+    const idx = all.findIndex((p) => p.id === profile.id)
+    if (idx >= 0) all[idx] = profile
+    else all.push(profile)
+    await writeAll(all)
+    return profile
+  })
 }
 
 export async function deleteProfile(id: string): Promise<void> {
-  const all = await listProfiles()
-  await writeAll(all.filter((p) => p.id !== id))
+  return serialize(async () => {
+    const all = await listProfiles()
+    await writeAll(all.filter((p) => p.id !== id))
+  })
 }
 
 /**
@@ -100,16 +118,30 @@ export async function deleteProfile(id: string): Promise<void> {
  */
 export async function removeMany(ids: string[]): Promise<void> {
   if (!ids.length) return
-  const all = await listProfiles()
-  const set = new Set(ids)
-  const next = all.filter((p) => !set.has(p.id))
-  if (next.length !== all.length) await writeAll(next)
+  return serialize(async () => {
+    const all = await listProfiles()
+    const set = new Set(ids)
+    const next = all.filter((p) => !set.has(p.id))
+    if (next.length !== all.length) await writeAll(next)
+  })
 }
 
-/** Upsert many profiles at once (used by import + cloud pull). */
+/**
+ * Upsert many profiles at once (used by import + cloud pull). On pull, an incoming
+ * copy only OVERWRITES a local one when it is newer (by updatedAt) — so an auto-pull
+ * can't clobber a local edit that hasn't been pushed yet (e.g. a push that failed
+ * transiently). New ids are always added. ISO timestamps compare lexicographically.
+ */
 export async function saveMany(profiles: Profile[]): Promise<void> {
-  const all = await listProfiles()
-  const byId = new Map(all.map((p) => [p.id, p]))
-  for (const p of profiles) byId.set(p.id, p)
-  await writeAll([...byId.values()])
+  return serialize(async () => {
+    const all = await listProfiles()
+    const byId = new Map(all.map((p) => [p.id, p]))
+    for (const p of profiles) {
+      const existing = byId.get(p.id)
+      if (!existing || !existing.updatedAt || (p.updatedAt ?? '') >= existing.updatedAt) {
+        byId.set(p.id, p)
+      }
+    }
+    await writeAll([...byId.values()])
+  })
 }

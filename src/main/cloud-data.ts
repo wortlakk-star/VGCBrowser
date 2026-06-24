@@ -19,6 +19,7 @@ import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
 import { getProfile, saveProfile } from './store'
 import { getCloudSession } from './session'
+import { getAccountSecret, encryptWithSecret, decryptWithSecret } from './account-secret'
 import type { Cookie } from '../shared/types'
 
 const BUCKET = 'profiles'
@@ -44,8 +45,26 @@ const SKIP_DIRS = new Set<string>([
   'segmentation_platform',
   'Subresource Filter',
   'SwReporter',
-  'GraphiteDawnCache'
+  'GraphiteDawnCache',
+  // Chromium's tab/session restore state — excluded so a synced profile doesn't
+  // restore tabs natively (we reopen them ourselves; otherwise tabs open twice).
+  'Sessions',
+  // Big, non-login-session folders that bloat the zip past the 50MB cloud limit
+  // (a profile's "Download Service" alone was seen at 44MB) → upload 413s and the
+  // session never saves. None of these hold the login session.
+  'Download Service',
+  'Shared Dictionary',
+  'shared_proto_db',
+  'JumpListIconsMostVisited',
+  'segmentation_platform',
+  'optimization_guide_hint_cache_store',
+  'AutofillStates',
+  'PnaclTranslationCache',
+  'VideoDecodeStats'
 ])
+
+// Individual session-restore FILES (not folders) to drop for the same reason.
+const SKIP_FILES = new Set<string>(['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'])
 
 function shouldSkipDir(name: string): boolean {
   // any cache-like folder + the explicit list above
@@ -81,6 +100,7 @@ function walk(zip: AdmZip, root: string, dir: string): void {
     } else if (e.isFile()) {
       // .pma = sparse memory-mapped metrics files (huge on disk, useless for the session)
       if (e.name.endsWith('.pma')) continue
+      if (SKIP_FILES.has(e.name)) continue // tab/session restore → avoid double tabs
       const relDir = relative(root, dir).split(sep).join('/')
       try {
         zip.addLocalFile(full, relDir, e.name)
@@ -225,7 +245,14 @@ export async function uploadProfileCookies(id: string, cookies: Cookie[]): Promi
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) return
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(session.uid, id)}`
-  const body = Buffer.from(JSON.stringify(cookies), 'utf-8')
+  // Encrypt the cookies with the per-account secret before they leave the machine,
+  // so a leaked bucket shows ciphertext, not live session tokens. Falls back to
+  // plaintext only when the secret isn't available yet (pre-migration).
+  const json = JSON.stringify(cookies)
+  const secret = await getAccountSecret()
+  const body = secret
+    ? Buffer.from(JSON.stringify({ enc: encryptWithSecret(secret, 'cookies', json) }), 'utf-8')
+    : Buffer.from(json, 'utf-8')
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -255,8 +282,17 @@ export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
   if (res.status === 404 || res.status === 400) return []
   if (!res.ok) return []
   try {
-    const data = (await res.json()) as Cookie[]
-    return Array.isArray(data) ? data : []
+    const data = (await res.json()) as Cookie[] | { enc?: string }
+    if (Array.isArray(data)) return data // legacy plaintext
+    if (data && typeof data.enc === 'string') {
+      const secret = await getAccountSecret()
+      if (!secret) return []
+      const json = decryptWithSecret(secret, 'cookies', data.enc)
+      if (!json) return []
+      const arr = JSON.parse(json) as Cookie[]
+      return Array.isArray(arr) ? arr : []
+    }
+    return []
   } catch {
     return []
   }

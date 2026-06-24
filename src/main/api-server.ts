@@ -61,6 +61,15 @@ export async function startApiServer(opts: {
       const path = url.pathname
       const method = req.method ?? 'GET'
 
+      // Anti-DNS-rebinding / anti-CSRF: a real automation client connects straight to
+      // 127.0.0.1 and sends NO Origin header; a web page in any browser always sends
+      // one. Pinning Host to loopback also defeats a rebound domain (evil.com →
+      // 127.0.0.1) reaching the API. Reject both before doing anything else.
+      const hostHeader = (req.headers.host ?? '').split(':')[0]
+      if (req.headers.origin || (hostHeader !== '127.0.0.1' && hostHeader !== 'localhost')) {
+        return send(res, 403, { error: 'Forbidden' })
+      }
+
       // Health check needs no auth.
       if (path === '/ping') {
         return send(res, 200, { ok: true, app: 'vgc-browser' })
