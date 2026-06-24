@@ -6,9 +6,10 @@ name: Build & publish (auto-update)
 # "version" in package.json in the commit you push (installs only update to a
 # higher version). Run manually anytime via the "Run workflow" button.
 #
-# One-time setup: add a repo secret DEPLOY_SSH_PASSWORD = the Hostinger SSH password
-# (Settings → Secrets and variables → Actions → New repository secret). A dedicated
-# SSH key is more secure — see the note at the bottom of this file.
+# Uploads via SSH KEY (repo secret HOSTINGER_SSH_KEY = the id_ed25519 private key) —
+# the SAME key build-mac.yml uses. The old password secret (DEPLOY_SSH_PASSWORD) never
+# authenticated for the Windows publish, so the Windows auto-update feed froze while
+# macOS (key-based) kept advancing. Use the key for both.
 
 # Triggered MANUALLY (button) or by a version tag — NOT on every push to main,
 # because the repo's git auto-sync commits to main every ~10-20 min and we don't
@@ -92,29 +93,23 @@ jobs:
           path: dl
       - name: List files to publish
         run: ls -la dl/
-      - name: Upload installers + update feed to /dl
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: 212.85.28.201
-          port: 65002
-          username: u469659181
-          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
-          source: 'dl/*'
-          target: 'domains/vgcbrowser.com/public_html/dl'
-          strip_components: 1
-      - name: Upload landing page to webroot
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: 212.85.28.201
-          port: 65002
-          username: u469659181
-          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
-          source: 'web/index.html'
-          target: 'domains/vgcbrowser.com/public_html'
-          strip_components: 1
-
-# More secure alternative to DEPLOY_SSH_PASSWORD: generate a dedicated key
-#   ssh-keygen -t ed25519 -f deploy_key -N ""
-# add deploy_key.pub to the server's ~/.ssh/authorized_keys, store the private
-# deploy_key as secret DEPLOY_SSH_KEY, and replace "password:" above with
-#   key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Upload installers + update feed + landing page via SSH key
+        env:
+          SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::Missing secret HOSTINGER_SSH_KEY. Add it in repo Settings -> Secrets -> Actions (the id_ed25519 private key)."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 65002 212.85.28.201 >> ~/.ssh/known_hosts 2>/dev/null || true
+          DEST="domains/vgcbrowser.com/public_html/dl"
+          ssh -p 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new u469659181@212.85.28.201 "mkdir -p $DEST"
+          echo "Files to upload:"; ls -la dl/
+          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
+            dl/* u469659181@212.85.28.201:"$DEST/"
+          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
+            web/index.html u469659181@212.85.28.201:"domains/vgcbrowser.com/public_html/"
+          echo "Uploaded Windows + macOS build to https://vgcbrowser.com/dl/"
