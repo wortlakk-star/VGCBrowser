@@ -115,24 +115,27 @@ async function downloadMacEngine(
 export async function ensureEngine(
   onProgress?: (p: EngineProgress) => void
 ): Promise<string> {
-  // 1. Already downloaded locally (runtime download from a previous launch).
-  if (existsSync(downloadedEngineExe())) return downloadedEngineExe()
-
-  // 2. Explicit override (e.g. local dev build).
+  // 1. Explicit override (e.g. local dev build).
   const override = process.env.VGC_ENGINE_PATH
   if (override && existsSync(override)) return override
 
-  // 2b. macOS: prefer the locally-built VGC Core engine (own Dock icon, isolated from
-  //     the user's Chrome, CDP works) over the system Chrome.
+  // 2. macOS: prefer the locally-built VGC Core engine (own Dock icon, isolated from
+  //    the user's Chrome, CDP works) over the system Chrome.
   const macCore = macVgcCoreEngine()
   if (macCore) return macCore
 
   // 3. Engine BUNDLED with the installer (electron-builder win.extraResources →
-  //    resources/engine/chromium). A fresh machine then has the antidetect engine
-  //    immediately, with NO 341MB download. resolveEnginePath() finds it as a
-  //    dedicated engine (vs a system-browser fallback).
+  //    resources/engine/chromium), BRANDED with the VGC logo by brand-engine.mjs at
+  //    build time. Preferred OVER any older runtime-downloaded engine in userData:
+  //    that copy is the RAW unbranded zip, so using it would still show the stock
+  //    Chromium logo on Windows even after the app updates. A fresh machine also
+  //    gets the engine immediately here, with NO 341MB download.
   const resolved = resolveEnginePath()
   if (resolved && isDedicatedEngine(resolved)) return resolved
+
+  // 4. A previously runtime-downloaded engine in userData (only reached when no
+  //    bundled engine is present — an old install or a dev run).
+  if (existsSync(downloadedEngineExe())) return downloadedEngineExe()
 
   // 4. macOS: download the native VGC Core engine (a built Chromium .app) if it's
   //    hosted (settings.engineUrlMac) and not yet installed; else fall back to the
