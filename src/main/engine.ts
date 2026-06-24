@@ -57,12 +57,18 @@ export function resolveEnginePath(): string | null {
   if (override && existsSync(override)) return override
 
   const dedicated = [
-    // downloaded on-demand engine (userData)
-    join(app.getPath('userData'), 'engine', 'chromium', 'chrome.exe'),
-    // bundled, relative to packaged app
+    // bundled, relative to packaged app — BRANDED with the VGC logo by brand-engine.mjs
+    // at build time. Must come BEFORE the userData copy: that copy is the RAW unbranded
+    // runtime download, so returning it first kept the stock Chromium icon on machines
+    // that had downloaded it under an older version. (The dff8502 fix reordered
+    // ensureEngine() but delegated here, where userData was still first — so it never
+    // actually took effect. This is the real fix.)
     join(app.getAppPath(), '..', 'engine', 'chromium', 'chrome.exe'),
     // bundled, relative to project root during dev
-    join(process.cwd(), 'engine', 'chromium', 'chrome.exe')
+    join(process.cwd(), 'engine', 'chromium', 'chrome.exe'),
+    // downloaded on-demand engine (userData) — UNBRANDED. Only used as a last resort
+    // when no bundled engine exists (an old install or a dev run without a local engine).
+    join(app.getPath('userData'), 'engine', 'chromium', 'chrome.exe')
   ]
   for (const candidate of dedicated) {
     if (existsSync(candidate)) return candidate
