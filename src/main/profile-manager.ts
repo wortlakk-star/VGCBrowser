@@ -7,7 +7,8 @@
 //   ✓ isolated user-data-dir per profile
 //   ✓ per-profile proxy (no-auth)
 //   ✓ UA / window-size / language passed as launch flags
-//   ✓ remote-debugging-port reserved per profile (used by Phase 1 + automation)
+//   ✓ CDP over a PIPE (--remote-debugging-pipe, fds 3/4) — no TCP debug port, so
+//     Google sign-in no longer flags it "this browser or app may not be secure"
 // Not yet (later phases):
 //   • CDP fingerprint injection (canvas/webgl/audio/webrtc) — Phase 1
 //   • proxy authentication via local relay — Phase 3
