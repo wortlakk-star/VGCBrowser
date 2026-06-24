@@ -34,6 +34,7 @@ import {
   uploadProfileCookies
 } from './cloud-data'
 import { getCloudSession } from './session'
+import { getAccountSecret } from './account-secret'
 
 interface RunningProfile {
   proc: ChildProcess
@@ -109,7 +110,12 @@ function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
  * running a patched VGC Core engine). Empty when signed out — cross-machine sync is
  * off then anyway, so the engine keeps its normal machine-bound key.
  */
-function cryptSecretFor(id: string): string {
+async function cryptSecretFor(id: string): Promise<string> {
+  // Prefer the random per-account secret (not derivable from public ids).
+  const accSecret = await getAccountSecret()
+  if (accSecret) return createHash('sha256').update(`${accSecret}:${id}`).digest('hex')
+  // Fallback before supabase/account-secrets.sql is run: derive from uid. Still
+  // works cross-machine, just derivable; auto-upgrades once the secret exists.
   const uid = getCloudSession()?.uid ?? ''
   if (!uid) return ''
   return createHash('sha256').update(`vgc-os-crypt:${uid}:${id}`).digest('hex')
@@ -381,7 +387,7 @@ export async function launchProfile(
 
   // Portable os_crypt key (VGC Core engine): same secret on every machine of this
   // account → saved passwords + cookies encrypted on one machine decrypt on another.
-  const cryptSecret = cryptSecretFor(id)
+  const cryptSecret = await cryptSecretFor(id)
   if (cryptSecret) args.push(`--vgc-crypt-secret=${cryptSecret}`)
 
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local

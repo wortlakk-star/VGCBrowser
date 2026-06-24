@@ -19,6 +19,7 @@ import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
 import { getProfile, saveProfile } from './store'
 import { getCloudSession } from './session'
+import { getAccountSecret, encryptWithSecret, decryptWithSecret } from './account-secret'
 import type { Cookie } from '../shared/types'
 
 const BUCKET = 'profiles'
@@ -225,7 +226,14 @@ export async function uploadProfileCookies(id: string, cookies: Cookie[]): Promi
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) return
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(session.uid, id)}`
-  const body = Buffer.from(JSON.stringify(cookies), 'utf-8')
+  // Encrypt the cookies with the per-account secret before they leave the machine,
+  // so a leaked bucket shows ciphertext, not live session tokens. Falls back to
+  // plaintext only when the secret isn't available yet (pre-migration).
+  const json = JSON.stringify(cookies)
+  const secret = await getAccountSecret()
+  const body = secret
+    ? Buffer.from(JSON.stringify({ enc: encryptWithSecret(secret, 'cookies', json) }), 'utf-8')
+    : Buffer.from(json, 'utf-8')
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -255,8 +263,17 @@ export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
   if (res.status === 404 || res.status === 400) return []
   if (!res.ok) return []
   try {
-    const data = (await res.json()) as Cookie[]
-    return Array.isArray(data) ? data : []
+    const data = (await res.json()) as Cookie[] | { enc?: string }
+    if (Array.isArray(data)) return data // legacy plaintext
+    if (data && typeof data.enc === 'string') {
+      const secret = await getAccountSecret()
+      if (!secret) return []
+      const json = decryptWithSecret(secret, 'cookies', data.enc)
+      if (!json) return []
+      const arr = JSON.parse(json) as Cookie[]
+      return Array.isArray(arr) ? arr : []
+    }
+    return []
   } catch {
     return []
   }
