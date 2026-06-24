@@ -48,7 +48,19 @@ const SKIP_DIRS = new Set<string>([
   'GraphiteDawnCache',
   // Chromium's tab/session restore state — excluded so a synced profile doesn't
   // restore tabs natively (we reopen them ourselves; otherwise tabs open twice).
-  'Sessions'
+  'Sessions',
+  // Big, non-login-session folders that bloat the zip past the 50MB cloud limit
+  // (a profile's "Download Service" alone was seen at 44MB) → upload 413s and the
+  // session never saves. None of these hold the login session.
+  'Download Service',
+  'Shared Dictionary',
+  'shared_proto_db',
+  'JumpListIconsMostVisited',
+  'segmentation_platform',
+  'optimization_guide_hint_cache_store',
+  'AutofillStates',
+  'PnaclTranslationCache',
+  'VideoDecodeStats'
 ])
 
 // Individual session-restore FILES (not folders) to drop for the same reason.
