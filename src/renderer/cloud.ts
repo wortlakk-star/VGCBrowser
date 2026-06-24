@@ -55,6 +55,9 @@ export async function pullCloudProfileList(): Promise<number> {
   const live = rows.filter((r) => !r.deleted).map((r) => r.data)
   const deletedIds = rows.filter((r) => r.deleted).map((r) => r.profile_id)
   await window.vgc.bulkUpsertProfiles(live)
+  // Don't let a just-pulled profile look "changed" to the next push — it would echo
+  // it straight back, bumping updated_at and ping-ponging with the other machine.
+  for (const p of live) lastPushedAt.set(p.id, p.updatedAt)
   // Apply deletions from other machines: a profile tombstoned in the cloud is
   // removed locally so it stops re-appearing on every "Làm mới".
   if (deletedIds.length) await window.vgc.removeProfiles(deletedIds)

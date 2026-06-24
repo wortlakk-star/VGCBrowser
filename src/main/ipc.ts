@@ -135,16 +135,33 @@ export function registerIpc(): void {
       : await dialog.showOpenDialog(opts)
     if (res.canceled || res.filePaths.length === 0) return { count: 0 }
     const raw = await fs.readFile(res.filePaths[0], 'utf-8')
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) throw new Error('File không hợp lệ (cần một mảng profile).')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return { count: 0, error: 'File không phải JSON hợp lệ.' }
+    }
+    if (!Array.isArray(parsed)) return { count: 0, error: 'File không hợp lệ (cần một mảng profile).' }
     const now = new Date().toISOString()
-    const incoming: Profile[] = parsed.map((p: Profile) => ({
-      ...p,
-      id: randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-      lastUsedAt: undefined
-    }))
+    // Defensive defaults: a hand-edited / foreign export may miss proxy/fingerprint/
+    // startUrls, which would otherwise crash launchProfile later. Fill them in.
+    const incoming: Profile[] = parsed.map((p: Partial<Profile>) => {
+      const os: OsType = p.os ?? 'windows'
+      return {
+        ...p,
+        id: randomUUID(),
+        name: p.name || 'Imported profile',
+        notes: p.notes ?? '',
+        tags: Array.isArray(p.tags) ? p.tags : [],
+        os,
+        fingerprint: p.fingerprint ?? generateFingerprint(os),
+        proxy: p.proxy ?? { type: 'none' },
+        startUrls: Array.isArray(p.startUrls) ? p.startUrls : [],
+        createdAt: now,
+        updatedAt: now,
+        lastUsedAt: undefined
+      } as Profile
+    })
     await saveMany(incoming)
     return { count: incoming.length }
   })
@@ -275,7 +292,12 @@ export function registerIpc(): void {
       : await dialog.showOpenDialog(opts)
     if (res.canceled || res.filePaths.length === 0) return []
     const raw = await fs.readFile(res.filePaths[0], 'utf-8')
-    const parsed = JSON.parse(raw)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return []
+    }
     const arr: Array<Record<string, unknown>> = Array.isArray(parsed)
       ? parsed
       : Array.isArray((parsed as { cookies?: unknown }).cookies)
