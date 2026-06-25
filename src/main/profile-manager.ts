@@ -384,6 +384,8 @@ export async function launchProfile(
     `--vgc-device-memory=${fp.deviceMemory}`,
     `--vgc-webgl-vendor=${fp.webgl.vendor}`,
     `--vgc-webgl-renderer=${fp.webgl.renderer}`,
+    // IANA timezone → engine overrides ICU default zone (JS Date / Intl) natively.
+    `--vgc-timezone=${fp.timezone}`,
     // Unique per-profile seed → engine seeds canvas/audio noise so every Chrome differs.
     `--vgc-seed=${seedFromString(id)}`
   ]
