@@ -172,6 +172,12 @@ export function registerIpc(): void {
 
   ipcMain.handle('profiles:launch', (_e, id: string) => launchProfile(id))
 
+  // Clean-login mode: open with NO CDP/automation so Google sign-in works. Log in
+  // once here; later normal opens reuse the saved session (already logged in).
+  ipcMain.handle('profiles:loginClean', (_e, id: string) =>
+    launchProfile(id, { cleanLogin: true })
+  )
+
   ipcMain.handle('profiles:stop', (_e, id: string) => {
     stopProfile(id)
   })

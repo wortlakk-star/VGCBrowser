@@ -56,6 +56,9 @@ const api = {
   launchProfile: (id: string): Promise<ProfileRuntimeState> =>
     ipcRenderer.invoke('profiles:launch', id),
 
+  loginClean: (id: string): Promise<ProfileRuntimeState> =>
+    ipcRenderer.invoke('profiles:loginClean', id),
+
   launchMany: (ids: string[]): Promise<void> =>
     ipcRenderer.invoke('profiles:launchMany', ids),
 

@@ -348,6 +348,19 @@ export default function App(): JSX.Element {
     },
     [autoCheckProxies]
   )
+  const loginClean = useCallback(async (id: string) => {
+    try {
+      await window.vgc.loginClean(id)
+      window.alert(
+        'Đã mở chế độ ĐĂNG NHẬP SẠCH (Chrome thật, không chống phát hiện).\n\n' +
+          '1. Đăng nhập Gmail/Google trong cửa sổ vừa mở.\n' +
+          '2. Đăng nhập xong thì ĐÓNG cửa sổ.\n' +
+          '3. Mở profile bình thường (nút Mở) — sẽ đã đăng nhập sẵn, không bị chặn.'
+      )
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
   const stop = useCallback(async (id: string) => {
     await window.vgc.stopProfile(id)
   }, [])
@@ -631,6 +644,7 @@ export default function App(): JSX.Element {
               onRun={run}
               onStop={stop}
               onCheck={check}
+              onLoginClean={loginClean}
               onEdit={setEditing}
               onDuplicate={duplicate}
               onDelete={remove}

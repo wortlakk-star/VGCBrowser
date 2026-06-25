@@ -234,16 +234,17 @@ export async function stopAllAndSync(): Promise<void> {
  * sync throw and the async 'error' — which is what lets the system-browser
  * fallback actually kick in instead of the launch dying with "spawn UNKNOWN".
  */
-function spawnAndWait(exe: string, args: string[]): Promise<ChildProcess> {
+function spawnAndWait(exe: string, args: string[], usePipe: boolean): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let proc: ChildProcess
     try {
-      // stdio fds 3 & 4 are the CDP pipe (--remote-debugging-pipe): we WRITE
-      // commands to fd 3 and READ events from fd 4. No TCP debug port is opened, so
-      // Google's "browser may not be secure" debug-port detection has nothing to find.
+      // Normal launch: stdio fds 3 & 4 are the CDP pipe (--remote-debugging-pipe) — we
+      // WRITE commands to fd 3 and READ events from fd 4, no TCP debug port.
+      // Clean-login launch (usePipe=false): NO CDP at all, so Google's sign-in sees an
+      // ordinary browser and lets you log in; the session persists in the profile dir.
       proc = spawn(exe, args, {
         detached: false,
-        stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe']
+        stdio: usePipe ? ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] : 'ignore'
       })
     } catch (e) {
       reject(e instanceof Error ? e : new Error(String(e)))
@@ -269,7 +270,7 @@ function spawnAndWait(exe: string, args: string[]): Promise<ChildProcess> {
 
 export async function launchProfile(
   id: string,
-  opts: { headless?: boolean } = {}
+  opts: { headless?: boolean; cleanLogin?: boolean } = {}
 ): Promise<ProfileRuntimeState> {
   const existing = running.get(id)
   if (existing) return existing.state
@@ -277,9 +278,25 @@ export async function launchProfile(
   const profile = await getProfile(id)
   if (!profile) throw new Error(`Không tìm thấy profile: ${id}`)
 
+  // Clean-login mode: open the profile with NO CDP attached (no injector), using the
+  // GENUINE system Chrome — so Google sign-in sees an ordinary browser and lets you
+  // log in directly. The session is saved into the profile dir; a later normal open
+  // (CDP-injected antidetect) is already logged in, so it never hits the sign-in block.
+  const cleanLogin = opts.cleanLogin === true
+
   let enginePath: string
   try {
-    enginePath = await ensureEngine((p) => broadcastEngine(id, p))
+    if (cleanLogin) {
+      const sys = resolveSystemBrowser()
+      if (!sys) {
+        throw new Error(
+          'Chế độ đăng nhập sạch cần Google Chrome thật trên máy. Hãy cài Google Chrome rồi thử lại.'
+        )
+      }
+      enginePath = sys
+    } else {
+      enginePath = await ensureEngine((p) => broadcastEngine(id, p))
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     broadcast({ id, status: 'error', error: msg })
@@ -348,10 +365,6 @@ export async function launchProfile(
 
   const args: string[] = [
     `--user-data-dir=${userDataDir}`,
-    // CDP over a PIPE, not a TCP port. Google's sign-in blocks browsers launched
-    // with --remote-debugging-port ("this browser or app may not be secure"); the
-    // pipe has no port to detect. We talk to it over the child's fds 3/4 (see spawn).
-    '--remote-debugging-pipe',
     // Engine-level automation hiding — the single biggest signal for Google's
     // "this browser or app may not be secure" block. Removes navigator.webdriver
     // natively AND the other AutomationControlled behaviours that a JS override
@@ -403,9 +416,13 @@ export async function launchProfile(
   // Headless (used by the automation API).
   if (opts.headless) args.push('--headless=new')
 
-  // Launch with a blank page so overrides are installed BEFORE any real
-  // navigation; start URLs are opened via CDP once the injector is attached.
-  args.push('about:blank')
+  // Normal launch talks CDP over a PIPE (no TCP debug port). Clean-login mode omits
+  // it entirely → NO automation session attached → Google sign-in works.
+  if (!cleanLogin) args.push('--remote-debugging-pipe')
+
+  // Launch with a blank page so overrides are installed BEFORE any real navigation.
+  // Clean login opens gmail directly so the user can sign in.
+  args.push(cleanLogin ? 'https://accounts.google.com/' : 'about:blank')
 
   broadcast({ id, status: 'starting' })
 
@@ -423,7 +440,7 @@ export async function launchProfile(
   // WebGL in C++, so only then do we skip the JS getParameter override.
   let actualEngine = enginePath
   try {
-    proc = await spawnAndWait(enginePath, args)
+    proc = await spawnAndWait(enginePath, args, !cleanLogin)
   } catch (err) {
     const fallback = resolveSystemBrowser(enginePath)
     if (!fallback) {
@@ -441,7 +458,7 @@ export async function launchProfile(
       message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
     })
     try {
-      proc = await spawnAndWait(fallback, args)
+      proc = await spawnAndWait(fallback, args, !cleanLogin)
       actualEngine = fallback
     } catch (err2) {
       relay?.close()
@@ -482,6 +499,11 @@ export async function launchProfile(
     running.delete(id)
     broadcast({ id, status: 'error', error: String(err) })
   })
+
+  // Clean-login mode: NO CDP injector (that's the whole point — Google must see an
+  // ordinary browser). The browser already opened accounts.google.com; the user logs
+  // in, and the session is saved to the profile dir + synced on close.
+  if (cleanLogin) return state
 
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.
