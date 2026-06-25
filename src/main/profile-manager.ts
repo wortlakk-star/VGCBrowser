@@ -330,6 +330,14 @@ export async function launchProfile(
   // (Chromium restores the synced session AND we reopen the saved set).
   await clearChromiumSession(id)
 
+  // Clean-login opens the profile dir with the GENUINE system Chrome, but the dir may
+  // have been written by a newer engine (Chromium 149) → Chrome refuses with "profile
+  // from a newer version of Chrome". Drop the version marker so any Chrome opens it
+  // (cookies/logins are untouched, so the session still persists).
+  if (cleanLogin) {
+    await fs.rm(join(profileDataDir(id), 'Last Version'), { force: true }).catch(() => {})
+  }
+
   // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
   // the proxy's EXIT IP so they can't contradict each other. A US proxy reporting a
   // Vietnam timezone (or leaking the real public IP via WebRTC) is a classic bot

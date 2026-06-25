@@ -12,6 +12,7 @@ interface Props {
   onRun: (id: string) => void
   onStop: (id: string) => void
   onCheck: (id: string) => void
+  onLoginClean: (id: string) => void
   onEdit: (p: Profile) => void
   onDuplicate: (id: string) => void
   onDelete: (id: string) => void
@@ -67,6 +68,7 @@ export function ProfileTable({
   onRun,
   onStop,
   onCheck,
+  onLoginClean,
   onEdit,
   onDuplicate,
   onDelete,
@@ -201,6 +203,13 @@ export function ProfileTable({
                   onClick={() => onCheck(p.id)}
                 >
                   Kiểm tra
+                </button>
+                <button
+                  className="btn"
+                  title="Mở Chrome thật (không chống phát hiện) để đăng nhập Google trực tiếp — sau đó mở bình thường vẫn đăng nhập"
+                  onClick={() => onLoginClean(p.id)}
+                >
+                  Đăng nhập Google
                 </button>
                 <button className="btn" onClick={() => onEdit(p)}>
                   Sửa
