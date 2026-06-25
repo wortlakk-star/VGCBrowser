@@ -341,12 +341,19 @@ table.profiles tr:hover td {
 }
 
 .actions-col {
-  white-space: nowrap;
-  text-align: right;
+  /* Wrap actions instead of overflowing off-screen; right-aligned, compact. */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
 }
 
-.actions-col .btn {
-  margin-left: 6px;
+.actions-col .btn,
+.actions-col .group-select {
+  margin-left: 0;
+  padding: 6px 11px;
+  font-size: 12px;
 }
 
 /* ── group select ── */

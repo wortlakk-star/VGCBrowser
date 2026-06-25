@@ -21,12 +21,12 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 })
 
 function createWindow(): void {
-  // Window/taskbar icon. Packaged → resources/vgc.ico (electron-builder extraResources);
-  // dev → the repo's resources/vgc.ico. Without this the title bar / taskbar show a
-  // generic icon instead of the VGC logo.
+  // Window/taskbar icon — the clean transparent VGC logo (icon.png), NOT vgc.ico which
+  // has a white badge/ring. Packaged → resources/icon.png (bundled via extraResources);
+  // dev → the repo's resources/icon.png.
   const iconPath = app.isPackaged
-    ? join(process.resourcesPath, 'vgc.ico')
-    : join(__dirname, '../../resources/vgc.ico')
+    ? join(process.resourcesPath, 'icon.png')
+    : join(__dirname, '../../resources/icon.png')
 
   const win = new BrowserWindow({
     width: 1280,

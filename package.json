@@ -36,15 +36,15 @@
       "target": [
         "nsis"
       ],
-      "icon": "resources/vgc.ico",
+      "icon": "resources/icon.png",
       "extraResources": [
         {
           "from": "engine/chromium",
           "to": "engine/chromium"
         },
         {
-          "from": "resources/vgc.ico",
-          "to": "vgc.ico"
+          "from": "resources/icon.png",
+          "to": "icon.png"
         }
       ]
     },
