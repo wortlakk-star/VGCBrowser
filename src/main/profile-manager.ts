@@ -25,6 +25,7 @@ import { resolveSystemBrowser } from './engine'
 import { checkProxy } from './proxy-check'
 import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, saveProfile } from './store'
+import { getSettings } from './settings'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
 import { seedFromString } from './fingerprint-script'
@@ -278,25 +279,18 @@ export async function launchProfile(
   const profile = await getProfile(id)
   if (!profile) throw new Error(`Không tìm thấy profile: ${id}`)
 
-  // Clean-login mode: open the profile with NO CDP attached (no injector), using the
-  // GENUINE system Chrome — so Google sign-in sees an ordinary browser and lets you
-  // log in directly. The session is saved into the profile dir; a later normal open
-  // (CDP-injected antidetect) is already logged in, so it never hits the sign-in block.
+  // GoLogin model: open with the engine's NATIVE C++ fingerprint spoofing and DO NOT
+  // attach a CDP debugger — Google blocks browsers with an active CDP session at
+  // sign-in, so this is what makes Google login work. nativeMode is ON by default;
+  // the "Đăng nhập Google" button (opts.cleanLogin) always skips CDP too. The headless
+  // automation API path keeps CDP (it has no human signing into Google).
+  const settings = await getSettings()
+  const skipCdp = !opts.headless && (opts.cleanLogin === true || settings.nativeMode !== false)
   const cleanLogin = opts.cleanLogin === true
 
   let enginePath: string
   try {
-    if (cleanLogin) {
-      const sys = resolveSystemBrowser()
-      if (!sys) {
-        throw new Error(
-          'Chế độ đăng nhập sạch cần Google Chrome thật trên máy. Hãy cài Google Chrome rồi thử lại.'
-        )
-      }
-      enginePath = sys
-    } else {
-      enginePath = await ensureEngine((p) => broadcastEngine(id, p))
-    }
+    enginePath = await ensureEngine((p) => broadcastEngine(id, p))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     broadcast({ id, status: 'error', error: msg })
@@ -330,11 +324,10 @@ export async function launchProfile(
   // (Chromium restores the synced session AND we reopen the saved set).
   await clearChromiumSession(id)
 
-  // Clean-login opens the profile dir with the GENUINE system Chrome, but the dir may
-  // have been written by a newer engine (Chromium 149) → Chrome refuses with "profile
-  // from a newer version of Chrome". Drop the version marker so any Chrome opens it
-  // (cookies/logins are untouched, so the session still persists).
-  if (cleanLogin) {
+  // If opening with the GENUINE system Chrome (useSystemBrowser), the dir may have been
+  // written by a newer engine (Chromium 149) → Chrome refuses "profile from a newer
+  // version". Drop the version marker so any Chrome opens it (cookies/logins untouched).
+  if (settings.useSystemBrowser) {
     await fs.rm(join(profileDataDir(id), 'Last Version'), { force: true }).catch(() => {})
   }
 
@@ -424,13 +417,20 @@ export async function launchProfile(
   // Headless (used by the automation API).
   if (opts.headless) args.push('--headless=new')
 
-  // Normal launch talks CDP over a PIPE (no TCP debug port). Clean-login mode omits
-  // it entirely → NO automation session attached → Google sign-in works.
-  if (!cleanLogin) args.push('--remote-debugging-pipe')
+  // CDP over a PIPE only when we actually attach the injector. Native mode / clean
+  // login skip it → NO automation session attached → Google sign-in works.
+  if (!skipCdp) args.push('--remote-debugging-pipe')
 
-  // Launch with a blank page so overrides are installed BEFORE any real navigation.
-  // Clean login opens gmail directly so the user can sign in.
-  args.push(cleanLogin ? 'https://accounts.google.com/' : 'about:blank')
+  // Where to land. CDP mode opens about:blank (injector then reopens tabs). Native mode
+  // has no injector, so open the profile's start URLs directly. Clean-login → Google.
+  if (cleanLogin) {
+    args.push('https://accounts.google.com/')
+  } else if (skipCdp) {
+    const urls = profile.startUrls && profile.startUrls.length ? profile.startUrls : ['about:blank']
+    args.push(...urls)
+  } else {
+    args.push('about:blank')
+  }
 
   broadcast({ id, status: 'starting' })
 
@@ -448,7 +448,7 @@ export async function launchProfile(
   // WebGL in C++, so only then do we skip the JS getParameter override.
   let actualEngine = enginePath
   try {
-    proc = await spawnAndWait(enginePath, args, !cleanLogin)
+    proc = await spawnAndWait(enginePath, args, !skipCdp)
   } catch (err) {
     const fallback = resolveSystemBrowser(enginePath)
     if (!fallback) {
@@ -466,7 +466,7 @@ export async function launchProfile(
       message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
     })
     try {
-      proc = await spawnAndWait(fallback, args, !cleanLogin)
+      proc = await spawnAndWait(fallback, args, !skipCdp)
       actualEngine = fallback
     } catch (err2) {
       relay?.close()
@@ -508,10 +508,10 @@ export async function launchProfile(
     broadcast({ id, status: 'error', error: String(err) })
   })
 
-  // Clean-login mode: NO CDP injector (that's the whole point — Google must see an
-  // ordinary browser). The browser already opened accounts.google.com; the user logs
-  // in, and the session is saved to the profile dir + synced on close.
-  if (cleanLogin) return state
+  // Native mode / clean login: NO CDP injector (that's the whole point — Google must
+  // see an ordinary browser). The engine still spoofs the fingerprint natively (C++).
+  // The session is saved to the profile dir and synced on close.
+  if (skipCdp) return state
 
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.

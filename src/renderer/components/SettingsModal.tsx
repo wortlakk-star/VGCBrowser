@@ -45,10 +45,15 @@ export function SettingsModal({
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [useSystemBrowser, setUseSystemBrowser] = useState(false)
+  // Default ON (matches the engine default) until settings load.
+  const [nativeMode, setNativeMode] = useState(true)
 
   useEffect(() => {
     void window.vgc.getVersion().then(setVersion)
-    void window.vgc.getSettings().then((s) => setUseSystemBrowser(!!s.useSystemBrowser))
+    void window.vgc.getSettings().then((s) => {
+      setUseSystemBrowser(!!s.useSystemBrowser)
+      setNativeMode(s.nativeMode !== false)
+    })
     void window.vgc.getUpdateStatus().then((s) => {
       if (s.phase !== 'idle') setUpdate(s)
     })
@@ -58,6 +63,10 @@ export function SettingsModal({
   const toggleSystemBrowser = (next: boolean): void => {
     setUseSystemBrowser(next)
     void window.vgc.saveSettings({ useSystemBrowser: next })
+  }
+  const toggleNativeMode = (next: boolean): void => {
+    setNativeMode(next)
+    void window.vgc.saveSettings({ nativeMode: next })
   }
 
   const checking = update?.phase === 'checking' || update?.phase === 'downloading'
@@ -114,6 +123,31 @@ export function SettingsModal({
 
           <section className="card">
             <h3>Engine trình duyệt</h3>
+            <label
+              className="hint"
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'flex-start',
+                cursor: 'pointer',
+                marginTop: 0,
+                marginBottom: 10
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={nativeMode}
+                onChange={(e) => toggleNativeMode(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <b>Chế độ gốc (giống GoLogin) — BẬT để đăng nhập Google được.</b> Engine tự
+                giả fingerprint, KHÔNG gắn trình gỡ lỗi CDP (thứ Google chặn). Bật = vào
+                Google bình thường + vẫn chống phát hiện. Tắt = bật lại tiêm CDP (thêm
+                múi giờ/JS + đồng bộ tab + API automation) nhưng Google sẽ chặn đăng nhập.
+                <i> Đóng &amp; mở lại profile sau khi đổi.</i>
+              </span>
+            </label>
             <label
               className="hint"
               style={{

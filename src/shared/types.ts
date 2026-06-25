@@ -180,6 +180,12 @@ export interface AppSettings {
    *  canvas are spoofed in JS only (no native C++ spoof), so slightly more detectable
    *  to deep fingerprinters — but Google sign-in works. */
   useSystemBrowser?: boolean
+  /** GoLogin-style native mode (default ON): open profiles with the engine's own C++
+   *  fingerprint spoofing and DO NOT attach a CDP debugger. Google blocks browsers with
+   *  an active CDP session at sign-in, so this makes Google login work while keeping the
+   *  native antidetect. Turning it OFF restores CDP injection (extra UA/timezone/JS
+   *  spoofing + tab-sync + the automation API) but Google sign-in will be blocked. */
+  nativeMode?: boolean
 }
 
 /** State of the app auto-update flow (check → download → install). */
