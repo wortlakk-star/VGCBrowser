@@ -44,14 +44,21 @@ export function SettingsModal({
 }: Props): JSX.Element {
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [useSystemBrowser, setUseSystemBrowser] = useState(false)
 
   useEffect(() => {
     void window.vgc.getVersion().then(setVersion)
+    void window.vgc.getSettings().then((s) => setUseSystemBrowser(!!s.useSystemBrowser))
     void window.vgc.getUpdateStatus().then((s) => {
       if (s.phase !== 'idle') setUpdate(s)
     })
     return window.vgc.onUpdateStatus(setUpdate)
   }, [])
+
+  const toggleSystemBrowser = (next: boolean): void => {
+    setUseSystemBrowser(next)
+    void window.vgc.saveSettings({ useSystemBrowser: next })
+  }
 
   const checking = update?.phase === 'checking' || update?.phase === 'downloading'
   const downloaded = update?.phase === 'downloaded'
@@ -103,6 +110,33 @@ export function SettingsModal({
                 ☀ Sáng
               </button>
             </div>
+          </section>
+
+          <section className="card">
+            <h3>Engine trình duyệt</h3>
+            <label
+              className="hint"
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'flex-start',
+                cursor: 'pointer',
+                marginTop: 0
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={useSystemBrowser}
+                onChange={(e) => toggleSystemBrowser(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                Dùng Google Chrome hệ thống làm engine — bật cái này nếu Google báo
+                <b> &quot;browser may not be secure&quot;</b> khi đăng nhập. Chrome thật được
+                Google tin tưởng; fingerprint vẫn được áp dụng. (Đóng &amp; mở lại profile
+                sau khi đổi. Cần đã cài Google Chrome trên máy.)
+              </span>
+            </label>
           </section>
 
           <section className="card">

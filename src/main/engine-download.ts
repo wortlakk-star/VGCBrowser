@@ -124,6 +124,16 @@ export async function ensureEngine(
   const override = process.env.VGC_ENGINE_PATH
   if (override && existsSync(override)) return override
 
+  // 1b. User opted to use the genuine system Chrome as the engine. Google's "this
+  //     browser or app may not be secure" block fires on the custom VGC Core build
+  //     (not on real Chrome), so this makes Google sign-in work — the fingerprint
+  //     injection still applies on top via CDP-over-pipe.
+  if ((await getSettings()).useSystemBrowser) {
+    const sys = resolveSystemBrowser()
+    if (sys) return sys
+    // No system Chrome found → fall through to the normal engine resolution.
+  }
+
   // 2. macOS: prefer the locally-built VGC Core engine (own Dock icon, isolated from
   //    the user's Chrome, CDP works) over the system Chrome.
   const macCore = macVgcCoreEngine()
