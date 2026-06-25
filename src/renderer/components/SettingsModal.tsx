@@ -141,8 +141,8 @@ export function SettingsModal({
                 style={{ marginTop: 3 }}
               />
               <span>
-                <b>Chế độ gốc (giống GoLogin) — BẬT để đăng nhập Google được.</b> Engine tự
-                giả fingerprint, KHÔNG gắn trình gỡ lỗi CDP (thứ Google chặn). Bật = vào
+                <b>Chế độ gốc (Native) — BẬT để đăng nhập Google được.</b> Engine tự giả
+                fingerprint, KHÔNG gắn trình gỡ lỗi CDP (thứ Google chặn). Bật = vào
                 Google bình thường + vẫn chống phát hiện. Tắt = bật lại tiêm CDP (thêm
                 múi giờ/JS + đồng bộ tab + API automation) nhưng Google sẽ chặn đăng nhập.
                 <i> Đóng &amp; mở lại profile sau khi đổi.</i>
