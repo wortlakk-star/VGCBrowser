@@ -174,6 +174,12 @@ export interface AppSettings {
   /** URL of the macOS VGC Core engine .zip (a built Chromium .app); downloaded on
    *  first run on Mac. Empty → fall back to the system Chrome. */
   engineUrlMac?: string
+  /** Use the genuine system Chrome as the engine instead of VGC Core. Google trusts
+   *  real Chrome ("this browser or app may not be secure" only fires on the custom
+   *  build), and the fingerprint injection still applies on top. Trade-off: WebGL/
+   *  canvas are spoofed in JS only (no native C++ spoof), so slightly more detectable
+   *  to deep fingerprinters — but Google sign-in works. */
+  useSystemBrowser?: boolean
 }
 
 /** State of the app auto-update flow (check → download → install). */

@@ -12,7 +12,12 @@ import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
-import { resolveEnginePath, isDedicatedEngine, macVgcCoreEngine } from './engine'
+import {
+  resolveEnginePath,
+  isDedicatedEngine,
+  macVgcCoreEngine,
+  resolveSystemBrowser
+} from './engine'
 import type { EngineProgress } from '../shared/types'
 
 export type { EngineProgress }
