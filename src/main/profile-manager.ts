@@ -397,7 +397,8 @@ export async function launchProfile(
   // relay because Chromium can't pass credentials via the flag; no-auth proxies
   // are handed to Chromium directly.
   let relay: RelayHandle | undefined
-  if (profile.proxy.type !== 'none' && profile.proxy.host && profile.proxy.port) {
+  const hasProxy = profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
+  if (hasProxy) {
     if (proxyNeedsRelay(profile.proxy)) {
       relay = await startRelay(profile.proxy)
       args.push(`--proxy-server=http://127.0.0.1:${relay.port}`)
@@ -406,6 +407,14 @@ export async function launchProfile(
       args.push(`--proxy-server=${scheme}://${profile.proxy.host}:${profile.proxy.port}`)
     }
   }
+
+  // WebRTC leak guard. Without a native engine patch, WebRTC's ICE candidate gathering
+  // exposes the machine's REAL local + public IP even behind a proxy — which would tie
+  // every "different" Gmail back to one real IP. With a proxy, force WebRTC through it
+  // only (no real-IP UDP); otherwise at least hide the local network IPs.
+  args.push(
+    `--force-webrtc-ip-handling-policy=${hasProxy ? 'disable_non_proxied_udp' : 'default_public_interface_only'}`
+  )
 
   // Load unpacked extensions into the profile.
   if (profile.extensions && profile.extensions.length > 0) {
