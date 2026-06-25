@@ -16,7 +16,10 @@ Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 # Runtime file extensions at the build root.
-$exts = '*.exe', '*.dll', '*.pak', '*.bin', '*.dat'
+# NOTE: *.manifest is REQUIRED — chrome.exe depends on a SxS assembly named after the
+# version (e.g. 149.0.7827.54.manifest, which points at chrome_elf.dll). Without it the
+# engine dies on launch with "side-by-side configuration is incorrect" (0x490 / SxS).
+$exts = '*.exe', '*.dll', '*.pak', '*.bin', '*.dat', '*.manifest'
 foreach ($e in $exts) {
   Get-ChildItem -Path $src -Filter $e -File -ErrorAction SilentlyContinue |
     Copy-Item -Destination $stage -Force

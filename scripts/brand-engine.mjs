@@ -37,7 +37,10 @@ if (!targets.length) {
 
 let rcedit
 try {
-  rcedit = (await import('rcedit')).default
+  // rcedit ≥5 is ESM with a NAMED export; older versions used the default export.
+  const mod = await import('rcedit')
+  rcedit = mod.rcedit || mod.default
+  if (typeof rcedit !== 'function') throw new Error('rcedit export không phải hàm')
 } catch {
   console.warn('brand-engine: chưa cài gói "rcedit" (npm i -D rcedit) — bỏ qua.')
   process.exit(0)
