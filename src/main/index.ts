@@ -21,12 +21,12 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 })
 
 function createWindow(): void {
-  // Window/taskbar icon — the clean transparent VGC logo (icon.png), NOT vgc.ico which
-  // has a white badge/ring. Packaged → resources/icon.png (bundled via extraResources);
-  // dev → the repo's resources/icon.png.
+  // Window/taskbar icon — transparent multi-size .ico generated from the logo (no white
+  // background; PNG→ICO via electron-builder was flattening the alpha to white).
+  // Packaged → resources/app.ico (extraResources); dev → the repo's resources/app.ico.
   const iconPath = app.isPackaged
-    ? join(process.resourcesPath, 'icon.png')
-    : join(__dirname, '../../resources/icon.png')
+    ? join(process.resourcesPath, 'app.ico')
+    : join(__dirname, '../../resources/app.ico')
 
   const win = new BrowserWindow({
     width: 1280,
