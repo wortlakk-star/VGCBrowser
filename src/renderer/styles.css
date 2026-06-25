@@ -1,46 +1,52 @@
 :root {
-  /* ── VGC Browser — one unified dark-teal system (login + app) ── */
-  --bg: #081312;
-  --bg-2: #0c1c19;
-  --panel: #102220;
-  --panel-2: #18302b;
-  --sidebar: #0a1715;
-  --border: #21372f;
-  --border-soft: #1a2c27;
-  --text: #e9f3f0;
-  --dim: #8aa39b;
-  --accent: #18c0ad;
-  --accent-hover: #2bd6c2;
-  --accent-grad: linear-gradient(135deg, #1fc7b3 0%, #0e8f7e 100%);
-  --accent-soft: rgba(24, 192, 173, 0.13);
-  --green: #2fbf71;
-  --red: #e5484d;
-  --amber: #f5ce47;
-  --hover: #172925;
+  /* ── VGC Browser — DARK theme (higher-contrast teal) ── */
+  --bg: #0c1613;
+  --bg-2: #11211c;
+  --panel: #16271f;
+  --panel-2: #1f342b;
+  --sidebar: #0e1a16;
+  --border: #2e4a3e;
+  --border-soft: #23392f;
+  --text: #f2f8f5;
+  --dim: #a6bcb3;
+  --accent: #1fceb9;
+  --accent-hover: #34e2cd;
+  --accent-grad: linear-gradient(135deg, #25d4bf 0%, #0fa18d 100%);
+  --accent-soft: rgba(31, 206, 185, 0.16);
+  --green: #34c878;
+  --red: #ff5a5f;
+  --amber: #f7d24e;
+  --hover: #1d3229;
   /* design tokens */
   --radius: 10px;
   --radius-lg: 18px;
-  --ring: 0 0 0 3px rgba(24, 192, 173, 0.28);
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.55);
+  --ring: 0 0 0 3px rgba(31, 206, 185, 0.32);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.58);
 }
 
-/* ── Light theme (teal-tinted) ── */
+/* ── LIGHT theme (clean, high-contrast) ── */
 :root[data-theme='light'] {
-  --bg: #eef4f2;
-  --bg-2: #e8f1ee;
+  --bg: #e7edeb;
+  --bg-2: #eef3f1;
   --panel: #ffffff;
-  --panel-2: #e6efec;
-  --sidebar: #e2ece9;
-  --border: #cdded8;
-  --border-soft: #dceae5;
-  --text: #122220;
-  --dim: #51635d;
-  --hover: #dbeae5;
-  --accent-soft: rgba(24, 192, 173, 0.14);
-  --ring: 0 0 0 3px rgba(24, 192, 173, 0.22);
-  --shadow: 0 10px 30px rgba(18, 60, 54, 0.1);
-  --shadow-lg: 0 30px 70px rgba(18, 60, 54, 0.18);
+  --panel-2: #f1f6f4;
+  --sidebar: #e4ece9;
+  --border: #bcccc5;
+  --border-soft: #d3e0db;
+  --text: #0d1a16;
+  --dim: #495a54;
+  --accent: #0f9e8d;
+  --accent-hover: #0c8576;
+  --accent-grad: linear-gradient(135deg, #14b3a0 0%, #0b8576 100%);
+  --accent-soft: rgba(15, 158, 141, 0.12);
+  --green: #1f9d57;
+  --red: #d83a40;
+  --amber: #b9821a;
+  --hover: #dde9e4;
+  --ring: 0 0 0 3px rgba(15, 158, 141, 0.22);
+  --shadow: 0 8px 24px rgba(18, 60, 54, 0.12);
+  --shadow-lg: 0 24px 60px rgba(18, 60, 54, 0.18);
 }
 
 * {

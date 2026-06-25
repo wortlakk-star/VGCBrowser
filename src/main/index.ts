@@ -21,6 +21,13 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 })
 
 function createWindow(): void {
+  // Window/taskbar icon. Packaged → resources/vgc.ico (electron-builder extraResources);
+  // dev → the repo's resources/vgc.ico. Without this the title bar / taskbar show a
+  // generic icon instead of the VGC logo.
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'vgc.ico')
+    : join(__dirname, '../../resources/vgc.ico')
+
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -28,7 +35,8 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'VGC Browser',
-    backgroundColor: '#0f1115',
+    icon: iconPath,
+    backgroundColor: '#0c1613',
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
