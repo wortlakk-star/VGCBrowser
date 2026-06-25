@@ -689,9 +689,10 @@ code {
 }
 
 .nav-item.active {
-  background: var(--panel-2);
+  background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
-  color: #fff;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .nav-count {
@@ -823,7 +824,7 @@ code {
 
 .seg-btn.active {
   border-color: var(--accent);
-  background: rgba(91, 140, 255, 0.14);
+  background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
 }
