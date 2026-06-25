@@ -17,7 +17,7 @@ import { spawn, type ChildProcess } from 'child_process'
 import type { Readable, Writable } from 'node:stream'
 import { createHash } from 'crypto'
 import { join } from 'path'
-import { mkdirSync, promises as fs } from 'fs'
+import { existsSync, mkdirSync, promises as fs } from 'fs'
 import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
@@ -319,10 +319,10 @@ export async function launchProfile(
     }
   }
 
-  // We reopen tabs ourselves (readSavedTabs → openUrl), so strip Chromium's own
-  // session-restore state — otherwise a synced profile opens every tab TWICE
-  // (Chromium restores the synced session AND we reopen the saved set).
-  await clearChromiumSession(id)
+  // CDP mode: the injector reopens tabs itself, so strip Chromium's own restore state
+  // to avoid opening every tab TWICE. Native mode (no injector): KEEP the session so
+  // Chrome restores the user's own tabs (via --restore-last-session below).
+  if (!skipCdp) await clearChromiumSession(id)
 
   // If opening with the GENUINE system Chrome (useSystemBrowser), the dir may have been
   // written by a newer engine (Chromium 149) → Chrome refuses "profile from a newer
@@ -426,8 +426,19 @@ export async function launchProfile(
   if (cleanLogin) {
     args.push('https://accounts.google.com/')
   } else if (skipCdp) {
-    const urls = profile.startUrls && profile.startUrls.length ? profile.startUrls : ['about:blank']
-    args.push(...urls)
+    // Native mode: let Chrome restore the user's own tabs from last time. If there's a
+    // prior session, force-restore it; otherwise (first-ever open) use the start URLs.
+    const def = join(userDataDir, 'Default')
+    const hasSession =
+      existsSync(join(def, 'Current Session')) ||
+      existsSync(join(def, 'Last Session')) ||
+      existsSync(join(def, 'Sessions'))
+    if (hasSession) {
+      args.push('--restore-last-session')
+    } else {
+      const urls = profile.startUrls && profile.startUrls.length ? profile.startUrls : ['about:blank']
+      args.push(...urls)
+    }
   } else {
     args.push('about:blank')
   }
