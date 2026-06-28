@@ -65,8 +65,10 @@ const SKIP_DIRS = new Set<string>([
   'VideoDecodeStats'
 ])
 
-// Individual session-restore FILES (not folders) to drop for the same reason.
-const SKIP_FILES = new Set<string>(['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'])
+// Session-restore FILES are intentionally NOT skipped anymore (see the 'Sessions'
+// note above): native mode needs them synced to reopen tabs cross-machine, and CDP
+// mode deletes them post-download so there's no double-restore. Empty = skip nothing.
+const SKIP_FILES = new Set<string>([])
 
 function shouldSkipDir(name: string): boolean {
   // any cache-like folder + the explicit list above
