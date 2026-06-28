@@ -46,9 +46,11 @@ const SKIP_DIRS = new Set<string>([
   'Subresource Filter',
   'SwReporter',
   'GraphiteDawnCache',
-  // Chromium's tab/session restore state — excluded so a synced profile doesn't
-  // restore tabs natively (we reopen them ourselves; otherwise tabs open twice).
-  'Sessions',
+  // NOTE: 'Sessions' (Chromium's tab/session restore state) is NO LONGER skipped — it
+  // must sync so NATIVE mode (no CDP injector) can reopen the user's tabs on another
+  // machine via --restore-last-session. In CDP mode clearChromiumSession() deletes it
+  // right after download and the injector reopens tabs from vgc-open-tabs.json, so
+  // syncing it never causes double tabs. (See profile-manager.ts open flow.)
   // Big, non-login-session folders that bloat the zip past the 50MB cloud limit
   // (a profile's "Download Service" alone was seen at 44MB) → upload 413s and the
   // session never saves. None of these hold the login session.
