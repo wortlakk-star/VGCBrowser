@@ -148,6 +148,13 @@ const api = {
   cloudDownloadData: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('cloud:downloadData', id),
 
+  // Encrypt/decrypt metadata with the per-account secret before/after it touches the
+  // cloud DB. Return null when no secret yet (pre-migration) → caller pushes plaintext.
+  cloudProtect: (context: string, plaintext: string): Promise<string | null> =>
+    ipcRenderer.invoke('cloud:protect', context, plaintext),
+  cloudUnprotect: (context: string, blob: string): Promise<string | null> =>
+    ipcRenderer.invoke('cloud:unprotect', context, blob),
+
   // ── Profile groups ──
   listGroups: (): Promise<string[]> => ipcRenderer.invoke('groups:list'),
   createGroup: (name: string): Promise<string[]> => ipcRenderer.invoke('groups:create', name),

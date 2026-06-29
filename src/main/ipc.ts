@@ -47,6 +47,7 @@ import {
 } from './proxy-store'
 import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { setCloudSession } from './session'
+import { getAccountSecret, encryptWithSecret, decryptWithSecret } from './account-secret'
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getProviderCreds, saveProviderCreds, buildProviderProxy } from './proxy-providers'
 import type { ProviderCreds, ProxyBuildOpts, ProxyProviderId } from '../shared/types'
@@ -208,6 +209,18 @@ export function registerIpc(): void {
   })
   ipcMain.handle('cloud:uploadData', (_e, id: string) => uploadProfileData(id))
   ipcMain.handle('cloud:downloadData', (_e, id: string) => downloadProfileData(id))
+  // App-side encryption of the profile/proxy metadata BEFORE it's pushed to the
+  // cloud DB (so cookies/proxy passwords in the jsonb are ciphertext, not plaintext).
+  // Returns null when no account secret yet (pre-migration) → renderer falls back to
+  // pushing plaintext so nothing breaks during rollout.
+  ipcMain.handle('cloud:protect', async (_e, context: string, plaintext: string) => {
+    const secret = await getAccountSecret()
+    return secret ? encryptWithSecret(secret, context, plaintext) : null
+  })
+  ipcMain.handle('cloud:unprotect', async (_e, context: string, blob: string) => {
+    const secret = await getAccountSecret()
+    return secret ? decryptWithSecret(secret, context, blob) : null
+  })
 
   // ── Profile groups (folders) ──
   ipcMain.handle('groups:list', () => listGroups())

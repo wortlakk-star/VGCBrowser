@@ -92,3 +92,31 @@ export function decryptWithSecret(secret: string, context: string, blob: string)
     return null
   }
 }
+
+// Binary variants for large blobs (the session zip) — avoids base64's 33% bloat.
+// Layout: iv[12] | tag[16] | ciphertext. Magic prefix lets the reader tell an
+// encrypted object from a raw (legacy/plaintext) zip, which always starts with "PK".
+export const ENC_MAGIC = Buffer.from('VGCENC1\0', 'latin1') // 8 bytes
+
+export function encryptBytes(secret: string, context: string, data: Buffer): Buffer {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', keyFor(secret, context), iv)
+  const enc = Buffer.concat([cipher.update(data), cipher.final()])
+  return Buffer.concat([ENC_MAGIC, iv, cipher.getAuthTag(), enc])
+}
+
+/** True if a downloaded object is one of our encrypted blobs (vs a raw zip). */
+export function isEncryptedBytes(buf: Buffer): boolean {
+  return buf.length >= ENC_MAGIC.length && buf.subarray(0, ENC_MAGIC.length).equals(ENC_MAGIC)
+}
+
+export function decryptBytes(secret: string, context: string, buf: Buffer): Buffer | null {
+  try {
+    const body = buf.subarray(ENC_MAGIC.length)
+    const decipher = createDecipheriv('aes-256-gcm', keyFor(secret, context), body.subarray(0, 12))
+    decipher.setAuthTag(body.subarray(12, 28))
+    return Buffer.concat([decipher.update(body.subarray(28)), decipher.final()])
+  } catch {
+    return null
+  }
+}
