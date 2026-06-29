@@ -21,8 +21,7 @@ function savedToProxyConfig(p: SavedProxy): ProxyConfig {
  *  with a proxy the owner chooses for the shared copy. */
 export function ShareModal({ profile, proxies, onClose }: Props): JSX.Element {
   const [email, setEmail] = useState('')
-  // '' = keep the profile's own proxy; otherwise a saved-proxy id
-  const [proxyId, setProxyId] = useState('')
+  const [proxyId, setProxyId] = useState('') // '' = keep the profile's own proxy
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [shares, setShares] = useState<Array<{ email: string }>>([])
@@ -46,9 +45,6 @@ export function ShareModal({ profile, proxies, onClose }: Props): JSX.Element {
         setMsg({ type: 'err', text: res.error ?? 'Chia sẻ thất bại' })
         return
       }
-      // Re-encrypt + re-push this profile's metadata + session with the SHARED key so
-      // the recipient can decrypt it. updateProfile bumps updatedAt → auto-push picks
-      // it up; cloudUploadData re-uploads the session zip under the shared key.
       await window.vgc.updateProfile(profile.id, {})
       void window.vgc.cloudUploadData(profile.id)
       setEmail('')
@@ -68,64 +64,73 @@ export function ShareModal({ profile, proxies, onClose }: Props): JSX.Element {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
-        <h3>🔗 Chia sẻ profile: {profile.name}</h3>
-        <p style={{ opacity: 0.7, fontSize: 13 }}>
-          Người nhận đăng nhập VGC bằng email được chia sẻ sẽ thấy profile này (đã đăng nhập sẵn),
-          dùng proxy bạn chọn. Đồng bộ 2 chiều — đừng mở cùng lúc trên 2 máy.
-        </p>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-head">
+          <h3>🔗 Chia sẻ profile: {profile.name}</h3>
+          <button className="btn" onClick={onClose}>
+            ✕
+          </button>
+        </header>
 
-        <label className="field">
-          <span>Email người nhận</span>
-          <input
-            type="email"
-            placeholder="email@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </label>
+        <div className="modal-body">
+          <section className="card">
+            <p className="hint">
+              Người nhận đăng nhập VGC bằng email được chia sẻ sẽ thấy profile này (đã đăng nhập sẵn),
+              dùng proxy bạn chọn. Đồng bộ 2 chiều — đừng mở cùng lúc trên 2 máy.
+            </p>
 
-        <label className="field">
-          <span>Proxy cho bản chia sẻ</span>
-          <select value={proxyId} onChange={(e) => setProxyId(e.target.value)}>
-            <option value="">Giữ proxy của profile</option>
-            {proxies.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label || `${p.host}:${p.port}`} ({p.type})
-              </option>
-            ))}
-          </select>
-        </label>
+            <label>
+              Email người nhận
+              <input
+                type="email"
+                placeholder="email@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
 
-        {msg && (
-          <div style={{ color: msg.type === 'ok' ? '#3ddc84' : '#ff6b6b', fontSize: 13 }}>
-            {msg.text}
-          </div>
-        )}
+            <label>
+              Proxy cho bản chia sẻ
+              <select value={proxyId} onChange={(e) => setProxyId(e.target.value)}>
+                <option value="">Giữ proxy của profile</option>
+                {proxies.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label || `${p.host}:${p.port}`} ({p.type})
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        {shares.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Đang chia sẻ với:</div>
-            {shares.map((s) => (
-              <div
-                key={s.email}
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }}
-              >
-                <span style={{ fontSize: 13 }}>{s.email}</span>
-                <button className="btn-link" onClick={() => void removeShare(s.email)}>
-                  Gỡ
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+            {msg && <p className={msg.type === 'ok' ? 'ok' : 'err'}>{msg.text}</p>}
+          </section>
 
-        <div className="modal-actions">
-          <button onClick={onClose}>Đóng</button>
-          <button className="btn-primary" disabled={busy || !email.includes('@')} onClick={() => void doShare()}>
+          {shares.length > 0 && (
+            <section className="card">
+              <h3>Đang chia sẻ với</h3>
+              {shares.map((s) => (
+                <div key={s.email} className="token-row">
+                  <span className="mono small">{s.email}</span>
+                  <button className="btn ghost" onClick={() => void removeShare(s.email)}>
+                    Gỡ
+                  </button>
+                </div>
+              ))}
+            </section>
+          )}
+        </div>
+
+        <footer className="modal-foot">
+          <button className="btn ghost" onClick={onClose}>
+            Đóng
+          </button>
+          <button
+            className="btn primary"
+            disabled={busy || !email.includes('@')}
+            onClick={() => void doShare()}
+          >
             {busy ? 'Đang chia sẻ…' : 'Chia sẻ'}
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   )
