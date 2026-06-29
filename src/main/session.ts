@@ -16,6 +16,21 @@ export function getCloudSession(): CloudSession | null {
   return session
 }
 
+/** The signed-in user's email, decoded from the access-token JWT (used to match
+ *  profile shares addressed to this email). null when signed out / unparseable. */
+export function getCloudEmail(): string | null {
+  const tok = session?.accessToken
+  if (!tok) return null
+  try {
+    const payload = tok.split('.')[1]
+    const json = Buffer.from(payload, 'base64').toString('utf-8')
+    const email = (JSON.parse(json) as { email?: string }).email
+    return email ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Key used to namespace per-account local storage. 'local' when signed out. */
 export function accountKey(): string {
   return session?.uid ?? 'local'

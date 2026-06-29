@@ -16,6 +16,7 @@ interface Props {
   onLoginClean?: (id: string) => void
   onEdit: (p: Profile) => void
   onDuplicate: (id: string) => void
+  onShare: (p: Profile) => void
   onDelete: (id: string) => void
   onMoveGroup: (id: string, group: string) => void
 }
@@ -125,6 +126,7 @@ export function ProfileTable({
   onCheck,
   onEdit,
   onDuplicate,
+  onShare,
   onDelete,
   onMoveGroup
 }: Props): JSX.Element {
@@ -202,6 +204,14 @@ export function ProfileTable({
                         }}
                       >
                         ⧉ Nhân bản
+                      </button>
+                      <button
+                        onClick={() => {
+                          onShare(p)
+                          setMenuFor(null)
+                        }}
+                      >
+                        🔗 Chia sẻ
                       </button>
                       <div className="menu-sep" />
                       <label className="menu-group">

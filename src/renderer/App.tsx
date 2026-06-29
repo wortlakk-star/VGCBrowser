@@ -13,6 +13,7 @@ import { CreateProfileModal } from './components/CreateProfileModal'
 import { SettingsModal } from './components/SettingsModal'
 import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
+import { ShareModal } from './components/ShareModal'
 import { Sidebar } from './components/Sidebar'
 import { applyTheme, getTheme, type Theme } from './theme'
 import logo from './assets/logo.png'
@@ -36,6 +37,7 @@ export default function App(): JSX.Element {
   const [proxyPool, setProxyPool] = useState<SavedProxy[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<Profile | null>(null)
+  const [sharing, setSharing] = useState<Profile | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
@@ -647,6 +649,7 @@ export default function App(): JSX.Element {
               onLoginClean={loginClean}
               onEdit={setEditing}
               onDuplicate={duplicate}
+              onShare={setSharing}
               onDelete={remove}
               onMoveGroup={moveGroup}
             />
@@ -654,6 +657,9 @@ export default function App(): JSX.Element {
         </main>
       </div>
 
+      {sharing && (
+        <ShareModal profile={sharing} proxies={proxyPool} onClose={() => setSharing(null)} />
+      )}
       {editing && (
         <EditProfileModal profile={editing} onClose={() => setEditing(null)} onSaved={refresh} />
       )}

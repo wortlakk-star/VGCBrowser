@@ -27,7 +27,15 @@ import {
   decryptBytes,
   isEncryptedBytes
 } from './account-secret'
+import { getProfileKey } from './profile-share'
 import type { Cookie } from '../shared/types'
+
+/** Encryption key for a profile's cloud data: a SHARED key if the profile is shared
+ *  (so members decrypt it), otherwise this account's own secret. null = no key yet
+ *  (pre-migration) → plaintext fallback. */
+async function keyForProfile(id: string): Promise<string | null> {
+  return (await getProfileKey(id)) ?? (await getAccountSecret())
+}
 
 const BUCKET = 'profiles'
 
@@ -184,7 +192,7 @@ export async function uploadProfileData(id: string): Promise<void> {
   // tokens). Falls back to a raw zip only pre-migration (no secret yet); the reader
   // detects which it got.
   const rawZip = zip.toBuffer()
-  const encSecret = await getAccountSecret()
+  const encSecret = await keyForProfile(id)
   const body = encSecret ? encryptBytes(encSecret, 'session', rawZip) : rawZip
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(session.uid, id)}`
   const res = await fetch(url, {
@@ -236,7 +244,7 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   let buf: Buffer = Buffer.from(await res.arrayBuffer())
   // Decrypt if it's one of our encrypted session blobs (raw zips start with "PK").
   if (isEncryptedBytes(buf)) {
-    const encSecret = await getAccountSecret()
+    const encSecret = await keyForProfile(id)
     const dec = encSecret ? decryptBytes(encSecret, 'session', buf) : null
     if (!dec) {
       // Encrypted but we can't decrypt (no secret / wrong account) → don't extract
@@ -278,7 +286,7 @@ export async function uploadProfileCookies(id: string, cookies: Cookie[]): Promi
   // so a leaked bucket shows ciphertext, not live session tokens. Falls back to
   // plaintext only when the secret isn't available yet (pre-migration).
   const json = JSON.stringify(cookies)
-  const secret = await getAccountSecret()
+  const secret = await keyForProfile(id)
   const body = secret
     ? Buffer.from(JSON.stringify({ enc: encryptWithSecret(secret, 'cookies', json) }), 'utf-8')
     : Buffer.from(json, 'utf-8')
@@ -314,7 +322,7 @@ export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
     const data = (await res.json()) as Cookie[] | { enc?: string }
     if (Array.isArray(data)) return data // legacy plaintext
     if (data && typeof data.enc === 'string') {
-      const secret = await getAccountSecret()
+      const secret = await keyForProfile(id)
       if (!secret) return []
       const json = decryptWithSecret(secret, 'cookies', data.enc)
       if (!json) return []

@@ -36,14 +36,14 @@ export async function getCloud(): Promise<SupabaseClient | null> {
 // Encrypt a record's `data` payload with the per-account secret before it goes into
 // the cloud DB, so cookies / proxy passwords aren't plaintext jsonb. Stores `{ enc }`
 // when a secret exists; raw object pre-migration (so nothing breaks during rollout).
-async function protectData(context: string, obj: unknown): Promise<unknown> {
-  const enc = await window.vgc.cloudProtect(context, JSON.stringify(obj))
+async function protectData(context: string, obj: unknown, profileId?: string): Promise<unknown> {
+  const enc = await window.vgc.cloudProtect(context, JSON.stringify(obj), profileId)
   return enc ? { enc } : obj
 }
 // Inverse: decode a stored `data` value (encrypted `{ enc }` or legacy plaintext).
-async function unprotectData<T>(context: string, data: unknown): Promise<T | null> {
+async function unprotectData<T>(context: string, data: unknown, profileId?: string): Promise<T | null> {
   if (data && typeof data === 'object' && typeof (data as { enc?: unknown }).enc === 'string') {
-    const dec = await window.vgc.cloudUnprotect(context, (data as { enc: string }).enc)
+    const dec = await window.vgc.cloudUnprotect(context, (data as { enc: string }).enc, profileId)
     return dec ? (JSON.parse(dec) as T) : null
   }
   return (data ?? null) as T | null
@@ -60,11 +60,13 @@ export async function pullCloudProfileList(): Promise<number> {
   // the plain pull so the app still works before the migration is run.
   const withDel = await c.from('profiles_cloud').select('profile_id,data,deleted')
   if (withDel.error) {
-    const plain = await c.from('profiles_cloud').select('data')
+    const plain = await c.from('profiles_cloud').select('profile_id,data')
     if (plain.error) throw new Error(plain.error.message)
     const profiles = (
       await Promise.all(
-        (plain.data ?? []).map((r) => unprotectData<Profile>('profile', (r as { data: unknown }).data))
+        (plain.data ?? []).map((r) =>
+          unprotectData<Profile>('profile', (r as { data: unknown }).data, (r as { profile_id?: string }).profile_id)
+        )
       )
     ).filter((p): p is Profile => !!p)
     await window.vgc.bulkUpsertProfiles(profiles)
@@ -74,10 +76,18 @@ export async function pullCloudProfileList(): Promise<number> {
   const rows = (withDel.data ?? []) as Array<{ profile_id: string; data: unknown; deleted?: boolean }>
   const live = (
     await Promise.all(
-      rows.filter((r) => !r.deleted).map((r) => unprotectData<Profile>('profile', r.data))
+      rows.filter((r) => !r.deleted).map((r) => unprotectData<Profile>('profile', r.data, r.profile_id))
     )
   ).filter((p): p is Profile => !!p)
   const deletedIds = rows.filter((r) => r.deleted).map((r) => r.profile_id)
+  // For profiles shared WITH me, apply the proxy the owner chose for the share
+  // (overrides the profile's own embedded proxy).
+  const sharedWithMe = await window.vgc.shareSharedWithMe()
+  const sharedProxy = new Map(sharedWithMe.filter((s) => s.proxy).map((s) => [s.profileId, s.proxy!]))
+  for (const p of live) {
+    const px = sharedProxy.get(p.id)
+    if (px) p.proxy = px
+  }
   await window.vgc.bulkUpsertProfiles(live)
   // Don't let a just-pulled profile look "changed" to the next push — it would echo
   // it straight back, bumping updated_at and ping-ponging with the other machine.
@@ -152,7 +162,7 @@ export async function pushCloudProfileList(): Promise<number> {
       team_id: p.cloudTeamId || null,
       profile_id: p.id,
       name: p.name,
-      data: await protectData('profile', p),
+      data: await protectData('profile', p, p.id),
       updated_at: new Date().toISOString()
     }))
   )
