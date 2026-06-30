@@ -19,8 +19,23 @@ import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
 import { getProfile, saveProfile } from './store'
 import { getCloudSession } from './session'
-import { getAccountSecret, encryptWithSecret, decryptWithSecret } from './account-secret'
+import {
+  getAccountSecret,
+  encryptWithSecret,
+  decryptWithSecret,
+  encryptBytes,
+  decryptBytes,
+  isEncryptedBytes
+} from './account-secret'
+import { getProfileKey } from './profile-share'
 import type { Cookie } from '../shared/types'
+
+/** Encryption key for a profile's cloud data: a SHARED key if the profile is shared
+ *  (so members decrypt it), otherwise this account's own secret. null = no key yet
+ *  (pre-migration) → plaintext fallback. */
+async function keyForProfile(id: string): Promise<string | null> {
+  return (await getProfileKey(id)) ?? (await getAccountSecret())
+}
 
 const BUCKET = 'profiles'
 
@@ -171,14 +186,21 @@ export async function uploadProfileData(id: string): Promise<void> {
       'Bỏ qua lưu phiên: cookie đang bị khoá (Chromium chưa nhả file). Giữ nguyên bản cloud cũ.'
     )
   }
-  const body = zip.toBuffer()
+  // Encrypt the WHOLE session zip with the per-account secret before upload, so the
+  // cloud holds ciphertext — not just the os_crypt-protected Cookies/Login Data but
+  // ALSO Local Storage / IndexedDB / Preferences (where sites often keep auth
+  // tokens). Falls back to a raw zip only pre-migration (no secret yet); the reader
+  // detects which it got.
+  const rawZip = zip.toBuffer()
+  const encSecret = await keyForProfile(id)
+  const body = encSecret ? encryptBytes(encSecret, 'session', rawZip) : rawZip
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(session.uid, id)}`
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${session.accessToken}`,
       apikey: s.supabaseAnonKey,
-      'Content-Type': 'application/zip',
+      'Content-Type': 'application/octet-stream',
       'x-upsert': 'true'
     },
     // Buffer is a valid body for Node/undici fetch; the DOM BodyInit type is too narrow.
@@ -219,7 +241,18 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   if (res.status === 404 || res.status === 400) return false // not uploaded yet
   if (!res.ok) throw new Error(`Tải dữ liệu lỗi HTTP ${res.status}`)
 
-  const buf = Buffer.from(await res.arrayBuffer())
+  let buf: Buffer = Buffer.from(await res.arrayBuffer())
+  // Decrypt if it's one of our encrypted session blobs (raw zips start with "PK").
+  if (isEncryptedBytes(buf)) {
+    const encSecret = await keyForProfile(id)
+    const dec = encSecret ? decryptBytes(encSecret, 'session', buf) : null
+    if (!dec) {
+      // Encrypted but we can't decrypt (no secret / wrong account) → don't extract
+      // garbage over the local session; leave it intact.
+      throw new Error('Không giải mã được dữ liệu phiên (thiếu khoá tài khoản).')
+    }
+    buf = dec
+  }
   const root = profileDir(id)
   await fs.mkdir(root, { recursive: true })
   const zip = new AdmZip(buf)
@@ -253,7 +286,7 @@ export async function uploadProfileCookies(id: string, cookies: Cookie[]): Promi
   // so a leaked bucket shows ciphertext, not live session tokens. Falls back to
   // plaintext only when the secret isn't available yet (pre-migration).
   const json = JSON.stringify(cookies)
-  const secret = await getAccountSecret()
+  const secret = await keyForProfile(id)
   const body = secret
     ? Buffer.from(JSON.stringify({ enc: encryptWithSecret(secret, 'cookies', json) }), 'utf-8')
     : Buffer.from(json, 'utf-8')
@@ -289,7 +322,7 @@ export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
     const data = (await res.json()) as Cookie[] | { enc?: string }
     if (Array.isArray(data)) return data // legacy plaintext
     if (data && typeof data.enc === 'string') {
-      const secret = await getAccountSecret()
+      const secret = await keyForProfile(id)
       if (!secret) return []
       const json = decryptWithSecret(secret, 'cookies', data.enc)
       if (!json) return []

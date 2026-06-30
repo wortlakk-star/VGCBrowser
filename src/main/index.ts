@@ -1,6 +1,7 @@
 // ── VGC Browser — main process entry ─────────────────────────────────────────
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { registerIpc } from './ipc'
 import { stopAllAndSync } from './profile-manager'
 import { restartApiServer, stopApiServer } from './api-manager'
@@ -27,6 +28,9 @@ function createWindow(): void {
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'app.ico')
     : join(__dirname, '../../resources/app.ico')
+  // Only pass the icon if it actually exists — a missing/invalid path can break
+  // window creation on Windows (and would leave the app unable to open).
+  const icon = existsSync(iconPath) ? iconPath : undefined
 
   const win = new BrowserWindow({
     width: 1280,
@@ -35,7 +39,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'VGC Browser',
-    icon: iconPath,
+    icon,
     backgroundColor: '#0c1613',
     autoHideMenuBar: true,
     webPreferences: {
@@ -62,10 +66,26 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  registerIpc()
-  createWindow()
-  void restartApiServer()
-  initUpdater()
+  // Each piece is isolated so one failing service (IPC, API server, updater) can't
+  // stop the WINDOW from opening — the app must always at least launch its UI.
+  try {
+    registerIpc()
+  } catch (e) {
+    console.error('[startup] registerIpc failed:', e)
+  }
+  try {
+    createWindow()
+  } catch (e) {
+    console.error('[startup] createWindow failed:', e)
+  }
+  void Promise.resolve()
+    .then(() => restartApiServer())
+    .catch((e) => console.error('[startup] api server failed:', e))
+  try {
+    initUpdater()
+  } catch (e) {
+    console.error('[startup] updater failed:', e)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

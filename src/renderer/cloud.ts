@@ -33,6 +33,22 @@ export async function getCloud(): Promise<SupabaseClient | null> {
  * syncs lazily when a profile is actually opened (see profile-manager), so login
  * stays fast even for accounts with many heavy profiles.
  */
+// Encrypt a record's `data` payload with the per-account secret before it goes into
+// the cloud DB, so cookies / proxy passwords aren't plaintext jsonb. Stores `{ enc }`
+// when a secret exists; raw object pre-migration (so nothing breaks during rollout).
+async function protectData(context: string, obj: unknown, profileId?: string): Promise<unknown> {
+  const enc = await window.vgc.cloudProtect(context, JSON.stringify(obj), profileId)
+  return enc ? { enc } : obj
+}
+// Inverse: decode a stored `data` value (encrypted `{ enc }` or legacy plaintext).
+async function unprotectData<T>(context: string, data: unknown, profileId?: string): Promise<T | null> {
+  if (data && typeof data === 'object' && typeof (data as { enc?: unknown }).enc === 'string') {
+    const dec = await window.vgc.cloudUnprotect(context, (data as { enc: string }).enc, profileId)
+    return dec ? (JSON.parse(dec) as T) : null
+  }
+  return (data ?? null) as T | null
+}
+
 export async function pullCloudProfileList(): Promise<number> {
   const c = await getCloud()
   if (!c) return -1
@@ -44,16 +60,34 @@ export async function pullCloudProfileList(): Promise<number> {
   // the plain pull so the app still works before the migration is run.
   const withDel = await c.from('profiles_cloud').select('profile_id,data,deleted')
   if (withDel.error) {
-    const plain = await c.from('profiles_cloud').select('data')
+    const plain = await c.from('profiles_cloud').select('profile_id,data')
     if (plain.error) throw new Error(plain.error.message)
-    const profiles = (plain.data ?? []).map((r) => (r as { data: Profile }).data)
+    const profiles = (
+      await Promise.all(
+        (plain.data ?? []).map((r) =>
+          unprotectData<Profile>('profile', (r as { data: unknown }).data, (r as { profile_id?: string }).profile_id)
+        )
+      )
+    ).filter((p): p is Profile => !!p)
     await window.vgc.bulkUpsertProfiles(profiles)
     return profiles.length
   }
 
-  const rows = (withDel.data ?? []) as Array<{ profile_id: string; data: Profile; deleted?: boolean }>
-  const live = rows.filter((r) => !r.deleted).map((r) => r.data)
+  const rows = (withDel.data ?? []) as Array<{ profile_id: string; data: unknown; deleted?: boolean }>
+  const live = (
+    await Promise.all(
+      rows.filter((r) => !r.deleted).map((r) => unprotectData<Profile>('profile', r.data, r.profile_id))
+    )
+  ).filter((p): p is Profile => !!p)
   const deletedIds = rows.filter((r) => r.deleted).map((r) => r.profile_id)
+  // For profiles shared WITH me, apply the proxy the owner chose for the share
+  // (overrides the profile's own embedded proxy).
+  const sharedWithMe = await window.vgc.shareSharedWithMe()
+  const sharedProxy = new Map(sharedWithMe.filter((s) => s.proxy).map((s) => [s.profileId, s.proxy!]))
+  for (const p of live) {
+    const px = sharedProxy.get(p.id)
+    if (px) p.proxy = px
+  }
   await window.vgc.bulkUpsertProfiles(live)
   // Don't let a just-pulled profile look "changed" to the next push — it would echo
   // it straight back, bumping updated_at and ping-ponging with the other machine.
@@ -122,14 +156,16 @@ export async function pushCloudProfileList(): Promise<number> {
   // (the map is empty), keeping the cloud complete.
   const changed = locals.filter((p) => lastPushedAt.get(p.id) !== p.updatedAt)
   if (!changed.length) return 0
-  const rows = changed.map((p) => ({
-    owner,
-    team_id: p.cloudTeamId || null,
-    profile_id: p.id,
-    name: p.name,
-    data: p,
-    updated_at: new Date().toISOString()
-  }))
+  const rows = await Promise.all(
+    changed.map(async (p) => ({
+      owner,
+      team_id: p.cloudTeamId || null,
+      profile_id: p.id,
+      name: p.name,
+      data: await protectData('profile', p, p.id),
+      updated_at: new Date().toISOString()
+    }))
+  )
   const { error } = await c.from('profiles_cloud').upsert(rows, { onConflict: 'owner,profile_id' })
   if (error) throw new Error(error.message)
   for (const p of changed) lastPushedAt.set(p.id, p.updatedAt)
@@ -175,13 +211,21 @@ export async function pullCloudProxies(): Promise<number> {
   if (withDel.error) {
     const plain = await c.from('proxies_cloud').select('data')
     if (plain.error) throw new Error(plain.error.message)
-    const proxies = (plain.data ?? []).map((r) => (r as { data: SavedProxy }).data)
+    const proxies = (
+      await Promise.all(
+        (plain.data ?? []).map((r) => unprotectData<SavedProxy>('proxy', (r as { data: unknown }).data))
+      )
+    ).filter((p): p is SavedProxy => !!p)
     await window.vgc.saveManyProxies(proxies)
     return proxies.length
   }
 
-  const rows = (withDel.data ?? []) as Array<{ proxy_id: string; data: SavedProxy; deleted?: boolean }>
-  const live = rows.filter((r) => !r.deleted).map((r) => r.data)
+  const rows = (withDel.data ?? []) as Array<{ proxy_id: string; data: unknown; deleted?: boolean }>
+  const live = (
+    await Promise.all(
+      rows.filter((r) => !r.deleted).map((r) => unprotectData<SavedProxy>('proxy', r.data))
+    )
+  ).filter((p): p is SavedProxy => !!p)
   const deletedIds = rows.filter((r) => r.deleted).map((r) => r.proxy_id)
   await window.vgc.saveManyProxies(live)
   if (deletedIds.length) await window.vgc.removeProxies(deletedIds)
@@ -219,13 +263,15 @@ export async function pushCloudProxies(): Promise<number> {
   const owner = sess.session.user.id
   const locals = await window.vgc.listProxies()
   if (!locals.length) return 0
-  const rows = locals.map((p) => ({
-    owner,
-    proxy_id: p.id,
-    label: p.label,
-    data: p,
-    updated_at: new Date().toISOString()
-  }))
+  const rows = await Promise.all(
+    locals.map(async (p) => ({
+      owner,
+      proxy_id: p.id,
+      label: p.label,
+      data: await protectData('proxy', p),
+      updated_at: new Date().toISOString()
+    }))
+  )
   const { error } = await c.from('proxies_cloud').upsert(rows, { onConflict: 'owner,proxy_id' })
   if (error) throw new Error(error.message)
   return rows.length

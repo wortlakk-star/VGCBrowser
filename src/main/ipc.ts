@@ -47,6 +47,14 @@ import {
 } from './proxy-store'
 import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { setCloudSession } from './session'
+import { getAccountSecret, encryptWithSecret, decryptWithSecret } from './account-secret'
+import {
+  getProfileKey,
+  shareProfile,
+  listShares,
+  unshareProfile,
+  getSharedWithMe
+} from './profile-share'
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getProviderCreds, saveProviderCreds, buildProviderProxy } from './proxy-providers'
 import type { ProviderCreds, ProxyBuildOpts, ProxyProviderId } from '../shared/types'
@@ -208,6 +216,36 @@ export function registerIpc(): void {
   })
   ipcMain.handle('cloud:uploadData', (_e, id: string) => uploadProfileData(id))
   ipcMain.handle('cloud:downloadData', (_e, id: string) => downloadProfileData(id))
+  // App-side encryption of the profile/proxy metadata BEFORE it's pushed to the
+  // cloud DB (so cookies/proxy passwords in the jsonb are ciphertext, not plaintext).
+  // Returns null when no account secret yet (pre-migration) → renderer falls back to
+  // pushing plaintext so nothing breaks during rollout.
+  // profileId given → use that profile's key (the SHARED key when it's shared, so
+  // members decrypt it); otherwise the account secret (e.g. proxies).
+  ipcMain.handle(
+    'cloud:protect',
+    async (_e, context: string, plaintext: string, profileId?: string) => {
+      const secret = (profileId && (await getProfileKey(profileId))) || (await getAccountSecret())
+      return secret ? encryptWithSecret(secret, context, plaintext) : null
+    }
+  )
+  ipcMain.handle(
+    'cloud:unprotect',
+    async (_e, context: string, blob: string, profileId?: string) => {
+      const secret = (profileId && (await getProfileKey(profileId))) || (await getAccountSecret())
+      return secret ? decryptWithSecret(secret, context, blob) : null
+    }
+  )
+
+  // ── Profile sharing ──
+  ipcMain.handle('share:create', (_e, profileId: string, email: string, proxy: ProxyConfig | null) =>
+    shareProfile(profileId, email, proxy)
+  )
+  ipcMain.handle('share:list', (_e, profileId: string) => listShares(profileId))
+  ipcMain.handle('share:remove', (_e, profileId: string, email: string) =>
+    unshareProfile(profileId, email)
+  )
+  ipcMain.handle('share:sharedWithMe', () => getSharedWithMe())
 
   // ── Profile groups (folders) ──
   ipcMain.handle('groups:list', () => listGroups())

@@ -148,6 +148,27 @@ const api = {
   cloudDownloadData: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('cloud:downloadData', id),
 
+  // Encrypt/decrypt metadata with the per-account secret before/after it touches the
+  // cloud DB. Return null when no secret yet (pre-migration) → caller pushes plaintext.
+  cloudProtect: (context: string, plaintext: string, profileId?: string): Promise<string | null> =>
+    ipcRenderer.invoke('cloud:protect', context, plaintext, profileId),
+  cloudUnprotect: (context: string, blob: string, profileId?: string): Promise<string | null> =>
+    ipcRenderer.invoke('cloud:unprotect', context, blob, profileId),
+
+  // ── Profile sharing ──
+  shareCreate: (
+    profileId: string,
+    email: string,
+    proxy: ProxyConfig | null
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('share:create', profileId, email, proxy),
+  shareList: (profileId: string): Promise<Array<{ email: string }>> =>
+    ipcRenderer.invoke('share:list', profileId),
+  shareRemove: (profileId: string, email: string): Promise<void> =>
+    ipcRenderer.invoke('share:remove', profileId, email),
+  shareSharedWithMe: (): Promise<Array<{ profileId: string; proxy: ProxyConfig | null }>> =>
+    ipcRenderer.invoke('share:sharedWithMe'),
+
   // ── Profile groups ──
   listGroups: (): Promise<string[]> => ipcRenderer.invoke('groups:list'),
   createGroup: (name: string): Promise<string[]> => ipcRenderer.invoke('groups:create', name),
