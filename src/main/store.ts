@@ -7,6 +7,7 @@
 import { app, safeStorage } from 'electron'
 import { promises as fs, existsSync } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'node:crypto'
 import type { Profile, Fingerprint } from '../shared/types'
 import { generateFingerprint } from '../shared/fingerprint'
 import { accountKey } from './session'
@@ -33,22 +34,37 @@ function canEncrypt(): boolean {
 }
 
 /**
- * Self-heal profiles whose fingerprint is missing or partial. Such a profile would
- * crash the WHOLE renderer (ProfileTable reads p.fingerprint.userAgent / .webgl /
- * .screen) → the app opens to a BLANK window, and the profile can't be launched.
- * This happens to profiles created via the API or synced from an older/other schema.
- * We generate a coherent fingerprint once (using the profile's OS) and the caller
- * persists it, so it stays STABLE across launches (re-generating each load would
- * change the fingerprint every time — bad for antidetect). Returns true if changed.
+ * Self-heal a profile with missing/partial required fields. A malformed profile
+ * (created via the API, synced from an older schema, or hand-edited) would crash the
+ * WHOLE renderer — ProfileTable reads p.fingerprint.userAgent, p.proxy.type, etc., so
+ * ONE bad profile blanks the entire app, and the profile can't be launched. Reinstall
+ * never fixes it because the bad data lives in the (synced) store, not the app files.
+ * We fill every required field with a sensible default ONCE; the caller persists it so
+ * it's stable (re-generating the fingerprint each load would change it every launch —
+ * bad for antidetect). Returns true if anything was repaired.
  */
-function backfillFingerprints(profiles: Profile[]): boolean {
+function normalizeProfiles(profiles: Profile[]): boolean {
   let changed = false
+  const now = new Date().toISOString()
   for (const p of profiles) {
+    if (!p || typeof p !== 'object') continue
+    if (!p.id) { p.id = randomUUID(); changed = true }
+    if (typeof p.name !== 'string') { p.name = 'Profile'; changed = true }
+    if (typeof p.notes !== 'string') { p.notes = ''; changed = true }
+    if (!Array.isArray(p.tags)) { p.tags = []; changed = true }
+    if (p.os !== 'windows' && p.os !== 'macos' && p.os !== 'linux' && p.os !== 'android') {
+      p.os = 'windows'; changed = true
+    }
     const fp = p.fingerprint as Fingerprint | undefined
     if (!fp || !fp.userAgent || !fp.webgl || !fp.screen) {
-      p.fingerprint = generateFingerprint(p.os ?? 'windows')
-      changed = true
+      p.fingerprint = generateFingerprint(p.os); changed = true
     }
+    if (!p.proxy || typeof p.proxy.type !== 'string') {
+      p.proxy = { type: 'none' }; changed = true
+    }
+    if (!Array.isArray(p.startUrls)) { p.startUrls = []; changed = true }
+    if (typeof p.createdAt !== 'string') { p.createdAt = now; changed = true }
+    if (typeof p.updatedAt !== 'string') { p.updatedAt = now; changed = true }
   }
   return changed
 }
@@ -81,10 +97,10 @@ export async function listProfiles(): Promise<Profile[]> {
 
   if (!profiles) return []
 
-  // Repair any profile with a missing/partial fingerprint (else the UI blanks) and
+  // Repair any profile with missing/partial required fields (else the UI blanks) and
   // persist the repair so it's stable. Best-effort: a write failure still returns the
   // healed in-memory list so the UI renders this session.
-  if (backfillFingerprints(profiles)) {
+  if (normalizeProfiles(profiles)) {
     try {
       await writeAll(profiles)
     } catch {

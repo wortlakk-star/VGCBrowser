@@ -59,7 +59,7 @@ function tzFlag(tz: string): string {
 
 /** Proxy status line (IP + country, or "no proxy" / error). */
 function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
-  if (p.proxy.type === 'none' || !p.proxy.host) {
+  if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
     return (
       <span className="dim">
         <span className="pdot off" />Không proxy
