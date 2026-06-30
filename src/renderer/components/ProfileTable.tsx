@@ -237,14 +237,15 @@ export function ProfileTable({
                 <div className="pcard-row">
                   <span className="ico">💻</span>
                   <span className="mono">
-                    {p.os} · {browserSummary(p.fingerprint.userAgent)}
+                    {p.os} · {browserSummary(p.fingerprint?.userAgent ?? '')}
                   </span>
                 </div>
                 <div className="pcard-row dim">
                   <span className="ico" />
                   <span className="mono">
-                    {gpuSummary(p.fingerprint.webgl.renderer)} · {p.fingerprint.screen.width}×
-                    {p.fingerprint.screen.height} · {p.fingerprint.hardwareConcurrency} cores
+                    {gpuSummary(p.fingerprint?.webgl?.renderer ?? '')} ·{' '}
+                    {p.fingerprint?.screen?.width ?? '?'}×{p.fingerprint?.screen?.height ?? '?'} ·{' '}
+                    {p.fingerprint?.hardwareConcurrency ?? '?'} cores
                   </span>
                 </div>
                 <div className="pcard-row">

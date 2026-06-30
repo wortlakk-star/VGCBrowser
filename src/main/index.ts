@@ -20,13 +20,6 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   throw err
 })
 
-// VPS / Remote Desktop / virtual machines usually have NO real GPU, so Chromium's
-// GPU compositing fails and the manager window renders BLACK/blank (opens but empty).
-// Force software rendering so the UI shows on every machine (headless servers, RDP,
-// VMs). Must run before app 'ready'. The admin UI is lightweight so software rendering
-// is plenty fast; spawned profile browsers are separate processes, unaffected.
-app.disableHardwareAcceleration()
-
 function createWindow(): void {
   // Window/taskbar icon — transparent multi-size .ico generated from the logo (no white
   // background; PNG→ICO via electron-builder was flattening the alpha to white).

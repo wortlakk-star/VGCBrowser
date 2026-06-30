@@ -7,7 +7,8 @@
 import { app, safeStorage } from 'electron'
 import { promises as fs, existsSync } from 'fs'
 import { join } from 'path'
-import type { Profile } from '../shared/types'
+import type { Profile, Fingerprint } from '../shared/types'
+import { generateFingerprint } from '../shared/fingerprint'
 import { accountKey } from './session'
 
 function dataDir(): string {
@@ -31,31 +32,66 @@ function canEncrypt(): boolean {
   }
 }
 
+/**
+ * Self-heal profiles whose fingerprint is missing or partial. Such a profile would
+ * crash the WHOLE renderer (ProfileTable reads p.fingerprint.userAgent / .webgl /
+ * .screen) → the app opens to a BLANK window, and the profile can't be launched.
+ * This happens to profiles created via the API or synced from an older/other schema.
+ * We generate a coherent fingerprint once (using the profile's OS) and the caller
+ * persists it, so it stays STABLE across launches (re-generating each load would
+ * change the fingerprint every time — bad for antidetect). Returns true if changed.
+ */
+function backfillFingerprints(profiles: Profile[]): boolean {
+  let changed = false
+  for (const p of profiles) {
+    const fp = p.fingerprint as Fingerprint | undefined
+    if (!fp || !fp.userAgent || !fp.webgl || !fp.screen) {
+      p.fingerprint = generateFingerprint(p.os ?? 'windows')
+      changed = true
+    }
+  }
+  return changed
+}
+
 export async function listProfiles(): Promise<Profile[]> {
   await fs.mkdir(dataDir(), { recursive: true })
+
+  let profiles: Profile[] | null = null
 
   // Preferred: encrypted store.
   if (existsSync(encFile())) {
     try {
       const buf = await fs.readFile(encFile())
       const plain = canEncrypt() ? safeStorage.decryptString(buf) : buf.toString('utf-8')
-      return JSON.parse(plain) as Profile[]
+      profiles = JSON.parse(plain) as Profile[]
     } catch {
-      // fall through to legacy / empty
+      profiles = null // fall through to legacy / empty
     }
   }
 
   // Legacy plaintext → migrate to encrypted on next write.
-  if (existsSync(jsonFile())) {
+  if (!profiles && existsSync(jsonFile())) {
     try {
-      const profiles = JSON.parse(await fs.readFile(jsonFile(), 'utf-8')) as Profile[]
+      profiles = JSON.parse(await fs.readFile(jsonFile(), 'utf-8')) as Profile[]
       await writeAll(profiles)
-      return profiles
     } catch {
-      return []
+      profiles = null
     }
   }
-  return []
+
+  if (!profiles) return []
+
+  // Repair any profile with a missing/partial fingerprint (else the UI blanks) and
+  // persist the repair so it's stable. Best-effort: a write failure still returns the
+  // healed in-memory list so the UI renders this session.
+  if (backfillFingerprints(profiles)) {
+    try {
+      await writeAll(profiles)
+    } catch {
+      // best-effort — return the healed list regardless
+    }
+  }
+  return profiles
 }
 
 // Serialize every read-modify-write so concurrent mutations (launch bumping
