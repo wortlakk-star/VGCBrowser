@@ -388,7 +388,11 @@ export async function launchProfile(
     // IANA timezone → engine overrides ICU default zone (JS Date / Intl) natively.
     `--vgc-timezone=${fp.timezone}`,
     // Unique per-profile seed → engine seeds canvas/audio noise so every Chrome differs.
-    `--vgc-seed=${seedFromString(id)}`
+    `--vgc-seed=${seedFromString(id)}`,
+    // Profile name shown in the OS window title (title bar / Cmd-Tab / Dock) so you
+    // can tell which profile a window is — NOT in document.title, so it never leaks
+    // to the page. GoLogin-style profile labelling.
+    `--vgc-profile-name=${profile.name}`
   ]
 
   // Portable os_crypt key (VGC Core engine): same secret on every machine of this

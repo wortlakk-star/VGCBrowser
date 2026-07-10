@@ -101,7 +101,26 @@ async function downloadMacEngine(
   }
   if (!existsSync(join(appPath, 'Contents', 'MacOS', 'Chromium'))) return null
   if (existsSync(appPath)) {
-    // Ad-hoc sign so Gatekeeper allows launch (best-effort; usually already signed).
+    // Dock icon: make the launched profile browser show the VGC logo (app.icns)
+    // instead of a macOS-generated name badge. Chromium's Info.plist carries
+    // CFBundleIconName=AppIcon which points into Assets.car (stock Chromium art);
+    // deleting it falls macOS back to CFBundleIconFile=app.icns (our branded logo).
+    const plist = join(appPath, 'Contents', 'Info.plist')
+    try {
+      execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Delete :CFBundleIconName', plist])
+    } catch {
+      // key may already be absent — fine
+    }
+    try {
+      execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleIconFile app.icns', plist])
+    } catch {
+      try {
+        execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Add :CFBundleIconFile string app.icns', plist])
+      } catch {
+        // ignore
+      }
+    }
+    // Ad-hoc sign (AFTER the plist edit) so Gatekeeper allows launch.
     try {
       execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appPath])
     } catch {
