@@ -44,30 +44,23 @@ export function SettingsModal({
 }: Props): JSX.Element {
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
-  const [useSystemBrowser, setUseSystemBrowser] = useState(false)
-  // Default ON (matches the engine default) until settings load.
-  const [nativeMode, setNativeMode] = useState(true)
 
   useEffect(() => {
     void window.vgc.getVersion().then(setVersion)
+    // The engine always runs in Native (VGC Core) mode — the antidetect-correct
+    // config that also keeps Google login working — so the manual toggles were
+    // removed. Normalise any stale saved value so no profile is stuck in CDP /
+    // system-Chrome mode.
     void window.vgc.getSettings().then((s) => {
-      setUseSystemBrowser(!!s.useSystemBrowser)
-      setNativeMode(s.nativeMode !== false)
+      if (s.nativeMode === false || s.useSystemBrowser) {
+        void window.vgc.saveSettings({ nativeMode: true, useSystemBrowser: false })
+      }
     })
     void window.vgc.getUpdateStatus().then((s) => {
       if (s.phase !== 'idle') setUpdate(s)
     })
     return window.vgc.onUpdateStatus(setUpdate)
   }, [])
-
-  const toggleSystemBrowser = (next: boolean): void => {
-    setUseSystemBrowser(next)
-    void window.vgc.saveSettings({ useSystemBrowser: next })
-  }
-  const toggleNativeMode = (next: boolean): void => {
-    setNativeMode(next)
-    void window.vgc.saveSettings({ nativeMode: next })
-  }
 
   const checking = update?.phase === 'checking' || update?.phase === 'downloading'
   const downloaded = update?.phase === 'downloaded'
@@ -119,58 +112,6 @@ export function SettingsModal({
                 ☀ Sáng
               </button>
             </div>
-          </section>
-
-          <section className="card">
-            <h3>Engine trình duyệt</h3>
-            <label
-              className="hint"
-              style={{
-                display: 'flex',
-                gap: 8,
-                alignItems: 'flex-start',
-                cursor: 'pointer',
-                marginTop: 0,
-                marginBottom: 10
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={nativeMode}
-                onChange={(e) => toggleNativeMode(e.target.checked)}
-                style={{ marginTop: 3 }}
-              />
-              <span>
-                <b>Chế độ gốc (Native) — BẬT để đăng nhập Google được.</b> Engine tự giả
-                fingerprint, KHÔNG gắn trình gỡ lỗi CDP (thứ Google chặn). Bật = vào
-                Google bình thường + vẫn chống phát hiện. Tắt = bật lại tiêm CDP (thêm
-                múi giờ/JS + đồng bộ tab + API automation) nhưng Google sẽ chặn đăng nhập.
-                <i> Đóng &amp; mở lại profile sau khi đổi.</i>
-              </span>
-            </label>
-            <label
-              className="hint"
-              style={{
-                display: 'flex',
-                gap: 8,
-                alignItems: 'flex-start',
-                cursor: 'pointer',
-                marginTop: 0
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={useSystemBrowser}
-                onChange={(e) => toggleSystemBrowser(e.target.checked)}
-                style={{ marginTop: 3 }}
-              />
-              <span>
-                Dùng Google Chrome hệ thống làm engine — bật cái này nếu Google báo
-                <b> &quot;browser may not be secure&quot;</b> khi đăng nhập. Chrome thật được
-                Google tin tưởng; fingerprint vẫn được áp dụng. (Đóng &amp; mở lại profile
-                sau khi đổi. Cần đã cài Google Chrome trên máy.)
-              </span>
-            </label>
           </section>
 
           <section className="card">
