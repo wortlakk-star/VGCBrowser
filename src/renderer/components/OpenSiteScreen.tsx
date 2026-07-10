@@ -15,16 +15,35 @@ interface Tab {
   paths: string[]
 }
 
+// Endpoints are probed live against api-v2.opensitex.store: each list is tried in
+// order and the first that answers (by the token's role) wins. Admin paths come
+// first, then seller, then master — a wrong-role call returns 403 and falls
+// through to the next candidate. Only routes confirmed to exist are listed.
 const TABS: Tab[] = [
-  { key: 'overview', label: 'Tổng quan', paths: ['/admin/dashboard', '/master/dashboard', '/seller/dashboard'] },
-  { key: 'orders', label: 'Đơn hàng', paths: ['/admin/orders', '/seller/orders'] },
-  { key: 'products', label: 'Sản phẩm', paths: ['/admin/products', '/seller/products', '/seller/stores'] },
   {
-    key: 'sellers',
-    label: 'Người bán',
-    paths: ['/admin/sellers', '/admin/intermediary-sellers', '/master/fulfillers', '/master/admins']
+    key: 'overview',
+    label: 'Tổng quan',
+    paths: [
+      '/admin/analytics/overview',
+      '/seller/analytics/overview',
+      '/master/analytics/date',
+      '/master/analytics/admin'
+    ]
   },
-  { key: 'analytics', label: 'Doanh thu / Phân tích', paths: ['/admin/analytics', '/seller/analytics', '/master/analytics'] }
+  { key: 'orders', label: 'Đơn hàng', paths: ['/admin/orders', '/seller/orders'] },
+  { key: 'products', label: 'Sản phẩm', paths: ['/admin/products', '/seller/stores'] },
+  { key: 'sellers', label: 'Người bán', paths: ['/admin/intermediary-sellers', '/admin/domains'] },
+  {
+    key: 'analytics',
+    label: 'Doanh thu / Phân tích',
+    paths: [
+      '/admin/analytics/date',
+      '/seller/analytics/sales-report',
+      '/admin/analytics/overview',
+      '/master/analytics/date'
+    ]
+  },
+  { key: 'payments', label: 'Thanh toán', paths: ['/admin/payments', '/seller/stores'] }
 ]
 
 const numFmt = new Intl.NumberFormat('vi-VN')
