@@ -257,3 +257,50 @@ export interface ProfileRuntimeState {
 export type CreateProfileInput = Partial<
   Pick<Profile, 'name' | 'notes' | 'tags' | 'group' | 'os' | 'fingerprint' | 'proxy' | 'startUrls'>
 >
+
+// ── OpenSite dashboard integration ───────────────────────────────────────────
+// A read-only viewer for the OpenSite seller/admin platform (api-v2.opensitex.store).
+// The user signs in with their own admin/master credentials; we hold the Bearer
+// token in the main process and proxy REST calls so the renderer can render a
+// consolidated dashboard (orders / products / revenue / sellers).
+
+/** The signed-in OpenSite user, as returned by /auth/login → data.user. */
+export interface OpenSiteUser {
+  id?: string
+  email?: string
+  name?: string
+  /** master | admin | seller | … — decides which endpoint family we read. */
+  role?: string
+  [k: string]: unknown
+}
+
+/** Current OpenSite session as seen by the renderer. */
+export interface OpenSiteStatus {
+  loggedIn: boolean
+  email?: string
+  role?: string
+  user?: OpenSiteUser
+  /** Base API URL in use (default https://api-v2.opensitex.store/api). */
+  baseUrl: string
+  /** True when a saved password lets us auto-login after a token expires. */
+  remembered?: boolean
+}
+
+/** Result of an OpenSite login attempt. */
+export interface OpenSiteLoginResult {
+  ok: boolean
+  /** Server asked for a 2FA code — call verifyTotp next. */
+  twoFactorRequired?: boolean
+  status?: OpenSiteStatus
+  error?: string
+}
+
+/** Result of a proxied OpenSite API read. `data` is the unwrapped payload. */
+export interface OpenSiteFetchResult {
+  ok: boolean
+  status?: number
+  data?: unknown
+  error?: string
+  /** The endpoint path that actually answered (after role fallback). */
+  path?: string
+}

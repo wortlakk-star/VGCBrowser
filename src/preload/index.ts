@@ -20,7 +20,10 @@ import type {
   ProxyConfig,
   ProxyProviderId,
   SavedProxy,
-  UpdateStatus
+  UpdateStatus,
+  OpenSiteStatus,
+  OpenSiteLoginResult,
+  OpenSiteFetchResult
 } from '../shared/types'
 
 const api = {
@@ -185,7 +188,19 @@ const api = {
     const listener = (_e: unknown, state: DataSyncState): void => cb(state)
     ipcRenderer.on('profile:dataSync', listener)
     return () => ipcRenderer.removeListener('profile:dataSync', listener)
-  }
+  },
+
+  // ── OpenSite dashboard (read-only viewer over api-v2.opensitex.store) ──
+  opensiteStatus: (): Promise<OpenSiteStatus> => ipcRenderer.invoke('opensite:status'),
+  opensiteLogin: (email: string, password: string, remember: boolean): Promise<OpenSiteLoginResult> =>
+    ipcRenderer.invoke('opensite:login', email, password, remember),
+  opensiteVerifyTotp: (code: string): Promise<OpenSiteLoginResult> =>
+    ipcRenderer.invoke('opensite:verifyTotp', code),
+  opensiteFetch: (paths: string[]): Promise<OpenSiteFetchResult> =>
+    ipcRenderer.invoke('opensite:fetch', paths),
+  opensiteLogout: (): Promise<OpenSiteStatus> => ipcRenderer.invoke('opensite:logout'),
+  opensiteSetBaseUrl: (url: string): Promise<OpenSiteStatus> =>
+    ipcRenderer.invoke('opensite:setBaseUrl', url)
 }
 
 contextBridge.exposeInMainWorld('vgc', api)
