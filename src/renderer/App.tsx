@@ -562,10 +562,13 @@ export default function App(): JSX.Element {
         </div>
       )}
       <Sidebar
+        email={accountEmail}
+        profileCount={profiles.length}
         groups={groupsWithCounts}
         allCount={profiles.length}
         active={groupFilter}
         onSelect={setGroupFilter}
+        onCreate={() => setShowCreate(true)}
         onProxy={() => setShowProxyMgr(true)}
         onSettings={() => setShowSettings(true)}
         onCreateGroup={createGroup}
@@ -573,16 +576,32 @@ export default function App(): JSX.Element {
       />
 
       <div className="main">
-        <div className="toolbar">
-          <input
-            className="search"
-            placeholder="Tìm theo tên, tag, nhóm…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+        <div className="crumbbar">
+          <div className="crumb">
+            <span className="crumb-acct">{accountEmail || 'VGC'}</span>
+            <span className="crumb-sep">›</span>
+            <span className="crumb-cur">
+              {groupFilter === ''
+                ? 'Tất cả hồ sơ'
+                : groupFilter === '#ungrouped'
+                  ? 'Chưa phân nhóm'
+                  : groupFilter}
+            </span>
+          </div>
           <div className="stats">
             <span className="running-dot" /> {runningCount} chạy
-            <span className="dot">·</span> {profiles.length} profile
+            <span className="dot">·</span> {profiles.length} hồ sơ
+          </div>
+        </div>
+        <div className="toolbar">
+          <div className="searchbox">
+            <span className="search-ic">⌕</span>
+            <input
+              className="search"
+              placeholder="Tìm theo tên, tag, nhóm…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
           </div>
           <button
             className="btn"
