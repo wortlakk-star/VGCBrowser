@@ -34,30 +34,6 @@ function browserSummary(ua: string): string {
   return m ? `Chrome ${m[1]}` : 'Chromium'
 }
 
-/** Shorten the verbose ANGLE renderer string to the GPU name. */
-function gpuSummary(renderer: string): string {
-  const m = renderer.match(/ANGLE \([^,]+, ([^,]+?) (?:Direct3D|vs_|D3D)/)
-  return m ? m[1] : renderer.slice(0, 24)
-}
-
-/** Rough country flag from an IANA timezone. */
-function tzFlag(tz: string): string {
-  const exact: Record<string, string> = {
-    'Europe/London': '🇬🇧',
-    'Europe/Berlin': '🇩🇪',
-    'Europe/Paris': '🇫🇷',
-    'Asia/Singapore': '🇸🇬',
-    'Asia/Ho_Chi_Minh': '🇻🇳',
-    'Asia/Tokyo': '🇯🇵'
-  }
-  if (exact[tz]) return exact[tz]
-  const region = tz.split('/')[0]
-  if (region === 'America') return '🇺🇸'
-  if (region === 'Europe') return '🇪🇺'
-  if (region === 'Asia') return '🌏'
-  return '🌐'
-}
-
 /** Proxy status line (IP + country, or "no proxy" / error). */
 function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
@@ -151,7 +127,6 @@ export function ProfileTable({
             </th>
             <th className="col-name">Tên</th>
             <th className="col-status">Tình trạng</th>
-            <th className="col-cfg">Cấu hình</th>
             <th className="col-proxy">Proxy &amp; Vị trí</th>
             <th className="col-act" />
           </tr>
@@ -177,13 +152,6 @@ export function ProfileTable({
                   <span className={`pstatus ${status}`}>
                     <i className="sdot" />
                     {STATUS_LABEL[status]}
-                  </span>
-                </td>
-                <td className="col-cfg">
-                  <span className="mono dim">
-                    {gpuSummary(p.fingerprint?.webgl?.renderer ?? '')} ·{' '}
-                    {p.fingerprint?.hardwareConcurrency ?? '?'} nhân ·{' '}
-                    {tzFlag(p.fingerprint.timezone)}
                   </span>
                 </td>
                 <td className="col-proxy">
