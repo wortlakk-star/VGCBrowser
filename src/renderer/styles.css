@@ -1279,3 +1279,463 @@ code {
   flex: 1;
   text-align: center;
 }
+
+/* ═══ GoLogin-style redesign (v0.1.90) ═══════════════════════════════════════ */
+
+/* ── Sidebar: account switcher + big add button + nav ── */
+.sidebar {
+  width: 258px;
+  flex: 0 0 258px;
+  padding: 12px 10px;
+  gap: 2px;
+}
+.acct {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+.acct:hover {
+  background: var(--hover);
+}
+.acct-av {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-grad);
+  color: #05201c;
+  font-weight: 800;
+  font-size: 15px;
+}
+.acct-info {
+  min-width: 0;
+  flex: 1;
+}
+.acct-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-plan {
+  font-size: 11px;
+  color: var(--dim);
+}
+.acct-chev {
+  color: var(--dim);
+  font-size: 15px;
+}
+.add-profile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 14px;
+  margin-bottom: 12px;
+  background: var(--accent-grad);
+  color: #05201c;
+  border: none;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(31, 206, 185, 0.28);
+}
+.add-profile:hover {
+  filter: brightness(1.06);
+}
+.add-profile .plus {
+  font-size: 16px;
+  font-weight: 800;
+}
+.nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 1px;
+}
+.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 9px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 13.5px;
+  text-align: left;
+}
+.nav-row:hover {
+  background: var(--hover);
+}
+.nav-row.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+.nav-row.active .nav-ic {
+  color: var(--accent);
+}
+.nav-ic {
+  width: 18px;
+  flex: 0 0 18px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 13px;
+}
+.nav-lbl {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-ct {
+  font-size: 11px;
+  color: var(--dim);
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: 1px 8px;
+  min-width: 22px;
+  text-align: center;
+}
+.nav-row.active .nav-ct {
+  background: var(--accent);
+  color: #05201c;
+}
+.nav-sec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+.nav-add,
+.nav-del {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 6px;
+}
+.nav-add:hover {
+  color: var(--accent);
+}
+.nav-del {
+  opacity: 0;
+}
+.nav-grouprow {
+  display: flex;
+  align-items: center;
+}
+.nav-grouprow .nav-row {
+  flex: 1;
+}
+.nav-grouprow:hover .nav-del {
+  opacity: 1;
+}
+.nav-del:hover {
+  color: var(--red);
+}
+.nav-scroll {
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.nav-empty {
+  font-size: 12px;
+  color: var(--dim);
+  padding: 2px 10px 6px;
+}
+.group-input {
+  width: calc(100% - 8px);
+  margin: 2px 4px 8px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--text);
+  outline: none;
+  font-size: 13px;
+}
+.nav-divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 8px 6px;
+}
+.side-foot {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.plan-card {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.plan-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.plan-count {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+/* ── Breadcrumb bar ── */
+.crumbbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px 2px;
+}
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.crumb-acct,
+.crumb-sep {
+  color: var(--dim);
+}
+.crumb-cur {
+  font-weight: 600;
+}
+
+/* ── Toolbar + search box ── */
+.searchbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0 12px;
+}
+.searchbox:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.search-ic {
+  color: var(--dim);
+  font-size: 16px;
+}
+.searchbox .search {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  color: var(--text);
+  padding: 9px 0;
+  font-size: 13.5px;
+}
+
+/* ── Profile TABLE (GoLogin rows) ── */
+.ptable-wrap {
+  overflow-x: auto;
+}
+.ptable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.ptable thead th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  font-weight: 600;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+.ptable tbody td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+.ptable tbody tr:hover {
+  background: var(--hover);
+}
+.ptable tbody tr.sel {
+  background: var(--accent-soft);
+}
+.col-check {
+  width: 34px;
+}
+.col-act {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+.pname {
+  font-weight: 600;
+}
+.psub {
+  font-size: 11.5px;
+  color: var(--dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.pgroup {
+  background: var(--panel-2);
+  color: var(--dim);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 10.5px;
+}
+.pstatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.pstatus .sdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3a4150;
+}
+.pstatus.running .sdot,
+.pstatus.starting .sdot {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.pstatus.running,
+.pstatus.starting {
+  color: var(--green);
+}
+.pstatus.error .sdot {
+  background: var(--red);
+}
+.pstatus.error {
+  color: var(--red);
+}
+.proxy-ok {
+  color: var(--green);
+}
+.proxy-ok .flag {
+  margin-right: 2px;
+}
+.ptype {
+  text-transform: none;
+}
+
+/* ── Row actions: Run button + ⋯ menu ── */
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 6px 18px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.run-btn:hover {
+  background: var(--accent-soft);
+}
+.run-btn.stop {
+  border-color: var(--red);
+  color: var(--red);
+}
+.run-btn.stop:hover {
+  background: rgba(255, 90, 95, 0.12);
+}
+.menu-wrap {
+  position: relative;
+}
+.row-actions .icon-btn {
+  width: 30px;
+  height: 30px;
+}
+.row-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  min-width: 214px;
+  display: flex;
+  flex-direction: column;
+}
+.row-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.row-menu button:hover {
+  background: var(--hover);
+}
+.row-menu button.danger {
+  color: var(--red);
+}
+.row-menu .menu-sep {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 4px 0;
+}
+.row-menu .menu-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.row-menu .menu-group select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 6px;
+}

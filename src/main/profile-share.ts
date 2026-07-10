@@ -19,7 +19,11 @@ interface ShareRow {
   proxy: ProxyConfig | null
 }
 
-let cache: { uid: string; rows: ShareRow[] } | null = null
+let cache: { uid: string; rows: ShareRow[]; at: number } | null = null
+// A recipient's cache is only invalidated locally (shareProfile/unshareProfile run
+// on the OWNER's machine), so without a TTL a recipient would never see a newly
+// shared profile. 30s keeps it fresh without hammering the REST endpoint.
+const CACHE_TTL_MS = 30_000
 
 async function rest(
   pathAndQuery: string,
@@ -50,11 +54,18 @@ async function rest(
 export async function loadShares(force = false): Promise<ShareRow[]> {
   const session = getCloudSession()
   if (!session) return []
-  if (!force && cache && cache.uid === session.uid) return cache.rows
+  if (
+    !force &&
+    cache &&
+    cache.uid === session.uid &&
+    Date.now() - cache.at < CACHE_TTL_MS
+  ) {
+    return cache.rows
+  }
   const res = await rest('profile_shares?select=profile_id,owner,member_email,shared_key,proxy')
   if (!res || !res.ok) return cache?.uid === session.uid ? cache.rows : []
   const rows = (await res.json().catch(() => [])) as ShareRow[]
-  cache = { uid: session.uid, rows: Array.isArray(rows) ? rows : [] }
+  cache = { uid: session.uid, rows: Array.isArray(rows) ? rows : [], at: Date.now() }
   return cache.rows
 }
 
@@ -67,6 +78,18 @@ export async function getProfileKey(profileId: string): Promise<string | null> {
   const rows = await loadShares()
   const r = rows.find((x) => x.profile_id === profileId)
   return r ? r.shared_key : null
+}
+
+/** The uid whose cloud folder holds this profile's data. For a shared profile that
+ *  is ALWAYS the owner (both owner and members read/write the same
+ *  `profiles/{owner}/{id}` path so two-way sync converges); otherwise it's the
+ *  current user. Returns null only when signed out. */
+export async function ownerForProfile(profileId: string): Promise<string | null> {
+  const session = getCloudSession()
+  if (!session) return null
+  const rows = await loadShares()
+  const r = rows.find((x) => x.profile_id === profileId)
+  return r ? r.owner : session.uid
 }
 
 /** Share a profile to an email with a chosen proxy. Reuses the profile's existing
@@ -130,7 +153,7 @@ export async function unshareProfile(profileId: string, email: string): Promise<
 
 /** Profiles shared WITH me (member view): the ids + chosen proxy to import/sync. */
 export async function getSharedWithMe(): Promise<
-  Array<{ profileId: string; proxy: ProxyConfig | null }>
+  Array<{ profileId: string; owner: string; proxy: ProxyConfig | null }>
 > {
   const session = getCloudSession()
   if (!session) return []
@@ -138,5 +161,5 @@ export async function getSharedWithMe(): Promise<
   const rows = await loadShares()
   return rows
     .filter((x) => x.member_email === email && x.owner !== session.uid)
-    .map((x) => ({ profileId: x.profile_id, proxy: x.proxy }))
+    .map((x) => ({ profileId: x.profile_id, owner: x.owner, proxy: x.proxy }))
 }

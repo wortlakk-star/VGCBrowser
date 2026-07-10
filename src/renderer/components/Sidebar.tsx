@@ -1,11 +1,13 @@
 import { useState, type KeyboardEvent } from 'react'
-import logo from '../assets/logo.png'
 
 interface Props {
+  email: string
+  profileCount: number
   groups: Array<{ name: string; count: number }>
   allCount: number
   active: string // '' = all, '#ungrouped' = no group, else group name
   onSelect: (key: string) => void
+  onCreate: () => void
   onProxy: () => void
   onSettings: () => void
   onCreateGroup: (name: string) => void
@@ -13,10 +15,13 @@ interface Props {
 }
 
 export function Sidebar({
+  email,
+  profileCount,
   groups,
   allCount,
   active,
   onSelect,
+  onCreate,
   onProxy,
   onSettings,
   onCreateGroup,
@@ -38,108 +43,90 @@ export function Sidebar({
     }
   }
 
-  const Item = ({ k, label, count }: { k: string; label: string; count: number }): JSX.Element => (
-    <button
-      className={`nav-item ${active === k ? 'active' : ''}`}
-      onClick={() => onSelect(k)}
-    >
-      <span className="nav-label">{label}</span>
-      <span className="nav-count">{count}</span>
-    </button>
-  )
+  const acctName = email || 'VGC Browser'
+  const initial = (email || 'V').trim().charAt(0).toUpperCase()
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <img className="logo" src={logo} alt="VGC" style={{ width: 28, height: 28 }} />
-        <div>
-          <div className="brand-name">VGC Browser</div>
-          <div className="brand-sub">Antidetect · VGC Group</div>
+      {/* Account switcher (GoLogin-style) */}
+      <div className="acct" title={acctName}>
+        <div className="acct-av">{initial}</div>
+        <div className="acct-info">
+          <div className="acct-name">{acctName}</div>
+          <div className="acct-plan">Antidetect · VGC Group</div>
         </div>
+        <span className="acct-chev">⌄</span>
       </div>
 
-      <div className="nav-section">
-        <div className="nav-title">Profiles</div>
-        <Item k="" label="Tất cả" count={allCount} />
-      </div>
+      {/* Primary action */}
+      <button className="add-profile" onClick={onCreate}>
+        <span className="plus">＋</span> Thêm hồ sơ
+      </button>
 
-      <div className="nav-section">
-        <div
-          className="nav-title"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+      <nav className="nav">
+        <button
+          className={`nav-row ${active === '' ? 'active' : ''}`}
+          onClick={() => onSelect('')}
         >
+          <span className="nav-ic">▦</span>
+          <span className="nav-lbl">Tất cả hồ sơ</span>
+          <span className="nav-ct">{allCount}</span>
+        </button>
+
+        <div className="nav-sec">
           <span>Nhóm</span>
-          <span
-            onClick={() => setCreating(true)}
-            title="Tạo nhóm mới"
-            style={{ cursor: 'pointer', color: 'var(--accent)', fontSize: 17, lineHeight: 1, fontWeight: 700 }}
-          >
+          <button className="nav-add" title="Tạo nhóm mới" onClick={() => setCreating(true)}>
             ＋
-          </span>
+          </button>
         </div>
         {creating && (
           <input
+            className="group-input"
             autoFocus
             placeholder="Tên nhóm… (Enter)"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={onGroupKey}
             onBlur={submitGroup}
-            style={{
-              width: '100%',
-              margin: '2px 0 8px',
-              padding: '8px 10px',
-              background: 'var(--panel-2)',
-              border: '1px solid var(--accent)',
-              borderRadius: 7,
-              color: 'var(--text)',
-              outline: 'none',
-              fontSize: 13
-            }}
           />
         )}
         <div className="nav-scroll">
-          {groups.length === 0 && (
-            <div className="hint" style={{ padding: '2px 10px' }}>
-              Chưa có nhóm. Bấm ＋ để tạo.
-            </div>
+          {groups.length === 0 && !creating && (
+            <div className="nav-empty">Chưa có nhóm. Bấm ＋ để tạo.</div>
           )}
           {groups.map((g) => (
-            <div key={g.name} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <div className="nav-grouprow" key={g.name}>
               <button
-                className={`nav-item ${active === g.name ? 'active' : ''}`}
-                style={{ flex: 1 }}
+                className={`nav-row ${active === g.name ? 'active' : ''}`}
                 onClick={() => onSelect(g.name)}
               >
-                <span className="nav-label">{g.name}</span>
-                <span className="nav-count">{g.count}</span>
+                <span className="nav-ic">▸</span>
+                <span className="nav-lbl">{g.name}</span>
+                <span className="nav-ct">{g.count}</span>
               </button>
-              <button
-                title="Xoá nhóm"
-                onClick={() => onDeleteGroup(g.name)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--dim)',
-                  cursor: 'pointer',
-                  padding: '0 6px',
-                  fontSize: 13
-                }}
-              >
+              <button className="nav-del" title="Xoá nhóm" onClick={() => onDeleteGroup(g.name)}>
                 ✕
               </button>
             </div>
           ))}
         </div>
-      </div>
 
-      <div className="sidebar-bottom">
-        <button className="nav-btn" onClick={onProxy}>
-          📡 <span>Proxy Manager</span>
+        <div className="nav-divider" />
+        <button className="nav-row" onClick={onProxy}>
+          <span className="nav-ic">🛰</span>
+          <span className="nav-lbl">Proxy</span>
         </button>
-        <button className="nav-btn" onClick={onSettings}>
-          ⚙ <span>Cài đặt</span>
+        <button className="nav-row" onClick={onSettings}>
+          <span className="nav-ic">⚙</span>
+          <span className="nav-lbl">Cài đặt</span>
         </button>
+      </nav>
+
+      <div className="side-foot">
+        <div className="plan-card">
+          <div className="plan-title">VGC Antidetect</div>
+          <div className="plan-count">{profileCount} hồ sơ</div>
+        </div>
       </div>
     </aside>
   )

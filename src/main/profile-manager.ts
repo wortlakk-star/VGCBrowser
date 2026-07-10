@@ -382,6 +382,7 @@ export async function launchProfile(
     // VGC Core native fingerprint switches (stock Chrome ignores unknown flags).
     `--vgc-hardware-concurrency=${fp.hardwareConcurrency}`,
     `--vgc-device-memory=${fp.deviceMemory}`,
+    `--vgc-platform=${fp.platform}`,
     `--vgc-webgl-vendor=${fp.webgl.vendor}`,
     `--vgc-webgl-renderer=${fp.webgl.renderer}`,
     // IANA timezone → engine overrides ICU default zone (JS Date / Intl) natively.

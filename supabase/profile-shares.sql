@@ -42,22 +42,48 @@ returns boolean language sql security definer set search_path = public stable as
   );
 $$;
 
--- profiles_cloud: a member can READ + UPDATE the shared profile's row (two-way), in
--- addition to the existing owner-only policy. Owner stays via "owner full access".
+-- profiles_cloud: a member can READ + INSERT + UPDATE the shared profile's row
+-- (two-way sync), but NOT hard-DELETE it — only the owner can remove the profile.
+-- Split into per-command policies instead of `for all` so a member can't drop the
+-- owner's row. Owner keeps full control via the existing "owner full access" policy.
 drop policy if exists "shared profile member access" on public.profiles_cloud;
-create policy "shared profile member access" on public.profiles_cloud
-  for all
-  using (public.can_access_shared_profile(profile_id))
+drop policy if exists "shared profile member read" on public.profiles_cloud;
+drop policy if exists "shared profile member insert" on public.profiles_cloud;
+drop policy if exists "shared profile member update" on public.profiles_cloud;
+create policy "shared profile member read" on public.profiles_cloud
+  for select using (public.can_access_shared_profile(profile_id));
+create policy "shared profile member insert" on public.profiles_cloud
+  for insert with check (public.can_access_shared_profile(profile_id));
+create policy "shared profile member update" on public.profiles_cloud
+  for update using (public.can_access_shared_profile(profile_id))
   with check (public.can_access_shared_profile(profile_id));
 
 -- Storage: the session zip + cookies live at  {owner_uid}/{profile_id}.(zip|cookies.json).
 -- Let a member read+write the objects of a profile shared with them. The FILENAME is
 -- "{profile_id}.zip" / "{profile_id}.cookies.json" → strip the suffix to get the
 -- profile id and check the share.
+-- Members read + write (insert/update) the shared profile's objects, but can't
+-- DELETE them (owner-only), so a member can't wipe the owner's session blob.
 drop policy if exists "shared profile storage member" on storage.objects;
-create policy "shared profile storage member" on storage.objects
-  for all
-  using (
+drop policy if exists "shared profile storage member read" on storage.objects;
+drop policy if exists "shared profile storage member insert" on storage.objects;
+drop policy if exists "shared profile storage member update" on storage.objects;
+create policy "shared profile storage member read" on storage.objects
+  for select using (
+    bucket_id = 'profiles'
+    and public.can_access_shared_profile(
+      regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')
+    )
+  );
+create policy "shared profile storage member insert" on storage.objects
+  for insert with check (
+    bucket_id = 'profiles'
+    and public.can_access_shared_profile(
+      regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')
+    )
+  );
+create policy "shared profile storage member update" on storage.objects
+  for update using (
     bucket_id = 'profiles'
     and public.can_access_shared_profile(
       regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')

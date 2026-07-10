@@ -22,7 +22,7 @@ interface Props {
 }
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
-  stopped: 'Đang tắt',
+  stopped: 'Sẵn sàng',
   starting: 'Đang mở…',
   running: 'Đang chạy',
   error: 'Lỗi'
@@ -37,7 +37,7 @@ function browserSummary(ua: string): string {
 /** Shorten the verbose ANGLE renderer string to the GPU name. */
 function gpuSummary(renderer: string): string {
   const m = renderer.match(/ANGLE \([^,]+, ([^,]+?) (?:Direct3D|vs_|D3D)/)
-  return m ? m[1] : renderer.slice(0, 30)
+  return m ? m[1] : renderer.slice(0, 24)
 }
 
 /** Rough country flag from an IANA timezone. */
@@ -58,6 +58,34 @@ function tzFlag(tz: string): string {
   return '🌐'
 }
 
+/** Country code resolved for a profile's proxy (from a live check or the pool). */
+function proxyCountry(p: Profile, proxyPool: SavedProxy[]): string {
+  const pc = p.proxyCheck
+  if (pc?.status === 'ok' && pc.countryCode) return pc.countryCode.toUpperCase()
+  const sp = proxyPool.find(
+    (x) =>
+      x.host === p.proxy?.host &&
+      x.port === p.proxy?.port &&
+      (x.username || '') === (p.proxy?.username || '')
+  )
+  if (sp?.lastCountryCode) return sp.lastCountryCode.toUpperCase()
+  return ''
+}
+
+/** "socks5 · US" style proxy-type label (GoLogin's "Loại proxy" column). */
+function proxyType(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
+  if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
+    return <span className="dim">—</span>
+  }
+  const cc = proxyCountry(p, proxyPool)
+  return (
+    <span className="ptype">
+      {p.proxy.type}
+      {cc && <span className="dim"> · {cc}</span>}
+    </span>
+  )
+}
+
 /** Proxy status line (IP + country, or "no proxy" / error). */
 function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
@@ -70,7 +98,8 @@ function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   const pc = p.proxyCheck
   if (pc?.status === 'ok' && pc.ip) {
     return (
-      <span style={{ color: 'var(--green)' }}>
+      <span className="proxy-ok">
+        <span className="flag">{pc.countryCode ? '' : '🌐'}</span>
         <span className="pdot on" />
         {(pc.countryCode || '').toUpperCase()} · {pc.ip}
       </span>
@@ -91,7 +120,7 @@ function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   )
   if (sp && sp.lastStatus === 'ok' && sp.lastIp) {
     return (
-      <span style={{ color: 'var(--green)' }}>
+      <span className="proxy-ok">
         <span className="pdot on" />
         {(sp.lastCountryCode || '').toUpperCase()} · {sp.lastIp}
       </span>
@@ -141,158 +170,146 @@ export function ProfileTable({
   }, [menuFor])
 
   return (
-    <div className="profile-pane">
-      <div className="grid-toolbar">
-        <label className="select-all">
-          <input type="checkbox" checked={allSelected} onChange={onToggleSelectAll} />
-          Chọn tất cả
-        </label>
-        <span className="dim">{profiles.length} profile</span>
-      </div>
-
-      <div className="profile-grid">
-        {profiles.map((p) => {
-          const status = statuses[p.id] ?? 'stopped'
-          const active = status === 'running' || status === 'starting'
-          const sel = selected.has(p.id)
-          return (
-            <div key={p.id} className={`pcard${sel ? ' selected' : ''}`}>
-              <div className="pcard-top">
-                <input
-                  type="checkbox"
-                  checked={sel}
-                  onChange={() => onToggleSelect(p.id)}
-                />
-                <span className={`pcard-dot ${status}`} title={STATUS_LABEL[status]} />
-                <div className="pcard-title">
-                  <div className="name">{p.name}</div>
-                  {p.group && <span className="group-tag">{p.group}</span>}
-                </div>
-                <div className="pcard-menu-wrap">
-                  <button
-                    className="icon-btn"
-                    title="Thêm hành động"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setMenuFor(menuFor === p.id ? null : p.id)
-                    }}
-                  >
-                    ⋯
-                  </button>
-                  {menuFor === p.id && (
-                    <div className="pcard-menu" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => {
-                          onCheck(p.id)
-                          setMenuFor(null)
-                        }}
-                      >
-                        🧪 Kiểm tra fingerprint
-                      </button>
-                      <button
-                        onClick={() => {
-                          onEdit(p)
-                          setMenuFor(null)
-                        }}
-                      >
-                        ✏️ Sửa
-                      </button>
-                      <button
-                        onClick={() => {
-                          onDuplicate(p.id)
-                          setMenuFor(null)
-                        }}
-                      >
-                        ⧉ Nhân bản
-                      </button>
-                      <button
-                        onClick={() => {
-                          onShare(p)
-                          setMenuFor(null)
-                        }}
-                      >
-                        🔗 Chia sẻ
-                      </button>
-                      <div className="menu-sep" />
-                      <label className="menu-group">
-                        <span>Nhóm</span>
-                        <select
-                          value={p.group ?? ''}
-                          onChange={(e) => onMoveGroup(p.id, e.target.value)}
-                        >
-                          <option value="">Tất cả (bỏ nhóm)</option>
-                          {groups.map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div className="menu-sep" />
-                      <button
-                        className="danger"
-                        onClick={() => {
-                          onDelete(p.id)
-                          setMenuFor(null)
-                        }}
-                      >
-                        🗑 Xoá profile
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="pcard-meta">
-                <div className="pcard-row">
-                  <span className="ico">💻</span>
-                  <span className="mono">
+    <div className="ptable-wrap">
+      <table className="ptable">
+        <thead>
+          <tr>
+            <th className="col-check">
+              <input type="checkbox" checked={allSelected} onChange={onToggleSelectAll} />
+            </th>
+            <th className="col-name">Tên</th>
+            <th className="col-status">Tình trạng</th>
+            <th className="col-cfg">Cấu hình</th>
+            <th className="col-proxy">Proxy &amp; Vị trí</th>
+            <th className="col-ptype">Loại proxy</th>
+            <th className="col-act" />
+          </tr>
+        </thead>
+        <tbody>
+          {profiles.map((p) => {
+            const status = statuses[p.id] ?? 'stopped'
+            const active = status === 'running' || status === 'starting'
+            const sel = selected.has(p.id)
+            return (
+              <tr key={p.id} className={sel ? 'sel' : ''}>
+                <td className="col-check">
+                  <input type="checkbox" checked={sel} onChange={() => onToggleSelect(p.id)} />
+                </td>
+                <td className="col-name">
+                  <div className="pname">{p.name}</div>
+                  <div className="psub">
                     {p.os} · {browserSummary(p.fingerprint?.userAgent ?? '')}
-                  </span>
-                </div>
-                <div className="pcard-row dim">
-                  <span className="ico" />
-                  <span className="mono">
-                    {gpuSummary(p.fingerprint?.webgl?.renderer ?? '')} ·{' '}
-                    {p.fingerprint?.screen?.width ?? '?'}×{p.fingerprint?.screen?.height ?? '?'} ·{' '}
-                    {p.fingerprint?.hardwareConcurrency ?? '?'} cores
-                  </span>
-                </div>
-                <div className="pcard-row">
-                  <span className="ico">🌐</span>
-                  <span className="mono">{proxyInfo(p, proxyPool)}</span>
-                </div>
-                <div className="pcard-row">
-                  <span className="ico">{tzFlag(p.fingerprint.timezone)}</span>
-                  <span className="mono">{p.fingerprint.timezone}</span>
-                </div>
-                {p.tags.length > 0 && (
-                  <div className="tags">
-                    {p.tags.map((t) => (
-                      <span className="tag" key={t}>
-                        {t}
-                      </span>
-                    ))}
+                    {p.group && <span className="pgroup">{p.group}</span>}
                   </div>
-                )}
-              </div>
-
-              <div className="pcard-foot">
-                <span className={`status ${status}`}>{STATUS_LABEL[status]}</span>
-                {active ? (
-                  <button className="btn block" onClick={() => onStop(p.id)}>
-                    ■ Dừng
-                  </button>
-                ) : (
-                  <button className="btn primary block" onClick={() => onRun(p.id)}>
-                    ▸ Mở
-                  </button>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+                </td>
+                <td className="col-status">
+                  <span className={`pstatus ${status}`}>
+                    <i className="sdot" />
+                    {STATUS_LABEL[status]}
+                  </span>
+                </td>
+                <td className="col-cfg">
+                  <span className="mono dim">
+                    {gpuSummary(p.fingerprint?.webgl?.renderer ?? '')} ·{' '}
+                    {p.fingerprint?.hardwareConcurrency ?? '?'} nhân ·{' '}
+                    {tzFlag(p.fingerprint.timezone)}
+                  </span>
+                </td>
+                <td className="col-proxy">
+                  <span className="mono">{proxyInfo(p, proxyPool)}</span>
+                </td>
+                <td className="col-ptype">{proxyType(p, proxyPool)}</td>
+                <td className="col-act">
+                  <div className="row-actions">
+                    {active ? (
+                      <button className="run-btn stop" onClick={() => onStop(p.id)}>
+                        ■ Dừng
+                      </button>
+                    ) : (
+                      <button className="run-btn" onClick={() => onRun(p.id)}>
+                        ▸ Chạy
+                      </button>
+                    )}
+                    <div className="menu-wrap">
+                      <button
+                        className="icon-btn"
+                        title="Thêm hành động"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setMenuFor(menuFor === p.id ? null : p.id)
+                        }}
+                      >
+                        ⋯
+                      </button>
+                      {menuFor === p.id && (
+                        <div className="row-menu" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => {
+                              onCheck(p.id)
+                              setMenuFor(null)
+                            }}
+                          >
+                            🧪 Kiểm tra fingerprint
+                          </button>
+                          <button
+                            onClick={() => {
+                              onEdit(p)
+                              setMenuFor(null)
+                            }}
+                          >
+                            ✏️ Sửa
+                          </button>
+                          <button
+                            onClick={() => {
+                              onDuplicate(p.id)
+                              setMenuFor(null)
+                            }}
+                          >
+                            ⧉ Nhân bản
+                          </button>
+                          <button
+                            onClick={() => {
+                              onShare(p)
+                              setMenuFor(null)
+                            }}
+                          >
+                            🔗 Chia sẻ
+                          </button>
+                          <div className="menu-sep" />
+                          <label className="menu-group">
+                            <span>Nhóm</span>
+                            <select
+                              value={p.group ?? ''}
+                              onChange={(e) => onMoveGroup(p.id, e.target.value)}
+                            >
+                              <option value="">Tất cả (bỏ nhóm)</option>
+                              {groups.map((g) => (
+                                <option key={g} value={g}>
+                                  {g}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className="menu-sep" />
+                          <button
+                            className="danger"
+                            onClick={() => {
+                              onDelete(p.id)
+                              setMenuFor(null)
+                            }}
+                          >
+                            🗑 Xoá profile
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
