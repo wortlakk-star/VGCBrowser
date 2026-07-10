@@ -25,9 +25,10 @@ import {
   decryptWithSecret,
   encryptBytes,
   decryptBytes,
-  isEncryptedBytes
+  isEncryptedBytes,
+  isEncryptionActive
 } from './account-secret'
-import { getProfileKey } from './profile-share'
+import { getProfileKey, ownerForProfile } from './profile-share'
 import type { Cookie } from '../shared/types'
 
 /** Encryption key for a profile's cloud data: a SHARED key if the profile is shared
@@ -193,8 +194,17 @@ export async function uploadProfileData(id: string): Promise<void> {
   // detects which it got.
   const rawZip = zip.toBuffer()
   const encSecret = await keyForProfile(id)
+  // If encryption has worked before but the key is momentarily unavailable (network
+  // blip fetching account_secrets), REFUSE to upload plaintext — that would overwrite
+  // the encrypted cloud copy with a readable one. Keep the old encrypted blob instead.
+  if (!encSecret && isEncryptionActive()) {
+    throw new Error('Bỏ qua lưu phiên: chưa lấy được khoá mã hoá (mạng chập chờn). Giữ bản mã hoá cũ.')
+  }
   const body = encSecret ? encryptBytes(encSecret, 'session', rawZip) : rawZip
-  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(session.uid, id)}`
+  // Shared profiles live in the OWNER's folder; write there so the owner (and other
+  // members) see the update. Own profiles resolve to our own uid.
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -234,7 +244,9 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) throw new Error('Chưa cấu hình Supabase')
 
-  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(session.uid, id)}`
+  // Read from the owner's folder for shared profiles (see uploadProfileData).
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
   })
@@ -281,12 +293,18 @@ export async function uploadProfileCookies(id: string, cookies: Cookie[]): Promi
   if (!session) return
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) return
-  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(session.uid, id)}`
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(ownerUid, id)}`
   // Encrypt the cookies with the per-account secret before they leave the machine,
   // so a leaked bucket shows ciphertext, not live session tokens. Falls back to
   // plaintext only when the secret isn't available yet (pre-migration).
   const json = JSON.stringify(cookies)
   const secret = await keyForProfile(id)
+  // Same guard as uploadProfileData: never downgrade to plaintext cookies once
+  // encryption is known to work — a transient key-fetch failure would leak live tokens.
+  if (!secret && isEncryptionActive()) {
+    throw new Error('Bỏ qua lưu cookie: chưa lấy được khoá mã hoá (mạng chập chờn). Giữ bản mã hoá cũ.')
+  }
   const body = secret
     ? Buffer.from(JSON.stringify({ enc: encryptWithSecret(secret, 'cookies', json) }), 'utf-8')
     : Buffer.from(json, 'utf-8')
@@ -312,7 +330,8 @@ export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
   if (!session) return []
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) return []
-  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(session.uid, id)}`
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesObjectPath(ownerUid, id)}`
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
   })

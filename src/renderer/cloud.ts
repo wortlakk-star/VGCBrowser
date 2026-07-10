@@ -156,9 +156,14 @@ export async function pushCloudProfileList(): Promise<number> {
   // (the map is empty), keeping the cloud complete.
   const changed = locals.filter((p) => lastPushedAt.get(p.id) !== p.updatedAt)
   if (!changed.length) return 0
+  // For profiles shared WITH me, write to the OWNER's row (owner = the sharer's uid),
+  // not a second row under my uid — otherwise two-way sync never converges and the
+  // profile shows up twice. protectData already encrypts with the shared key for these.
+  const sharedWithMe = await window.vgc.shareSharedWithMe()
+  const sharedOwner = new Map(sharedWithMe.map((s) => [s.profileId, s.owner]))
   const rows = await Promise.all(
     changed.map(async (p) => ({
-      owner,
+      owner: sharedOwner.get(p.id) ?? owner,
       team_id: p.cloudTeamId || null,
       profile_id: p.id,
       name: p.name,

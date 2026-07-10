@@ -76,7 +76,11 @@ app.whenReady().then(() => {
   try {
     createWindow()
   } catch (e) {
+    // The window is the whole app — a windowless process is worse than an honest
+    // crash (the user sees nothing and can't quit it). Log and exit.
     console.error('[startup] createWindow failed:', e)
+    app.quit()
+    return
   }
   void Promise.resolve()
     .then(() => restartApiServer())

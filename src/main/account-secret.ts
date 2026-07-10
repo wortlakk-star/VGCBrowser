@@ -18,9 +18,20 @@ import { getCloudSession } from './session'
 import { getSettings } from './settings'
 
 let cached: { uid: string; secret: string } | null = null
+// True once we've EVER obtained a secret for the signed-in account this session.
+// Guards against a transient fetch failure downgrading uploads to plaintext (which
+// would overwrite the encrypted cloud copy) — see cloud-data upload guards.
+let encryptionActive = false
 
 export function clearAccountSecretCache(): void {
   cached = null
+  encryptionActive = false
+}
+
+/** True once encryption has been confirmed active for this account (a secret was
+ *  fetched). Callers use this to REFUSE plaintext uploads on a transient failure. */
+export function isEncryptionActive(): boolean {
+  return encryptionActive
 }
 
 /** Fetch (or create on first use) the account secret. null if signed out or the
@@ -38,36 +49,60 @@ export async function getAccountSecret(): Promise<string | null> {
     apikey: s.supabaseAnonKey,
     'Content-Type': 'application/json'
   }
-  const fetchExisting = async (): Promise<string | null> => {
-    const r = await fetch(`${base}?owner=eq.${session.uid}&select=secret`, { headers })
-    if (!r.ok) return null
-    const rows = (await r.json()) as Array<{ secret?: string }>
-    return rows.length && rows[0].secret ? rows[0].secret : null
+  type Res =
+    | { status: 'ok'; secret: string }
+    | { status: 'empty' }
+    | { status: 'nomigration' }
+    | { status: 'error' }
+  const fetchExisting = async (): Promise<Res> => {
+    try {
+      const r = await fetch(`${base}?owner=eq.${session.uid}&select=secret`, { headers })
+      if (r.status === 404) return { status: 'nomigration' }
+      if (!r.ok) {
+        const t = await r.text().catch(() => '')
+        return t.includes('does not exist') ? { status: 'nomigration' } : { status: 'error' }
+      }
+      const rows = (await r.json()) as Array<{ secret?: string }>
+      return rows.length && rows[0].secret
+        ? { status: 'ok', secret: rows[0].secret }
+        : { status: 'empty' }
+    } catch {
+      return { status: 'error' }
+    }
   }
 
-  try {
-    const existing = await fetchExisting()
-    if (existing) {
-      cached = { uid: session.uid, secret: existing }
-      return existing
+  // Retry transient errors so a network blip doesn't drop the key (→ plaintext
+  // upload / "lost session"). Only 'nomigration' returns null (real fallback).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetchExisting()
+    if (res.status === 'ok') {
+      cached = { uid: session.uid, secret: res.secret }
+      encryptionActive = true
+      return res.secret
     }
-    // None yet → create one. ignore-duplicates handles two devices racing.
-    const secret = randomBytes(32).toString('hex')
-    const ins = await fetch(base, {
-      method: 'POST',
-      headers: { ...headers, Prefer: 'resolution=ignore-duplicates' },
-      body: JSON.stringify({ owner: session.uid, secret })
-    })
-    if (ins.ok) {
-      // Re-read in case another device's row won the insert race.
-      const after = (await fetchExisting()) ?? secret
-      cached = { uid: session.uid, secret: after }
-      return after
+    if (res.status === 'nomigration') return null
+    if (res.status === 'empty') {
+      const secret = randomBytes(32).toString('hex')
+      try {
+        const ins = await fetch(base, {
+          method: 'POST',
+          headers: { ...headers, Prefer: 'resolution=ignore-duplicates' },
+          body: JSON.stringify({ owner: session.uid, secret })
+        })
+        if (ins.ok) {
+          const after = await fetchExisting() // another device may have won the race
+          const finalSecret = after.status === 'ok' ? after.secret : secret
+          cached = { uid: session.uid, secret: finalSecret }
+          encryptionActive = true
+          return finalSecret
+        }
+      } catch {
+        // fall through to retry
+      }
     }
-    return null
-  } catch {
-    return null
+    await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
   }
+  return null // transient failures exhausted → caller refuses plaintext via isEncryptionActive()
 }
 
 function keyFor(secret: string, context: string): Buffer {

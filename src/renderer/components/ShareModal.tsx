@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Profile, ProxyConfig, SavedProxy } from '../../shared/types'
+import { pushCloudProfileList } from '../cloud'
 
 interface Props {
   profile: Profile
@@ -47,6 +48,10 @@ export function ShareModal({ profile, proxies, onClose }: Props): JSX.Element {
       }
       await window.vgc.updateProfile(profile.id, {})
       void window.vgc.cloudUploadData(profile.id)
+      // Re-push the metadata row NOW so it's re-encrypted with the shared key — else
+      // the recipient can't decrypt it (owner's account secret) until the next
+      // auto-push cycle and the profile wouldn't appear for them.
+      void pushCloudProfileList().catch(() => undefined)
       setEmail('')
       setMsg({ type: 'ok', text: 'Đã chia sẻ. Người kia đăng nhập VGC bằng email đó sẽ thấy profile.' })
       await loadShares()

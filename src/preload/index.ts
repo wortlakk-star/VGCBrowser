@@ -166,8 +166,9 @@ const api = {
     ipcRenderer.invoke('share:list', profileId),
   shareRemove: (profileId: string, email: string): Promise<void> =>
     ipcRenderer.invoke('share:remove', profileId, email),
-  shareSharedWithMe: (): Promise<Array<{ profileId: string; proxy: ProxyConfig | null }>> =>
-    ipcRenderer.invoke('share:sharedWithMe'),
+  shareSharedWithMe: (): Promise<
+    Array<{ profileId: string; owner: string; proxy: ProxyConfig | null }>
+  > => ipcRenderer.invoke('share:sharedWithMe'),
 
   // ── Profile groups ──
   listGroups: (): Promise<string[]> => ipcRenderer.invoke('groups:list'),
