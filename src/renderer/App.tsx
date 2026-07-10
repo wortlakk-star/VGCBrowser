@@ -15,7 +15,6 @@ import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { ShareModal } from './components/ShareModal'
 import { Sidebar } from './components/Sidebar'
-import { OpenSiteScreen } from './components/OpenSiteScreen'
 import { applyTheme, getTheme, type Theme } from './theme'
 import logo from './assets/logo.png'
 import {
@@ -49,7 +48,6 @@ export default function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<UpdateStatus | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
   const [refreshing, setRefreshing] = useState(false)
-  const [view, setView] = useState<'profiles' | 'opensite'>('profiles')
 
   // Show the signed-in account in the sidebar.
   useEffect(() => {
@@ -570,14 +568,10 @@ export default function App(): JSX.Element {
         onSelect={setGroupFilter}
         onProxy={() => setShowProxyMgr(true)}
         onSettings={() => setShowSettings(true)}
-        onOpenSite={() => setView('opensite')}
         onCreateGroup={createGroup}
         onDeleteGroup={deleteGroup}
       />
 
-      {view === 'opensite' ? (
-        <OpenSiteScreen onExit={() => setView('profiles')} />
-      ) : (
       <div className="main">
         <div className="toolbar">
           <input
@@ -662,7 +656,6 @@ export default function App(): JSX.Element {
           )}
         </main>
       </div>
-      )}
 
       {sharing && (
         <ShareModal profile={sharing} proxies={proxyPool} onClose={() => setSharing(null)} />

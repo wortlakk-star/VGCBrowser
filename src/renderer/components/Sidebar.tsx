@@ -8,7 +8,6 @@ interface Props {
   onSelect: (key: string) => void
   onProxy: () => void
   onSettings: () => void
-  onOpenSite: () => void
   onCreateGroup: (name: string) => void
   onDeleteGroup: (name: string) => void
 }
@@ -20,7 +19,6 @@ export function Sidebar({
   onSelect,
   onProxy,
   onSettings,
-  onOpenSite,
   onCreateGroup,
   onDeleteGroup
 }: Props): JSX.Element {
@@ -136,9 +134,6 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-bottom">
-        <button className="nav-btn" onClick={onOpenSite}>
-          🛒 <span>OpenSite Dashboard</span>
-        </button>
         <button className="nav-btn" onClick={onProxy}>
           📡 <span>Proxy Manager</span>
         </button>

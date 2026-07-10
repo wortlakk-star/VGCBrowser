@@ -58,14 +58,6 @@ import {
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getProviderCreds, saveProviderCreds, buildProviderProxy } from './proxy-providers'
 import type { ProviderCreds, ProxyBuildOpts, ProxyProviderId } from '../shared/types'
-import {
-  opensiteStatus,
-  opensiteLogin,
-  opensiteVerifyTotp,
-  opensiteFetch,
-  opensiteLogout,
-  opensiteSetBaseUrl
-} from './opensite'
 
 function focusedWindow(): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
@@ -266,16 +258,6 @@ export function registerIpc(): void {
   ipcMain.handle('providers:build', (_e, provider: ProxyProviderId, opts: ProxyBuildOpts) =>
     buildProviderProxy(provider, opts)
   )
-
-  // ── OpenSite dashboard (api-v2.opensitex.store) ──
-  ipcMain.handle('opensite:status', () => opensiteStatus())
-  ipcMain.handle('opensite:login', (_e, email: string, password: string, remember: boolean) =>
-    opensiteLogin(email, password, remember)
-  )
-  ipcMain.handle('opensite:verifyTotp', (_e, code: string) => opensiteVerifyTotp(code))
-  ipcMain.handle('opensite:fetch', (_e, paths: string[]) => opensiteFetch(paths))
-  ipcMain.handle('opensite:logout', () => opensiteLogout())
-  ipcMain.handle('opensite:setBaseUrl', (_e, url: string) => opensiteSetBaseUrl(url))
 
   ipcMain.handle('dialog:pickFolder', async (): Promise<string | null> => {
     const win = focusedWindow()
