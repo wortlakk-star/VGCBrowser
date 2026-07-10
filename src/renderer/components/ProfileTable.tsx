@@ -58,34 +58,6 @@ function tzFlag(tz: string): string {
   return '🌐'
 }
 
-/** Country code resolved for a profile's proxy (from a live check or the pool). */
-function proxyCountry(p: Profile, proxyPool: SavedProxy[]): string {
-  const pc = p.proxyCheck
-  if (pc?.status === 'ok' && pc.countryCode) return pc.countryCode.toUpperCase()
-  const sp = proxyPool.find(
-    (x) =>
-      x.host === p.proxy?.host &&
-      x.port === p.proxy?.port &&
-      (x.username || '') === (p.proxy?.username || '')
-  )
-  if (sp?.lastCountryCode) return sp.lastCountryCode.toUpperCase()
-  return ''
-}
-
-/** "socks5 · US" style proxy-type label (GoLogin's "Loại proxy" column). */
-function proxyType(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
-  if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
-    return <span className="dim">—</span>
-  }
-  const cc = proxyCountry(p, proxyPool)
-  return (
-    <span className="ptype">
-      {p.proxy.type}
-      {cc && <span className="dim"> · {cc}</span>}
-    </span>
-  )
-}
-
 /** Proxy status line (IP + country, or "no proxy" / error). */
 function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
@@ -181,7 +153,6 @@ export function ProfileTable({
             <th className="col-status">Tình trạng</th>
             <th className="col-cfg">Cấu hình</th>
             <th className="col-proxy">Proxy &amp; Vị trí</th>
-            <th className="col-ptype">Loại proxy</th>
             <th className="col-act" />
           </tr>
         </thead>
@@ -218,7 +189,6 @@ export function ProfileTable({
                 <td className="col-proxy">
                   <span className="mono">{proxyInfo(p, proxyPool)}</span>
                 </td>
-                <td className="col-ptype">{proxyType(p, proxyPool)}</td>
                 <td className="col-act">
                   <div className="row-actions">
                     {active ? (
