@@ -127,8 +127,28 @@ async function downloadMacEngine(
       // ignore
     }
   }
+  // Remember which hosted URL this engine came from so a later engineUrlMac bump
+  // re-downloads it (existing installs otherwise keep their old engine forever).
+  try {
+    await fs.writeFile(join(dir, 'mac-engine-url.txt'), url, 'utf-8')
+  } catch {
+    // ignore
+  }
   onProgress?.({ phase: 'done', percent: 100, message: 'Engine VGC Core sẵn sàng' })
   return macVgcCoreEngine()
+}
+
+/** The engineUrlMac a downloaded Mac engine was installed from (empty if unknown,
+ *  e.g. a locally-built engine on the build machine). Used to re-download when the
+ *  hosted engine URL is bumped. */
+async function installedMacEngineUrl(): Promise<string> {
+  try {
+    return (
+      await fs.readFile(join(app.getPath('userData'), 'engine', 'mac-engine-url.txt'), 'utf-8')
+    ).trim()
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -154,9 +174,17 @@ export async function ensureEngine(
   }
 
   // 2. macOS: prefer the locally-built VGC Core engine (own Dock icon, isolated from
-  //    the user's Chrome, CDP works) over the system Chrome.
+  //    the user's Chrome, CDP works) over the system Chrome. But if the hosted engine
+  //    URL was bumped since this copy was installed, re-download it — engine features
+  //    (logo, badge, translate…) ship in the engine, so a URL bump must reach every
+  //    machine. A locally-built engine writes its url file = engineUrlMac to opt out.
   const macCore = macVgcCoreEngine()
-  if (macCore) return macCore
+  if (macCore) {
+    const wantUrl = (await getSettings()).engineUrlMac || ''
+    const installedUrl = await installedMacEngineUrl()
+    if (!wantUrl || installedUrl === wantUrl) return macCore
+    // else: stale/untracked → fall through to (re)download the newer engine.
+  }
 
   // 3. Engine BUNDLED with the installer (electron-builder win.extraResources →
   //    resources/engine/chromium), BRANDED with the VGC logo by brand-engine.mjs at
