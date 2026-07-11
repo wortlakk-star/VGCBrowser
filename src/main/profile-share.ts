@@ -157,9 +157,12 @@ export async function getSharedWithMe(): Promise<
 > {
   const session = getCloudSession()
   if (!session) return []
-  const email = getCloudEmail()
+  // member_email is stored lower-cased; the JWT email claim can carry uppercase, so
+  // normalise BOTH sides — otherwise a shared profile never reaches a mixed-case email.
+  const email = (getCloudEmail() ?? '').trim().toLowerCase()
+  if (!email) return []
   const rows = await loadShares()
   return rows
-    .filter((x) => x.member_email === email && x.owner !== session.uid)
+    .filter((x) => (x.member_email ?? '').toLowerCase() === email && x.owner !== session.uid)
     .map((x) => ({ profileId: x.profile_id, owner: x.owner, proxy: x.proxy }))
 }

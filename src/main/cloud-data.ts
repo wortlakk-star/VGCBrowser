@@ -25,7 +25,7 @@ import {
 import { join, relative, sep } from 'path'
 import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
-import { getProfile, saveProfile } from './store'
+import { patchProfile } from './store'
 import { getCloudSession } from './session'
 import {
   getAccountSecret,
@@ -290,12 +290,9 @@ export async function uploadProfileData(id: string): Promise<void> {
     if (tag) writeSyncTag(id, tag)
   }
 
-  // Mark that this profile now has cloud session data.
-  const p = await getProfile(id)
-  if (p) {
-    p.cloudDataAt = new Date().toISOString()
-    await saveProfile(p)
-  }
+  // Mark that this profile now has cloud session data (atomic patch — never write back
+  // a whole stale profile snapshot, which could clobber a concurrent edit).
+  await patchProfile(id, { cloudDataAt: new Date().toISOString() })
 }
 
 /**

@@ -152,8 +152,10 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
     const parts = String(line).trim().split(':')
     if (parts.length < 4) return
     const host = parts[0]
-    let port = Number(parts[1])
-    if (!Number.isInteger(port) || port <= 0) port = 12321 // iProyal residential default
+    const port = Number(parts[1])
+    // Skip a malformed line rather than guessing a port — for SOCKS5 the old HTTP-port
+    // fallback (12321) produced a dead proxy pointing at the wrong protocol's port.
+    if (!Number.isInteger(port) || port <= 0) return
     const username = parts[2]
     const password = parts.slice(3).join(':')
     if (!host || !username || !password) return

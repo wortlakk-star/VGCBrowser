@@ -369,10 +369,13 @@ export function registerIpc(): void {
     } catch {
       return []
     }
+    // `parsed` may be null / a primitive (JSON.parse('null')) — guard before reading
+    // `.cookies`, otherwise this throws OUTSIDE the try/catch above and rejects the IPC.
+    const obj = parsed && typeof parsed === 'object' ? (parsed as { cookies?: unknown }) : null
     const arr: Array<Record<string, unknown>> = Array.isArray(parsed)
       ? parsed
-      : Array.isArray((parsed as { cookies?: unknown }).cookies)
-        ? ((parsed as { cookies: Array<Record<string, unknown>> }).cookies)
+      : obj && Array.isArray(obj.cookies)
+        ? (obj.cookies as Array<Record<string, unknown>>)
         : []
     return arr
       .map((c) => ({
