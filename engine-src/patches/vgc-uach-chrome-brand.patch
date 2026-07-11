@@ -1,8 +1,51 @@
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index 608bea5cb3..743b8519df 100644
+index 608bea5cb3..a8d7bb550e 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
-@@ -502,6 +502,14 @@ blink::UserAgentBrandList GenerateBrandVersionList(
+@@ -181,10 +181,30 @@ const blink::UserAgentBrandList GetUserAgentBrandList(
+ // `version` value.
+ // TODO(crbug.com/1291612): Consolidate *MajorVersionList() methods by using
+ // GetVersionNumber()
++// VGC: the Chrome version the UA-CH brand list should report. The app spoofs the
++// UA STRING per profile (e.g. "Chrome/149.0.0.0") but the engine is built at a
++// different version (151) — if UA-CH kept reporting the engine's 151 while the UA
++// string says 149, that mismatch is an instant anti-bot tell (Cloudflare loops).
++// So we take the version from --vgc-ua-full-version (fed by the profile's
++// fingerprint.uaFullVersion, e.g. "149.0.7827.54") and fall back to the engine's
++// real version only when the switch is absent.
++std::string VgcSpoofedFullVersion() {
++  std::string v = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++      "vgc-ua-full-version");
++  if (!v.empty()) {
++    return v;
++  }
++  return std::string(version_info::GetVersionNumber());
++}
++std::string VgcSpoofedMajorVersion() {
++  std::string full = VgcSpoofedFullVersion();
++  size_t dot = full.find('.');
++  return dot == std::string::npos ? full : full.substr(0, dot);
++}
++
+ const blink::UserAgentBrandList GetUserAgentBrandMajorVersionListInternal(
+     std::optional<blink::UserAgentBrandVersion> additional_brand_version) {
+-  return GetUserAgentBrandList(version_info::GetMajorVersionNumber(),
+-                               std::string(version_info::GetVersionNumber()),
++  return GetUserAgentBrandList(VgcSpoofedMajorVersion(), VgcSpoofedFullVersion(),
+                                blink::UserAgentBrandVersionType::kMajorVersion,
+                                additional_brand_version);
+ }
+@@ -205,8 +225,7 @@ bool ShouldSendUserAgentUnifiedPlatform() {
+ // GetVersionNumber()
+ const blink::UserAgentBrandList GetUserAgentBrandFullVersionListInternal(
+     std::optional<blink::UserAgentBrandVersion> additional_brand_version) {
+-  return GetUserAgentBrandList(version_info::GetMajorVersionNumber(),
+-                               std::string(version_info::GetVersionNumber()),
++  return GetUserAgentBrandList(VgcSpoofedMajorVersion(), VgcSpoofedFullVersion(),
+                                blink::UserAgentBrandVersionType::kFullVersion,
+                                additional_brand_version);
+ }
+@@ -502,6 +521,14 @@ blink::UserAgentBrandList GenerateBrandVersionList(
  
    blink::UserAgentBrandList brand_version_list = {std::move(greasey_bv),
                                                    std::move(chromium_bv)};
@@ -17,7 +60,7 @@ index 608bea5cb3..743b8519df 100644
    if (brand) {
      brand_version_list.emplace_back(brand.value(), version);
    }
-@@ -643,18 +651,13 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+@@ -643,18 +670,13 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
    metadata.mobile = GetMobileBitForUAMetadata();
    metadata.platform = GetPlatformForUAMetadata();
  
@@ -43,3 +86,14 @@ index 608bea5cb3..743b8519df 100644
  
    if (only_low_entropy_ch) {
      return metadata;
+@@ -663,7 +685,9 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+   // High entropy client hints.
+   metadata.brand_full_version_list =
+       GetUserAgentBrandFullVersionListInternal(std::nullopt);
+-  metadata.full_version = std::string(version_info::GetVersionNumber());
++  // VGC: report the profile's spoofed full version, not the engine build (see
++  // VgcSpoofedFullVersion) — otherwise it mismatches the UA string's version.
++  metadata.full_version = VgcSpoofedFullVersion();
+   metadata.architecture = GetCpuArchitecture();
+   metadata.model = BuildModelInfo();
+   metadata.form_factors = GetFormFactorsClientHint(metadata, metadata.mobile);

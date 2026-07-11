@@ -400,6 +400,12 @@ export async function launchProfile(
     `--lang=${fp.language}`,
     `--window-size=${fp.screen.width},${fp.screen.height}`,
     `--user-agent=${fp.userAgent}`,
+    // Make navigator.userAgentData (UA Client Hints) report the SAME Chrome version as
+    // the UA string above. Without this the engine leaks its own build version (151)
+    // while the UA string says the profile's version (e.g. 149) — that mismatch is a
+    // hard anti-bot tell that makes Cloudflare's challenge loop. The engine reads this
+    // for its UA-CH brand list + fullVersionList + high-entropy full_version.
+    `--vgc-ua-full-version=${fp.uaFullVersion || fp.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || ''}`,
     // VGC Core native fingerprint switches (stock Chrome ignores unknown flags).
     `--vgc-hardware-concurrency=${fp.hardwareConcurrency}`,
     `--vgc-device-memory=${fp.deviceMemory}`,
