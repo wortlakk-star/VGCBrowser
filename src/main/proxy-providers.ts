@@ -101,7 +101,6 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
 
   const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
   const cc = (opts.country ?? '').trim().toLowerCase()
-  const mins = opts.sessionMinutes && opts.sessionMinutes > 0 ? opts.sessionMinutes : 10
 
   const body: Record<string, unknown> = {
     format: '{hostname}:{port}:{username}:{password}',
@@ -113,7 +112,10 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
     username: c.username,
     password: c.password
   }
-  if (opts.sticky) body.lifetime = `${mins}m`
+  // Sticky lifetime is already in iProyal's accepted format (s/h). Only send it when
+  // provided; an empty value means "default sticky" (iProyal picks the duration).
+  const lifetime = (opts.lifetime ?? '').trim()
+  if (opts.sticky && lifetime) body.lifetime = lifetime
 
   const res = await fetch('https://resi-api.iproyal.com/v1/access/generate-proxy-list', {
     method: 'POST',

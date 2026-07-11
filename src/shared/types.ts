@@ -151,7 +151,10 @@ export interface GenerateProxiesOpts {
   country?: string // ISO-2, e.g. 'us', 'vn' (empty = any/global)
   protocol: 'http' | 'socks5' // proxy protocol
   sticky: boolean // sticky (same IP for a lifetime) vs rotating (new IP each request)
-  sessionMinutes?: number // sticky lifetime in minutes (sticky only)
+  // iProyal sticky lifetime, already in the API's accepted format (seconds/hours,
+  // e.g. '1800s', '24h', '168h' = 7 days). Empty ⇒ omit (default sticky). iProyal
+  // rejects the minutes unit ('30m' → failed_validation), so the UI only emits s/h.
+  lifetime?: string
   label?: string // optional name prefix for the created proxies
 }
 

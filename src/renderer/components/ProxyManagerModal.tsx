@@ -31,6 +31,20 @@ const IP_COUNTRIES: Array<[string, string]> = [
   ['br', 'Brazil']
 ]
 
+// iProyal sticky lifetimes in the API-accepted format (s/h — the minutes unit 'm'
+// is rejected). Value → nhãn. '' = bỏ trống (iProyal chọn mặc định). Tối đa 7 ngày.
+const IP_LIFETIMES: Array<[string, string]> = [
+  ['', 'Mặc định (bỏ trống)'],
+  ['600s', '10 phút'],
+  ['1800s', '30 phút'],
+  ['1h', '1 giờ'],
+  ['6h', '6 giờ'],
+  ['12h', '12 giờ'],
+  ['24h', '24 giờ (1 ngày)'],
+  ['72h', '3 ngày'],
+  ['168h', '7 ngày (tối đa)']
+]
+
 function isPort(x?: string): boolean {
   if (!x) return false
   const n = Number(x)
@@ -132,7 +146,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [genCountry, setGenCountry] = useState('')
   const [genProtocol, setGenProtocol] = useState<'http' | 'socks5'>('http')
   const [genSticky, setGenSticky] = useState(true)
-  const [genMinutes, setGenMinutes] = useState(30)
+  const [genLifetime, setGenLifetime] = useState('24h')
   const [genCount, setGenCount] = useState(5)
   const [genLabel, setGenLabel] = useState('')
   const [generating, setGenerating] = useState(false)
@@ -172,7 +186,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         country: genCountry,
         protocol: genProtocol,
         sticky: genSticky,
-        sessionMinutes: genMinutes,
+        lifetime: genSticky ? genLifetime : undefined,
         label: genLabel.trim() || undefined
       })
       await window.vgc.saveManyProxies(created)
@@ -433,15 +447,18 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               </select>
               {genSticky && (
                 <>
-                  <span style={lbl}>Phút</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={1440}
-                    value={genMinutes}
-                    onChange={(e) => setGenMinutes(Number(e.target.value) || 30)}
-                    style={inp(70)}
-                  />
+                  <span style={lbl}>Giữ IP</span>
+                  <select
+                    className="group-select"
+                    value={genLifetime}
+                    onChange={(e) => setGenLifetime(e.target.value)}
+                  >
+                    {IP_LIFETIMES.map(([val, name]) => (
+                      <option key={val} value={val}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
                 </>
               )}
               <span style={lbl}>Số lượng</span>
