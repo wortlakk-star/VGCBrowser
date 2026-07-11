@@ -26,6 +26,19 @@ function legacyFile(): string {
   return join(dir(), 'proxies.json')
 }
 
+// Serialize every read-modify-write (like the profile store) so a cloud auto-pull's
+// saveMany can't interleave with a user's saveProxy/delete and lose one another's
+// changes by both reading the same list and overwriting the whole file.
+let writeChain: Promise<unknown> = Promise.resolve()
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn)
+  writeChain = run.then(
+    () => {},
+    () => {}
+  )
+  return run
+}
+
 async function writeAll(list: SavedProxy[]): Promise<void> {
   await fs.mkdir(dir(), { recursive: true })
   await fs.writeFile(file(), JSON.stringify(list, null, 2), 'utf-8')
@@ -43,25 +56,42 @@ export async function listProxies(): Promise<SavedProxy[]> {
 }
 
 export async function saveProxy(p: SavedProxy): Promise<SavedProxy> {
-  const all = await listProxies()
-  const idx = all.findIndex((x) => x.id === p.id)
-  if (idx >= 0) all[idx] = p
-  else all.push(p)
-  await writeAll(all)
-  return p
+  // A local edit (assign/rename/check) — stamp a fresh updatedAt so a subsequent cloud
+  // pull recognises it as newer and doesn't overwrite it with a stale cloud copy.
+  const stamped: SavedProxy = { ...p, updatedAt: new Date().toISOString() }
+  return serialize(async () => {
+    const all = await listProxies()
+    const idx = all.findIndex((x) => x.id === stamped.id)
+    if (idx >= 0) all[idx] = stamped
+    else all.push(stamped)
+    await writeAll(all)
+    return stamped
+  })
 }
 
 export async function saveManyProxies(items: SavedProxy[]): Promise<number> {
-  const all = await listProxies()
-  const byId = new Map(all.map((x) => [x.id, x]))
-  for (const p of items) byId.set(p.id, p)
-  await writeAll([...byId.values()])
-  return items.length
+  return serialize(async () => {
+    const all = await listProxies()
+    const byId = new Map(all.map((x) => [x.id, x]))
+    for (const p of items) {
+      const it: SavedProxy = { ...p, updatedAt: p.updatedAt ?? new Date().toISOString() }
+      const existing = byId.get(it.id)
+      // Newer-wins: an incoming (e.g. cloud-pull) copy only overwrites a local one when
+      // it's at least as new. New ids are always added; import/generate stamp `now`.
+      if (!existing || !existing.updatedAt || (it.updatedAt ?? '') >= existing.updatedAt) {
+        byId.set(it.id, it)
+      }
+    }
+    await writeAll([...byId.values()])
+    return items.length
+  })
 }
 
 export async function deleteProxy(id: string): Promise<void> {
-  const all = await listProxies()
-  await writeAll(all.filter((p) => p.id !== id))
+  return serialize(async () => {
+    const all = await listProxies()
+    await writeAll(all.filter((p) => p.id !== id))
+  })
 }
 
 /**
@@ -71,8 +101,10 @@ export async function deleteProxy(id: string): Promise<void> {
  */
 export async function removeManyProxies(ids: string[]): Promise<void> {
   if (!ids.length) return
-  const all = await listProxies()
-  const set = new Set(ids)
-  const next = all.filter((p) => !set.has(p.id))
-  if (next.length !== all.length) await writeAll(next)
+  return serialize(async () => {
+    const all = await listProxies()
+    const set = new Set(ids)
+    const next = all.filter((p) => !set.has(p.id))
+    if (next.length !== all.length) await writeAll(next)
+  })
 }

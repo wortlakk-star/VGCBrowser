@@ -174,6 +174,9 @@ export interface SavedProxy {
   lastCountryCode?: string
   latencyMs?: number
   lastStatus?: 'ok' | 'error'
+  /** ISO — last local modification. Lets the cloud pull keep a local edit (assign/
+   *  rename) that hasn't been pushed yet instead of overwriting it with a stale copy. */
+  updatedAt?: string
 }
 
 /** App-level settings (automation API + cloud config). */

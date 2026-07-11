@@ -156,6 +156,26 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
   })
 }
 
+/**
+ * Atomically read-modify-write ONE profile: re-reads the current record INSIDE the
+ * serialize lock and applies only `patch`, so a slow caller holding a stale snapshot
+ * (e.g. launchProfile bumping lastUsedAt after a multi-second cloud download, or a
+ * proxy-check writing proxyCheck) can't clobber a concurrent edit to OTHER fields.
+ * Prefer this over getProfile()+saveProfile() for partial updates. Returns null if
+ * the profile no longer exists.
+ */
+export async function patchProfile(id: string, patch: Partial<Profile>): Promise<Profile | null> {
+  return serialize(async () => {
+    const all = await listProfiles()
+    const idx = all.findIndex((p) => p.id === id)
+    if (idx < 0) return null
+    const updated: Profile = { ...all[idx], ...patch, id: all[idx].id }
+    all[idx] = updated
+    await writeAll(all)
+    return updated
+  })
+}
+
 export async function deleteProfile(id: string): Promise<void> {
   return serialize(async () => {
     const all = await listProfiles()

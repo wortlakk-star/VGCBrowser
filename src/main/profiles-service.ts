@@ -5,7 +5,7 @@
 import { randomUUID } from 'crypto'
 import type { CreateProfileInput, Profile } from '../shared/types'
 import { generateFingerprint } from '../shared/fingerprint'
-import { getProfile, saveProfile } from './store'
+import { patchProfile, saveProfile } from './store'
 
 export async function createProfile(input: CreateProfileInput): Promise<Profile> {
   const now = new Date().toISOString()
@@ -26,14 +26,10 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
 }
 
 export async function updateProfile(id: string, patch: Partial<Profile>): Promise<Profile> {
-  const current = await getProfile(id)
-  if (!current) throw new Error(`Không tìm thấy profile: ${id}`)
-  const updated: Profile = {
-    ...current,
-    ...patch,
-    id: current.id,
-    createdAt: current.createdAt,
-    updatedAt: new Date().toISOString()
-  }
-  return saveProfile(updated)
+  // Never let a patch rewrite id/createdAt; apply atomically (read-modify-write inside
+  // the store lock) so a concurrent edit to other fields isn't lost.
+  const { id: _ignoreId, createdAt: _ignoreCreated, ...safe } = patch
+  const updated = await patchProfile(id, { ...safe, updatedAt: new Date().toISOString() })
+  if (!updated) throw new Error(`Không tìm thấy profile: ${id}`)
+  return updated
 }

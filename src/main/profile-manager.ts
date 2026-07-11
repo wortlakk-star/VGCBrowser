@@ -24,7 +24,7 @@ import { ensureEngine, type EngineProgress } from './engine-download'
 import { resolveSystemBrowser } from './engine'
 import { checkProxy } from './proxy-check'
 import { localeForCountry } from '../shared/fingerprint'
-import { getProfile, saveProfile } from './store'
+import { getProfile, patchProfile } from './store'
 import { getSettings } from './settings'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
@@ -584,9 +584,10 @@ export async function launchProfile(
   running.set(id, entry)
   broadcast(state)
 
-  // Touch lastUsedAt.
-  profile.lastUsedAt = new Date().toISOString()
-  await saveProfile(profile)
+  // Touch lastUsedAt via an atomic patch (re-reads fresh inside the store lock) so a
+  // profile edit made while this profile was opening — the cloud download can take
+  // several seconds — isn't clobbered by writing back the pre-launch snapshot.
+  await patchProfile(id, { lastUsedAt: new Date().toISOString() })
 
   proc.on('exit', () => {
     if (entry.tabPoll) clearInterval(entry.tabPoll)

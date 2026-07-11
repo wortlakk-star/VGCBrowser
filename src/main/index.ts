@@ -21,6 +21,19 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   throw err
 })
 
+// A stray unhandled promise rejection (a missed .catch in a background sync/upload
+// path) would, on modern Node/Electron, crash the whole main process with the fatal
+// "A JavaScript error occurred" dialog and close the window. Log it instead so one
+// missed catch can't kill the app — real bugs still surface in the log.
+process.on('unhandledRejection', (reason: unknown) => {
+  const err = reason instanceof Error ? (reason as NodeJS.ErrnoException) : null
+  if (err && BENIGN_NET.has(err.code ?? '')) {
+    console.warn('[net] ignored benign rejected socket error:', err.code, err.message)
+    return
+  }
+  console.error('[main] unhandledRejection:', reason)
+})
+
 function createWindow(): void {
   // Window/taskbar icon — transparent multi-size .ico generated from the logo (no white
   // background; PNG→ICO via electron-builder was flattening the alpha to white).
