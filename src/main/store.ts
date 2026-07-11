@@ -9,7 +9,7 @@ import { promises as fs, existsSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'node:crypto'
 import type { Profile, Fingerprint } from '../shared/types'
-import { generateFingerprint } from '../shared/fingerprint'
+import { generateFingerprint, CHROME_BUILD } from '../shared/fingerprint'
 import { accountKey } from './session'
 
 function dataDir(): string {
@@ -58,6 +58,20 @@ function normalizeProfiles(profiles: Profile[]): boolean {
     const fp = p.fingerprint as Fingerprint | undefined
     if (!fp || !fp.userAgent || !fp.webgl || !fp.screen) {
       p.fingerprint = generateFingerprint(p.os); changed = true
+    }
+    // Keep the claimed Chrome version aligned with the VGC Core engine. A profile that
+    // still claims Chrome 149 while the engine's UA-CH advertises 151 is a version
+    // MISMATCH — anti-bot (Google "browser not secure", Cloudflare) rejects it. Bump the
+    // version only; the DEVICE fingerprint (canvas/webgl/hw) is untouched, so it's just
+    // like Chrome auto-updating and the login session is preserved.
+    const cfp = p.fingerprint as Fingerprint
+    if (cfp?.userAgent) {
+      const cm = cfp.userAgent.match(/Chrome\/(\d+)/)
+      if (cm && cm[1] !== String(CHROME_BUILD.major)) {
+        cfp.userAgent = cfp.userAgent.replace(/Chrome\/[\d.]+/, `Chrome/${CHROME_BUILD.major}.0.0.0`)
+        cfp.uaFullVersion = CHROME_BUILD.full
+        changed = true
+      }
     }
     if (!p.proxy || typeof p.proxy.type !== 'string') {
       p.proxy = { type: 'none' }; changed = true

@@ -6,13 +6,13 @@
 
 import type { Fingerprint, OsType } from './types'
 
-// Pinned to the current STABLE Chrome (matches the VGC Core engine build so the
-// claimed UA/version can't be caught lying via feature-set checks). All profiles
-// claim the same stable version (like real auto-updated Chrome); the DEVICE
-// fingerprint is what varies per profile.
-const CHROME_BUILDS: Array<{ major: number; full: string }> = [
-  { major: 149, full: '149.0.7827.54' }
-]
+// Pinned to the current STABLE Chrome — MUST match the VGC Core engine build, else the
+// claimed UA (say 149) contradicts the engine's UA-CH high-entropy hints (151) and
+// anti-bot (Google "browser not secure", Cloudflare) flags the version MISMATCH.
+// Exported so the store can bump older profiles' UA to this version. Keep in sync with
+// the engine (engine-src/BUILD-WINDOWS-ENGINE.md pins 151.0.7902.0).
+export const CHROME_BUILD = { major: 151, full: '151.0.7902.0' }
+const CHROME_BUILDS: Array<{ major: number; full: string }> = [CHROME_BUILD]
 
 const DESKTOP_SCREENS = [
   { width: 1920, height: 1080 },
