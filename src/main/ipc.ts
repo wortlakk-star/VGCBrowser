@@ -47,7 +47,12 @@ import {
 } from './proxy-store'
 import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { setCloudSession } from './session'
-import { getAccountSecret, encryptWithSecret, decryptWithSecret } from './account-secret'
+import {
+  getAccountSecret,
+  encryptWithSecret,
+  decryptWithSecret,
+  isEncryptionActive
+} from './account-secret'
 import {
   getProfileKey,
   shareProfile,
@@ -226,7 +231,14 @@ export function registerIpc(): void {
     'cloud:protect',
     async (_e, context: string, plaintext: string, profileId?: string) => {
       const secret = (profileId && (await getProfileKey(profileId))) || (await getAccountSecret())
-      return secret ? encryptWithSecret(secret, context, plaintext) : null
+      if (secret) return encryptWithSecret(secret, context, plaintext)
+      // No key right now. If this account is known-encrypted, REFUSE (throwing aborts
+      // the jsonb push) rather than returning null → the caller would upload plaintext
+      // metadata over the encrypted cloud row. Only pre-migration accounts fall through.
+      if (isEncryptionActive()) {
+        throw new Error('VGC_ENC_ACTIVE_NO_KEY')
+      }
+      return null
     }
   )
   ipcMain.handle(

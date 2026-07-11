@@ -235,7 +235,12 @@ export async function stopAllAndSync(): Promise<void> {
  * sync throw and the async 'error' — which is what lets the system-browser
  * fallback actually kick in instead of the launch dying with "spawn UNKNOWN".
  */
-function spawnAndWait(exe: string, args: string[], usePipe: boolean): Promise<ChildProcess> {
+function spawnAndWait(
+  exe: string,
+  args: string[],
+  usePipe: boolean,
+  env?: NodeJS.ProcessEnv
+): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let proc: ChildProcess
     try {
@@ -245,6 +250,7 @@ function spawnAndWait(exe: string, args: string[], usePipe: boolean): Promise<Ch
       // ordinary browser and lets you log in; the session persists in the profile dir.
       proc = spawn(exe, args, {
         detached: false,
+        env,
         stdio: usePipe ? ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] : 'ignore'
       })
     } catch (e) {
@@ -387,6 +393,10 @@ export async function launchProfile(
     `--vgc-webgl-renderer=${fp.webgl.renderer}`,
     // IANA timezone → engine overrides ICU default zone (JS Date / Intl) natively.
     `--vgc-timezone=${fp.timezone}`,
+    // navigator.languages spoof (proxy-country locale from localeForCountry) — native
+    // because --lang is a no-op on macOS, which leaked the host's real OS language on
+    // every profile regardless of the proxy country.
+    `--vgc-accept-languages=${(fp.languages && fp.languages.length ? fp.languages : [fp.language]).join(',')}`,
     // Unique per-profile seed → engine seeds canvas/audio noise so every Chrome differs.
     `--vgc-seed=${seedFromString(id)}`,
     // Profile name shown in the OS window title (title bar / Cmd-Tab / Dock) so you
@@ -397,8 +407,12 @@ export async function launchProfile(
 
   // Portable os_crypt key (VGC Core engine): same secret on every machine of this
   // account → saved passwords + cookies encrypted on one machine decrypt on another.
+  // Passed via the ENVIRONMENT (VGC_CRYPT_SECRET), NOT argv — argv is readable via
+  // `ps` by any other local user, and this secret decrypts the profile's cookies +
+  // saved passwords. The engine reads env first, falling back to the old switch.
   const cryptSecret = await cryptSecretFor(id)
-  if (cryptSecret) args.push(`--vgc-crypt-secret=${cryptSecret}`)
+  const childEnv: NodeJS.ProcessEnv = { ...process.env }
+  if (cryptSecret) childEnv.VGC_CRYPT_SECRET = cryptSecret
 
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local
   // relay because Chromium can't pass credentials via the flag; no-auth proxies
@@ -474,7 +488,7 @@ export async function launchProfile(
   // WebGL in C++, so only then do we skip the JS getParameter override.
   let actualEngine = enginePath
   try {
-    proc = await spawnAndWait(enginePath, args, !skipCdp)
+    proc = await spawnAndWait(enginePath, args, !skipCdp, childEnv)
   } catch (err) {
     const fallback = resolveSystemBrowser(enginePath)
     if (!fallback) {
@@ -492,7 +506,7 @@ export async function launchProfile(
       message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
     })
     try {
-      proc = await spawnAndWait(fallback, args, !skipCdp)
+      proc = await spawnAndWait(fallback, args, !skipCdp, childEnv)
       actualEngine = fallback
     } catch (err2) {
       relay?.close()

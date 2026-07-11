@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from 'react'
+import logo from '../assets/logo.png'
 
 interface Props {
   email: string
@@ -48,6 +49,12 @@ export function Sidebar({
 
   return (
     <aside className="sidebar">
+      {/* Brand */}
+      <div className="side-brand">
+        <img className="side-brand-logo" src={logo} alt="VGC" />
+        <span className="side-brand-name">VGC Browser</span>
+      </div>
+
       {/* Account switcher (GoLogin-style) */}
       <div className="acct" title={acctName}>
         <div className="acct-av">{initial}</div>
@@ -116,10 +123,6 @@ export function Sidebar({
           <span className="nav-ic">🛰</span>
           <span className="nav-lbl">Proxy</span>
         </button>
-        <button className="nav-row" onClick={onSettings}>
-          <span className="nav-ic">⚙</span>
-          <span className="nav-lbl">Cài đặt</span>
-        </button>
       </nav>
 
       <div className="side-foot">
@@ -127,6 +130,10 @@ export function Sidebar({
           <div className="plan-title">VGC Antidetect</div>
           <div className="plan-count">{profileCount} hồ sơ</div>
         </div>
+        <button className="nav-row side-settings" onClick={onSettings}>
+          <span className="nav-ic">⚙</span>
+          <span className="nav-lbl">Cài đặt</span>
+        </button>
       </div>
     </aside>
   )

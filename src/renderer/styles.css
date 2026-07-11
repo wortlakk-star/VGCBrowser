@@ -29,32 +29,32 @@
   --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.65);
 }
 
-/* ── LIGHT theme (VS Code "Light Modern": white + blue) ── */
+/* ── LIGHT theme (soft gray-white — easy on the eyes, not glaring) ── */
 :root[data-theme='light'] {
-  --bg: #ffffff;
-  --bg-2: #f8f8f8;
-  --panel: #ffffff;
-  --panel-2: #f3f3f3;
-  --sidebar: #f8f8f8;
-  --border: #e5e5e5;
-  --border-soft: #ececec;
-  --text: #1f1f1f;
-  --dim: #616161;
-  --accent: #005fb8;
-  --accent-hover: #0258a8;
-  --accent-grad: linear-gradient(135deg, #0a84ff 0%, #005fb8 100%);
-  --accent-soft: rgba(0, 95, 184, 0.10);
-  --accent-glow: rgba(0, 95, 184, 0.22);
+  --bg: #e9ebf0;
+  --bg-2: #e2e5eb;
+  --panel: #fbfcfd;
+  --panel-2: #eef0f4;
+  --sidebar: #eef0f4;
+  --border: #d3d8df;
+  --border-soft: #e0e3e9;
+  --text: #1d2128;
+  --dim: #596170;
+  --accent: #0a66c2;
+  --accent-hover: #084d94;
+  --accent-grad: linear-gradient(135deg, #2b7de9 0%, #0a66c2 100%);
+  --accent-soft: rgba(10, 102, 194, 0.10);
+  --accent-glow: rgba(10, 102, 194, 0.20);
   --on-accent: #ffffff;
-  --green: #1a7f37;
-  --red: #cd3131;
-  --amber: #bf8803;
-  --hover: #f0f0f0;
-  --glow-1: rgba(0, 95, 184, 0.04);
-  --glow-2: rgba(0, 95, 184, 0.03);
-  --ring: 0 0 0 3px rgba(0, 95, 184, 0.20);
-  --shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.14);
+  --green: #157f3b;
+  --red: #c93838;
+  --amber: #9a6a00;
+  --hover: #e3e6ec;
+  --glow-1: rgba(10, 102, 194, 0.035);
+  --glow-2: rgba(10, 102, 194, 0.025);
+  --ring: 0 0 0 3px rgba(10, 102, 194, 0.18);
+  --shadow: 0 6px 24px rgba(30, 40, 60, 0.09);
+  --shadow-lg: 0 24px 60px rgba(30, 40, 60, 0.15);
 }
 
 * {
@@ -1893,4 +1893,158 @@ code {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ═══ Tidy table: aligned columns + clean row dividers (card look) ═══════════ */
+.ptable-wrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.ptable {
+  table-layout: fixed;
+  width: 100%;
+  border-collapse: collapse;
+}
+/* Fixed widths → "Tình trạng" and "Proxy & Vị trí" line up in a clean grid */
+.ptable .col-check { width: 44px; }
+.ptable .col-status { width: 150px; }
+.ptable .col-proxy { width: 340px; }
+.ptable .col-act { width: 168px; }
+/* col-name takes the remaining space */
+
+.ptable th,
+.ptable td {
+  vertical-align: middle;
+}
+.ptable thead th {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  position: static;
+}
+.ptable tbody td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: 12px 14px;
+}
+.ptable tbody tr:last-child td {
+  border-bottom: none;
+}
+.ptable tbody tr:hover td {
+  background: var(--hover);
+}
+.ptable tbody tr.sel td {
+  background: var(--accent-soft);
+}
+/* name column: keep two tidy lines, ellipsized */
+.ptable .col-name .pname,
+.ptable .col-name .psub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Proxy cell: IP left, the ↻ check button pinned right → the buttons form one
+   straight aligned column across every row. */
+.proxy-cell {
+  justify-content: space-between;
+}
+.proxy-cell .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+/* Run button + ⋯ right-aligned and aligned across rows */
+.row-actions {
+  justify-content: flex-end;
+}
+
+/* ═══ Settings pinned to sidebar bottom + tidier profile rows ═══════════════ */
+.side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.side-settings {
+  margin-top: 0;
+}
+
+/* Status as a subtle pill badge (green tint when running) */
+.ptable .pstatus {
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-weight: 500;
+  font-size: 12px;
+}
+.ptable .pstatus.running,
+.ptable .pstatus.starting {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+}
+.ptable .pstatus.error {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+
+/* Consistent row height + calmer name/sub typography */
+.ptable tbody td {
+  height: 58px;
+}
+.ptable .col-name .pname {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.ptable .col-name .psub {
+  margin-top: 3px;
+  font-size: 11.5px;
+}
+/* Group tag as a clean chip */
+.pgroup {
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  color: var(--dim);
+}
+/* Proxy check button a touch more present + aligned */
+.proxy-check-btn {
+  opacity: 0.6;
+}
+
+/* ═══ VGC brand logo at the top of the sidebar ═══ */
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.side-brand-logo {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px var(--accent-glow));
+}
+.side-brand-name {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.2px;
+  color: var(--text);
+}
+
+/* ═══ Clearer per-profile zones: stronger dividers + zebra bands ═══════════ */
+.ptable tbody td {
+  border-bottom: 1px solid var(--border);
+}
+.ptable tbody tr:nth-child(even):not(.sel):not(:hover) td {
+  background: rgba(255, 255, 255, 0.025);
+}
+:root[data-theme='light'] .ptable tbody tr:nth-child(even):not(.sel):not(:hover) td {
+  background: rgba(20, 30, 55, 0.03);
+}
+.ptable tbody tr:hover td {
+  background: var(--hover);
+}
+.ptable tbody tr.sel td {
+  background: var(--accent-soft);
 }

@@ -127,10 +127,10 @@ index bcd4118f88..9df5fe4ce2 100644
  
  #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index faf8c2e79b..0adea758df 100644
+index faf8c2e79b..39e6488327 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2854,6 +2854,20 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2854,6 +2854,21 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
    };
    command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
  
@@ -145,6 +145,7 @@ index faf8c2e79b..0adea758df 100644
 +      "vgc-timezone",
 +      "vgc-seed",
 +      "vgc-crypt-secret",
++      "vgc-accept-languages",
 +  };
 +  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
 +
@@ -318,14 +319,15 @@ index a5c18b6c19..0d124d33fd 100644
  
  std::u16string WindowMetadataController::GetWindowTitleForTab(
 diff --git a/components/os_crypt/async/browser/dpapi_key_provider.cc b/components/os_crypt/async/browser/dpapi_key_provider.cc
-index 0bfbac71af..b53370eb21 100644
+index 0bfbac71af..f8d0adf00b 100644
 --- a/components/os_crypt/async/browser/dpapi_key_provider.cc
 +++ b/components/os_crypt/async/browser/dpapi_key_provider.cc
-@@ -9,8 +9,12 @@
+@@ -9,8 +9,13 @@
  
  #include <wincrypt.h>
  
 +#include <array>
++#include <cstdlib>
 +
  #include "base/base64.h"
 +#include "base/command_line.h"
@@ -334,7 +336,7 @@ index 0bfbac71af..b53370eb21 100644
  #include "base/logging.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/notreached.h"
-@@ -18,6 +22,8 @@
+@@ -18,6 +23,8 @@
  #include "base/win/scoped_localalloc.h"
  #include "components/os_crypt/async/common/algorithm.mojom.h"
  #include "components/prefs/pref_service.h"
@@ -343,7 +345,7 @@ index 0bfbac71af..b53370eb21 100644
  
  namespace os_crypt_async {
  
-@@ -65,6 +71,27 @@ DPAPIKeyProvider::~DPAPIKeyProvider() = default;
+@@ -65,6 +72,34 @@ DPAPIKeyProvider::~DPAPIKeyProvider() = default;
  
  base::expected<Encryptor::Key, DPAPIKeyProvider::KeyStatus>
  DPAPIKeyProvider::GetKeyInternal() {
@@ -354,9 +356,16 @@ index 0bfbac71af..b53370eb21 100644
 +  // not registered when this switch is present (browser_process_impl.cc), so this
 +  // DPAPI provider is the primary encryptor.
 +  {
-+    const std::string vgc_secret =
-+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-+            "vgc-crypt-secret");
++    // Prefer the env var (not exposed in argv via `ps`/Task Manager) and fall back
++    // to the --vgc-crypt-secret switch for backward compatibility.
++    std::string vgc_secret;
++    if (const char* env_secret = std::getenv("VGC_CRYPT_SECRET")) {
++      vgc_secret = env_secret;
++    }
++    if (vgc_secret.empty()) {
++      vgc_secret = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-crypt-secret");
++    }
 +    if (!vgc_secret.empty()) {
 +      static constexpr auto kVgcSalt =
 +          std::to_array<uint8_t>({'s', 'a', 'l', 't', 'y', 's', 'a', 'l', 't'});
@@ -372,10 +381,15 @@ index 0bfbac71af..b53370eb21 100644
      return base::unexpected(KeyStatus::kKeyNotFound);
    }
 diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
-index f240dc22ee..b9403a1b87 100644
+index f240dc22ee..09844a18d5 100644
 --- a/components/os_crypt/common/keychain_password_mac.mm
 +++ b/components/os_crypt/common/keychain_password_mac.mm
-@@ -11,6 +11,7 @@
+@@ -7,10 +7,12 @@
+ #import <Security/Security.h>
+ 
+ #include <atomic>
++#include <cstdlib>
+ 
  #include "base/apple/osstatus_logging.h"
  #include "base/apple/scoped_cftyperef.h"
  #include "base/base64.h"
@@ -383,7 +397,7 @@ index f240dc22ee..b9403a1b87 100644
  #include "base/containers/span.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/no_destructor.h"
-@@ -126,6 +127,21 @@
+@@ -126,6 +128,29 @@
  KeychainPassword::~KeychainPassword() = default;
  
  std::string KeychainPassword::GetPassword() const {
@@ -394,9 +408,17 @@ index f240dc22ee..b9403a1b87 100644
 +  // "saltysalt" → AES-128-CBC, tag "v10") is identical on every platform, so the
 +  // ciphertext is cross-compatible. Falls back to the real Keychain when absent.
 +  {
-+    const std::string vgc_secret =
-+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-+            "vgc-crypt-secret");
++    // Prefer the environment variable (NOT visible in `ps` argv to other local
++    // users, unlike the --vgc-crypt-secret switch) and fall back to the switch for
++    // backward compatibility with older app builds.
++    std::string vgc_secret;
++    if (const char* env_secret = std::getenv("VGC_CRYPT_SECRET")) {
++      vgc_secret = env_secret;
++    }
++    if (vgc_secret.empty()) {
++      vgc_secret = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-crypt-secret");
++    }
 +    if (!vgc_secret.empty()) {
 +      return vgc_secret;
 +    }
@@ -534,6 +556,30 @@ index 22243ebf5e..ad14d501af 100644
  #if BUILDFLAG(IS_MAC)
    // Match Safari and Mozilla on Mac x86.
    return "MacIntel";
+diff --git a/third_party/blink/renderer/core/frame/navigator_language.cc b/third_party/blink/renderer/core/frame/navigator_language.cc
+index 75cd346131..58d02ecfab 100644
+--- a/third_party/blink/renderer/core/frame/navigator_language.cc
++++ b/third_party/blink/renderer/core/frame/navigator_language.cc
+@@ -69,6 +69,19 @@ void NavigatorLanguage::SetLanguagesForTesting(const String& languages) {
+ }
+ 
+ void NavigatorLanguage::EnsureUpdatedLanguage() {
++  // VGC Core: native navigator.languages / navigator.language override from
++  // --vgc-accept-languages, so a profile reports the proxy country's locale (e.g.
++  // "en-US,en") instead of the host OS locale (which leaked identically across every
++  // profile). On macOS the stock --lang plumbing is a no-op — this is the real lever.
++  const std::string vgc_langs =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-accept-languages");
++  if (!vgc_langs.empty()) {
++    languages_ = ParseAndSanitize(String(vgc_langs.c_str()));
++    languages_dirty_ = false;
++    return;
++  }
++
+   String accept_languages_override;
+   probe::ApplyAcceptLanguageOverride(execution_context_,
+                                      &accept_languages_override);
 diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.cc b/third_party/blink/renderer/core/timezone/timezone_controller.cc
 index 48eb8d2fbd..bb65046b90 100644
 --- a/third_party/blink/renderer/core/timezone/timezone_controller.cc

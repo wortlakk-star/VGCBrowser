@@ -29,7 +29,10 @@ function defaults(): AppSettings {
     // macOS VGC Core engine (built + packaged by scripts/package-mac-engine.sh,
     // hosted on vgcbrowser.com/dl). Other Macs auto-download it on first launch;
     // the build machine uses its local userData/engine/VGC Core.app regardless.
-    engineUrlMac: 'https://vgcbrowser.com/dl/vgc-core-mac-arm64-0.1.94.zip',
+    engineUrlMac: 'https://vgcbrowser.com/dl/vgc-core-mac-arm64-0.1.98.zip',
+    // SHA-256 of the engine zip above — verified after download so a compromised host
+    // or a MITM can't swap in a malicious engine (the zip is executed as the browser).
+    engineHashMac: '8c4c19549d6186de12f36f480a6c99d227ea5ed8da42437e469b01eec5a7e82b',
     // GoLogin-style: native engine spoofing, NO CDP debugger → Google sign-in works.
     nativeMode: true
   }

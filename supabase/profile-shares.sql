@@ -20,10 +20,24 @@ create table if not exists public.profile_shares (
 
 alter table public.profile_shares enable row level security;
 
--- Owner manages all shares of their profiles.
+-- Owner manages shares of their OWN profiles only. The WITH CHECK additionally
+-- requires the profile to actually belong to the inserter in profiles_cloud —
+-- otherwise anyone could self-insert a share row (owner = themselves) for a victim's
+-- profile_id and, via can_access_shared_profile(), read/write that profile's cloud
+-- row + storage. This binds share authorization to real profile ownership, so it no
+-- longer collapses to merely knowing a profile_id UUID.
 drop policy if exists "share owner manage" on public.profile_shares;
 create policy "share owner manage" on public.profile_shares
-  for all using (owner = auth.uid()) with check (owner = auth.uid());
+  for all
+  using (owner = auth.uid())
+  with check (
+    owner = auth.uid()
+    and exists (
+      select 1 from public.profiles_cloud pc
+      where pc.profile_id = profile_shares.profile_id
+        and pc.owner = auth.uid()
+    )
+  );
 
 -- A member reads shares addressed to their email (to get the key + proxy + know
 -- which profiles are shared with them).

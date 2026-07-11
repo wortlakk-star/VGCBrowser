@@ -14,24 +14,45 @@
 // breaks during rollout.
 
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'crypto'
+import { existsSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { app } from 'electron'
 import { getCloudSession } from './session'
 import { getSettings } from './settings'
 
 let cached: { uid: string; secret: string } | null = null
-// True once we've EVER obtained a secret for the signed-in account this session.
-// Guards against a transient fetch failure downgrading uploads to plaintext (which
-// would overwrite the encrypted cloud copy) — see cloud-data upload guards.
+// True once we've obtained a secret for the signed-in account this session.
 let encryptionActive = false
+
+// A PERSISTENT marker (per account uid) written the first time encryption succeeds.
+// Without it, the guard only covered mid-session uploads: the very FIRST upload of a
+// fresh process — before any getAccountSecret() has run — could still go plaintext on
+// a transient failure and overwrite the encrypted cloud copy. The marker makes the
+// guard survive restarts, so once an account is encrypted it can NEVER downgrade.
+function encMarkerPath(uid: string): string {
+  return join(app.getPath('userData'), `enc-active-${uid}.flag`)
+}
+function markEncryptionActive(uid: string): void {
+  encryptionActive = true
+  try {
+    writeFileSync(encMarkerPath(uid), '1')
+  } catch {
+    // best-effort; the in-memory flag still guards this session
+  }
+}
 
 export function clearAccountSecretCache(): void {
   cached = null
   encryptionActive = false
 }
 
-/** True once encryption has been confirmed active for this account (a secret was
- *  fetched). Callers use this to REFUSE plaintext uploads on a transient failure. */
+/** True once encryption has EVER been confirmed active for the signed-in account
+ *  (this session OR a persisted marker from a prior run). Callers use this to REFUSE
+ *  plaintext uploads on a transient key-fetch failure. */
 export function isEncryptionActive(): boolean {
-  return encryptionActive
+  if (encryptionActive) return true
+  const s = getCloudSession()
+  return s ? existsSync(encMarkerPath(s.uid)) : false
 }
 
 /** Fetch (or create on first use) the account secret. null if signed out or the
@@ -77,7 +98,7 @@ export async function getAccountSecret(): Promise<string | null> {
     const res = await fetchExisting()
     if (res.status === 'ok') {
       cached = { uid: session.uid, secret: res.secret }
-      encryptionActive = true
+      markEncryptionActive(session.uid)
       return res.secret
     }
     if (res.status === 'nomigration') return null
@@ -93,7 +114,7 @@ export async function getAccountSecret(): Promise<string | null> {
           const after = await fetchExisting() // another device may have won the race
           const finalSecret = after.status === 'ok' ? after.secret : secret
           cached = { uid: session.uid, secret: finalSecret }
-          encryptionActive = true
+          markEncryptionActive(session.uid)
           return finalSecret
         }
       } catch {

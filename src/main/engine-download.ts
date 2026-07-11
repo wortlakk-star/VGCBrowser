@@ -5,9 +5,10 @@
 // it. Subsequent launches use the local copy.
 
 import { app } from 'electron'
-import { promises as fs, existsSync, createWriteStream } from 'fs'
+import { promises as fs, existsSync, createWriteStream, createReadStream } from 'fs'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
+import { createHash } from 'crypto'
 import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import AdmZip from 'adm-zip'
@@ -81,6 +82,29 @@ async function downloadMacEngine(
     counter,
     createWriteStream(zipPath)
   )
+
+  // Integrity check: the engine zip is executed as the browser, so a compromised host
+  // or a MITM swapping it out = code execution. Verify its SHA-256 against the pinned
+  // hash before touching it; on mismatch, delete and refuse (fall back to no engine).
+  const wantHash = (await getSettings()).engineHashMac
+  if (wantHash) {
+    const gotHash = await new Promise<string>((resolve, reject) => {
+      const h = createHash('sha256')
+      createReadStream(zipPath)
+        .on('data', (c) => h.update(c))
+        .on('error', reject)
+        .on('end', () => resolve(h.digest('hex')))
+    }).catch(() => '')
+    if (gotHash !== wantHash) {
+      onProgress?.({ phase: 'error', message: 'Engine tải về sai chữ ký (hash) — đã huỷ.' })
+      try {
+        await fs.unlink(zipPath)
+      } catch {
+        // ignore
+      }
+      return null
+    }
+  }
 
   onProgress?.({ phase: 'extract', message: 'Đang giải nén engine…' })
   const appPath = join(dir, 'VGC Core.app')
