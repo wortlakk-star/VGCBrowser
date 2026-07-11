@@ -149,8 +149,38 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [generating, setGenerating] = useState(false)
 
   const refresh = async (): Promise<void> => {
-    setProxies(await window.vgc.listProxies())
-    setProfiles(await window.vgc.listProfiles())
+    const [px, profs] = await Promise.all([
+      window.vgc.listProxies(),
+      window.vgc.listProfiles()
+    ])
+    // Sync each pool proxy's "đang dùng cho" with the profiles' ACTUAL proxy config
+    // (the source of truth): if a profile currently routes through this proxy's IP, mark
+    // it assigned to that profile; otherwise leave it blank ("trống"). Keeps the pool in
+    // sync even when a proxy was set on a profile outside this modal (import, generate…).
+    const usedByProfile = (p: SavedProxy): string => {
+      const m = profs.find(
+        (pr) =>
+          pr.proxy &&
+          pr.proxy.type !== 'none' &&
+          (pr.proxy.host || '') === (p.host || '') &&
+          Number(pr.proxy.port) === Number(p.port) &&
+          (pr.proxy.username || '') === (p.username || '')
+      )
+      return m ? m.id : ''
+    }
+    const changed: SavedProxy[] = []
+    const synced = px.map((p) => {
+      const to = usedByProfile(p)
+      if ((p.assignedTo || '') !== to) {
+        const np = { ...p, assignedTo: to }
+        changed.push(np)
+        return np
+      }
+      return p
+    })
+    if (changed.length) await window.vgc.saveManyProxies(changed)
+    setProxies(synced)
+    setProfiles(profs)
   }
   useEffect(() => {
     void refresh()
@@ -490,6 +520,13 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
             <div className="proxy-check" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
               <button className="btn primary" onClick={() => void checkMany(proxies)}>✓ Check tất cả</button>
               <button className="btn" onClick={() => void checkMany(proxies.filter((p) => checked.has(p.id)))}>✓ Check đã chọn</button>
+              <button
+                className="btn"
+                title="Đồng bộ: cập nhật proxy nào đang dùng cho profile nào"
+                onClick={() => void refresh().then(() => setMsg('✓ Đã đồng bộ proxy với profile.'))}
+              >
+                🔄 Đồng bộ profile
+              </button>
               <button className="btn" onClick={delErrors}>🧹 Xoá proxy lỗi</button>
               <button className="btn" onClick={dedupe}>⎘ Xoá trùng lặp</button>
               <button className="btn danger" onClick={delSelected}>🗑 Xoá đã chọn</button>
