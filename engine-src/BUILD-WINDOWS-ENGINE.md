@@ -47,21 +47,34 @@ gclient sync -D --no-history
 ## 3. Apply the VGC patches
 
 Copy the `engine-src/patches/` folder from this repo to the Windows machine, then
-from `C:\src\vgc-chromium\src`:
+from `C:\src\vgc-chromium\src` apply the **single combined patch** (it supersedes
+the old `01`–`05` files — it contains ALL of them plus the newer features):
 
 ```bat
-git apply path\to\patches\01-webgl-vendor-renderer.patch
-git apply path\to\patches\02-forward-vgc-switches.patch
-git apply path\to\patches\03-oscrypt-mac-portable-key.patch
-git apply path\to\patches\04-oscrypt-win-portable-key.patch
-git apply path\to\patches\05-oscrypt-win-disable-appbound.patch
+git apply --3way path\to\patches\vgc-native-all.patch
 ```
 
-All five apply cleanly on 151.0.7902.0. (03 is macOS-only code — it applies but is
-inert on a Windows build; keep it so the tree matches the Mac engine 1:1.)
-Optional branding/icon: copy `engine-src/patches/AppIcon.icon` is macOS-only; for the
-Windows taskbar icon the app already re-brands `chrome.exe` at install time via
-`scripts/brand-engine.mjs` + `resources/vgc.ico` (rcedit) — no source patch needed.
+`--3way` lets git auto-merge minor context drift. If a hunk still fails, apply the
+old individual `01`–`05` patches for the os_crypt/switch parts, then hand-apply the
+newer files listed below.
+
+**What `vgc-native-all.patch` contains (all on 151.0.7902.0):**
+
+| Area | Files | Works on Windows? |
+|---|---|---|
+| Portable os_crypt key (password/cookie sync) | `dpapi_key_provider.cc`, `browser_process_impl.cc` (disable App-Bound), `keychain_password_mac.mm` (mac, inert) | ✅ (dpapi + app-bound are the Windows path) |
+| Forward `--vgc-*` switches to child procs | `chrome_content_browser_client.cc`, `browser_process_impl.cc` | ✅ (required) |
+| Native fingerprint (platform/hw/deviceMemory/timezone) | `navigator*.cc`, `timezone_controller.cc` | ✅ |
+| Canvas/WebGL/Audio farbling (per-profile, `--vgc-seed`) | `base_rendering_context_2d.cc`, `image_data_buffer.cc`, `webgl_rendering_context_base.cc`, `offline_audio_context.cc` | ✅ |
+| WebGL UNMASKED vendor/renderer spoof | `webgl_rendering_context_base.cc` | ✅ |
+| Google **Translate** without an API key | `translate_manager.cc` | ✅ |
+| **Profile-name badge** (bottom-left of the window, `--vgc-profile-name`) | `contents_web_view.cc/.h` | ✅ |
+| Profile name in the **window title** (taskbar / Alt-Tab) | `window_metadata_controller.cc` | ✅ |
+| Profile name painted on the **macOS Dock icon** | `app_controller_mac.mm` | ❌ macOS-only (Windows has no Dock — the taskbar uses the window title above instead; the exe icon is the VGC logo via rcedit, step 6b) |
+
+So on Windows you get the same fingerprint + translate + **the bottom-left name
+badge** + the name in the **taskbar/Alt-Tab title** + the **VGC logo** on the exe.
+The Mac-only Dock composite simply doesn't compile into the Windows build (harmless).
 
 What 02/04/05 do for password sync:
 - **04** patches `DPAPIKeyProvider` so when `--vgc-crypt-secret=S` is set it derives
@@ -121,6 +134,23 @@ Compress-Archive -Path "$dst\*" -DestinationPath "C:\src\vgc-core-win-x64-149.zi
 > Name it `vgc-core-win-x64-<ver>.zip`. Verify the zip has `chrome.exe` at its ROOT
 > (open it — the first entries should be `chrome.exe`, `*.dll`, `locales\`…). If a
 > parent folder wraps them, the install will fail to find `chrome.exe`.
+
+### 6b. VGC logo on the exe (the "cùng logo như này" part)
+
+The launched browser's taskbar/exe icon is set to the VGC logo by **rcedit**, NOT a
+source patch — so it's independent of the Chromium build. `scripts/brand-engine.mjs`
+runs during `npm run dist` (and re-applies at install) and stamps
+`resources/vgc.ico` (the blue-teal VGC sphere, 256px) onto `chrome.exe` +
+`chrome_proxy.exe`. To brand the freshly-built engine before zipping, from the repo:
+
+```bat
+:: put the built engine at engine\chromium\chrome.exe first, then:
+node scripts\brand-engine.mjs
+```
+
+Verify: right-click `chrome.exe` → Properties → the icon is the VGC sphere. (The
+bottom-left name **badge** and the taskbar-title name come from the source patch,
+so they're already in the build — no rcedit needed for those.)
 
 ## 7. Upload + point the app at it
 

@@ -1,0 +1,980 @@
+diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
+index 442f1d3308..3b7bb3f6b9 100644
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -1352,6 +1352,88 @@ - (void)applicationDidFinishLaunching:(NSNotification*)notify {
+ 
+   [MenuControllerCocoa
+       initializeWithNewMenuIconScheme:features::IsMenuSimplificationEnabled()];
++
++  // VGC Core: paint the profile name onto the Dock icon so several profiles are
++  // distinguishable in the Dock (GoLogin-style). From --vgc-profile-name; this is
++  // browser chrome only — it is never exposed to a web page.
++  {
++    std::string vgcName = base::CommandLine::ForCurrentProcess()
++                              ->GetSwitchValueASCII("vgc-profile-name");
++    if (!vgcName.empty()) {
++      NSString* vgcNameStr = base::SysUTF8ToNSString(vgcName);
++      // Prefer the VGC-branded app.icns over NSApp.applicationIconImage (which is
++      // the stock Chromium art from Assets.car), so the Dock shows the VGC logo.
++      NSString* icnsPath = [NSBundle.mainBundle pathForResource:@"app"
++                                                         ofType:@"icns"];
++      NSImage* baseIcon =
++          icnsPath ? [[NSImage alloc] initWithContentsOfFile:icnsPath] : nil;
++      if (!baseIcon) {
++        baseIcon = NSApp.applicationIconImage;
++      }
++      const NSSize sz = NSMakeSize(512, 512);
++      // Draw via imageWithSize:drawingHandler: — its context has a TRANSPARENT
++      // backing, so the rounded/transparent corners of the icns are preserved
++      // (lockFocus gave an opaque white backing → the ugly white square).
++      NSImage* composite = [NSImage
++          imageWithSize:sz
++                flipped:NO
++         drawingHandler:^BOOL(NSRect dstRect) {
++           // The engine's app.icns is an OPAQUE square (no alpha), so clip it to a
++           // rounded, slightly-inset squircle → the Dock icon gets rounded corners
++           // and the padding of a native app icon (not the ugly white square).
++           const CGFloat kMargin = 20;
++           NSRect iconRect = NSMakeRect(kMargin, kMargin, sz.width - 2 * kMargin,
++                                        sz.height - 2 * kMargin);
++           [NSGraphicsContext saveGraphicsState];
++           [[NSBezierPath bezierPathWithRoundedRect:iconRect
++                                            xRadius:104
++                                            yRadius:104] addClip];
++           if (baseIcon) {
++             [baseIcon drawInRect:iconRect
++                         fromRect:NSZeroRect
++                        operation:NSCompositingOperationSourceOver
++                         fraction:1.0];
++           }
++           // A slim rounded pill at the bottom holds the profile name; it's inside
++           // the same clip so it follows the icon's rounded bottom.
++           const NSRect pill = NSMakeRect(44, 38, sz.width - 88, 90);
++           NSBezierPath* pillPath =
++               [NSBezierPath bezierPathWithRoundedRect:pill xRadius:26 yRadius:26];
++           [[NSColor colorWithSRGBRed:0.04 green:0.15 blue:0.13 alpha:0.86] set];
++           [pillPath fill];
++           // Auto-shrink the font so the whole name fits (no "…") down to a floor.
++           const CGFloat kTextPad = 22;
++           const CGFloat availW = pill.size.width - 2 * kTextPad;
++           CGFloat fontSize = 54;
++           NSFont* font = [NSFont boldSystemFontOfSize:fontSize];
++           while (fontSize > 26 &&
++                  [vgcNameStr sizeWithAttributes:@{NSFontAttributeName : font}]
++                          .width > availW) {
++             fontSize -= 2;
++             font = [NSFont boldSystemFontOfSize:fontSize];
++           }
++           NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
++           ps.alignment = NSTextAlignmentCenter;
++           ps.lineBreakMode = NSLineBreakByTruncatingTail;
++           NSDictionary* attrs = @{
++             NSFontAttributeName : font,
++             NSForegroundColorAttributeName : NSColor.whiteColor,
++             NSParagraphStyleAttributeName : ps
++           };
++           NSSize textSize = [vgcNameStr sizeWithAttributes:attrs];
++           CGFloat ty = pill.origin.y + (pill.size.height - textSize.height) / 2;
++           [vgcNameStr drawInRect:NSMakeRect(pill.origin.x + kTextPad, ty, availW,
++                                             textSize.height)
++                   withAttributes:attrs];
++           [NSGraphicsContext restoreGraphicsState];
++           return YES;
++         }];
++      NSImageView* iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
++      iconView.image = composite;
++      NSApp.dockTile.contentView = iconView;
++      [NSApp.dockTile display];
++    }
++  }
+ }
+ 
+ - (void)observeValueForKeyPath:(NSString*)keyPath
+diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
+index bcd4118f88..9df5fe4ce2 100644
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -1545,14 +1545,22 @@ void BrowserProcessImpl::PreMainMessageLoopRun() {
+       /*precedence=*/10u,
+       std::make_unique<os_crypt_async::DPAPIKeyProvider>(local_state())));
+ 
+-  providers.emplace_back(std::make_pair(
+-      // Note: 15 is chosen to be higher than the 10 precedence above for
+-      // DPAPI. This ensures that when the provider is enabled for
+-      // encryption, the App-Bound encryption key is used and not the DPAPI
+-      // one.
+-      /*precedence=*/15u,
+-      std::make_unique<os_crypt_async::AppBoundEncryptionProviderWin>(
+-          local_state(), /*force_protection_level=*/std::nullopt)));
++  // VGC Core: when a portable cross-machine key is requested (--vgc-crypt-secret),
++  // do NOT register App-Bound encryption. App-Bound (precedence 15) would otherwise
++  // be the primary encryptor and bind the data to THIS machine, defeating the
++  // portable DPAPI "v10"/AES-128-CBC key that matches macOS. With App-Bound off,
++  // the patched DPAPIKeyProvider (precedence 10) is primary and emits the portable
++  // ciphertext.
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch("vgc-crypt-secret")) {
++    providers.emplace_back(std::make_pair(
++        // Note: 15 is chosen to be higher than the 10 precedence above for
++        // DPAPI. This ensures that when the provider is enabled for
++        // encryption, the App-Bound encryption key is used and not the DPAPI
++        // one.
++        /*precedence=*/15u,
++        std::make_unique<os_crypt_async::AppBoundEncryptionProviderWin>(
++            local_state(), /*force_protection_level=*/std::nullopt)));
++  }
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index faf8c2e79b..0adea758df 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2854,6 +2854,20 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+   };
+   command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
+ 
++  // VGC: forward antidetect fingerprint switches to every child process (the
++  // renderer reads them — e.g. WebGL UNMASKED vendor/renderer is answered there).
++  static const char* const kVgcSwitches[] = {
++      "vgc-webgl-vendor",
++      "vgc-webgl-renderer",
++      "vgc-hardware-concurrency",
++      "vgc-device-memory",
++      "vgc-platform",
++      "vgc-timezone",
++      "vgc-seed",
++      "vgc-crypt-secret",
++  };
++  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
++
+   static const char* const kDinosaurEasterEggSwitches[] = {
+       error_page::switches::kDisableDinosaurEasterEgg,
+       error_page::switches::kEnableDinosaurEasterEggAltGameImages,
+diff --git a/chrome/browser/ui/views/frame/contents_web_view.cc b/chrome/browser/ui/views/frame/contents_web_view.cc
+index a831bfd4ff..09e31736af 100644
+--- a/chrome/browser/ui/views/frame/contents_web_view.cc
++++ b/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -4,7 +4,11 @@
+ 
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ 
++#include <algorithm>
++
++#include "base/command_line.h"
+ #include "base/debug/dump_without_crashing.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
+@@ -21,6 +25,10 @@
+ #include "ui/compositor/layer.h"
+ #include "ui/compositor/layer_tree_owner.h"
+ #include "ui/compositor/layer_type.h"
++#include "ui/gfx/geometry/insets.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/label.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/widget/widget.h"
+ 
+@@ -40,6 +48,27 @@ ContentsWebView::ContentsWebView(content::BrowserContext* browser_context)
+   status_bubble_ = std::make_unique<StatusBubbleViews>(this);
+   status_bubble_->Reposition();
+   web_contents_close_handler_ = std::make_unique<WebContentsCloseHandler>(this);
++
++  // VGC Core: bottom-left profile-name badge (GoLogin-style) from --vgc-profile-name.
++  // It's browser chrome layered over the web contents — NOT page DOM — so a web page
++  // can't read it (no fingerprint leak). Absent switch ⇒ no badge (stock behaviour).
++  const std::string vgc_name =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-profile-name");
++  if (!vgc_name.empty()) {
++    auto badge = std::make_unique<views::Label>(base::UTF8ToUTF16(vgc_name));
++    badge->SetProperty(views::kViewIgnoredByLayoutKey, true);
++    badge->SetAutoColorReadabilityEnabled(false);
++    badge->SetEnabledColor(SK_ColorWHITE);
++    badge->SetBackground(views::CreateRoundedRectBackground(
++        SkColorSetARGB(0xDA, 0x0f, 0x9e, 0x8d), 8));
++    badge->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(3, 10)));
++    badge->SetElideBehavior(gfx::ELIDE_TAIL);
++    // Own layer so the badge composites ABOVE the web contents' layer.
++    badge->SetPaintToLayer();
++    badge->layer()->SetFillsBoundsOpaquely(false);
++    vgc_badge_ = AddChildView(std::move(badge));
++  }
+ }
+ 
+ ContentsWebView::~ContentsWebView() = default;
+@@ -115,12 +144,24 @@ bool ContentsWebView::GetNeedsNotificationWhenVisibleBoundsChange() const {
+   return true;
+ }
+ 
++void ContentsWebView::UpdateVgcBadgeBounds() {
++  if (!vgc_badge_) {
++    return;
++  }
++  const gfx::Size pref = vgc_badge_->GetPreferredSize();
++  constexpr int kMargin = 10;
++  const int w = std::min(pref.width(), std::max(0, width() - 2 * kMargin));
++  const int y = std::max(0, height() - pref.height() - kMargin);
++  vgc_badge_->SetBounds(kMargin, y, w, pref.height());
++}
++
+ void ContentsWebView::OnVisibleBoundsChanged() {
+   // If we are animating, the status bubble is hidden and avoid reposition the
+   // bubble as an optimization since it's expensive on some platform.
+   if (!is_animating_bounds_ && status_bubble_) {
+     status_bubble_->Reposition();
+   }
++  UpdateVgcBadgeBounds();
+ 
+   // Reset using default deadline once animation is completed after the final
+   // bounds changes are made.
+diff --git a/chrome/browser/ui/views/frame/contents_web_view.h b/chrome/browser/ui/views/frame/contents_web_view.h
+index dba4f324e7..4c30549cb3 100644
+--- a/chrome/browser/ui/views/frame/contents_web_view.h
++++ b/chrome/browser/ui/views/frame/contents_web_view.h
+@@ -23,6 +23,10 @@ namespace ui {
+ class LayerTreeOwner;
+ }  // namespace ui
+ 
++namespace views {
++class Label;
++}  // namespace views
++
+ // ContentsWebView is used to present the WebContents of the active tab.
+ class ContentsWebView : public views::WebView,
+                         public WebContentsCloseHandlerDelegate {
+@@ -81,7 +85,12 @@ class ContentsWebView : public views::WebView,
+ 
+  private:
+   void UpdateBackgroundColor();
++  // VGC Core: keep the bottom-left profile-name badge pinned as the view resizes.
++  void UpdateVgcBadgeBounds();
+   std::unique_ptr<StatusBubbleViews> status_bubble_;
++  // VGC Core: GoLogin-style profile-name badge (browser chrome, not page DOM), or
++  // null when --vgc-profile-name is absent. Owned by the view hierarchy.
++  raw_ptr<views::Label> vgc_badge_ = nullptr;
+   std::unique_ptr<WebContentsCloseHandler> web_contents_close_handler_;
+ 
+   bool background_visible_ = true;
+diff --git a/chrome/browser/ui/window_metadata/window_metadata_controller.cc b/chrome/browser/ui/window_metadata/window_metadata_controller.cc
+index a5c18b6c19..0d124d33fd 100644
+--- a/chrome/browser/ui/window_metadata/window_metadata_controller.cc
++++ b/chrome/browser/ui/window_metadata/window_metadata_controller.cc
+@@ -6,6 +6,8 @@
+ 
+ #include <string>
+ 
++#include "base/command_line.h"
++#include "base/no_destructor.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+ #include "chrome/browser/sessions/session_service.h"
+@@ -35,6 +37,23 @@ namespace {
+ 
+ using gfx::GetStringWidth;
+ 
++// VGC Core: profile-name prefix for the OS window title (title bar / Cmd-Tab /
++// Dock / taskbar) from --vgc-profile-name. This identifies which antidetect
++// profile a window belongs to WITHOUT touching document.title, so a web page's
++// JS can't read it (not a fingerprint tell). Empty switch ⇒ no prefix.
++const std::u16string& VgcProfilePrefix() {
++  static const base::NoDestructor<std::u16string> prefix([] {
++    const std::string name =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            "vgc-profile-name");
++    if (name.empty()) {
++      return std::u16string();
++    }
++    return base::UTF8ToUTF16(name) + u"  •  ";
++  }());
++  return *prefix;
++}
++
+ }  // namespace
+ 
+ DEFINE_USER_DATA(WindowMetadataController);
+@@ -77,7 +96,7 @@ gfx::Image WindowMetadataController::GetCurrentPageIcon() const {
+ std::u16string WindowMetadataController::GetWindowTitleForCurrentTab(
+     bool include_app_name) const {
+   if (!user_title_.empty()) {
+-    return base::UTF8ToUTF16(user_title_);
++    return VgcProfilePrefix() + base::UTF8ToUTF16(user_title_);
+   }
+ 
+   // For document picture-in-picture windows, we use the title from the opener
+@@ -87,8 +106,9 @@ std::u16string WindowMetadataController::GetWindowTitleForCurrentTab(
+           ? PictureInPictureWindowManager::GetInstance()->GetWebContents()
+           : browser_->tab_strip_model()->GetActiveWebContents();
+ 
+-  return GetWindowTitleFromWebContents(include_app_name,
+-                                       web_contents_for_title);
++  // VGC Core: prefix the OS window title with the profile name (non-detectable).
++  return VgcProfilePrefix() +
++         GetWindowTitleFromWebContents(include_app_name, web_contents_for_title);
+ }
+ 
+ std::u16string WindowMetadataController::GetWindowTitleForTab(
+diff --git a/components/os_crypt/async/browser/dpapi_key_provider.cc b/components/os_crypt/async/browser/dpapi_key_provider.cc
+index 0bfbac71af..b53370eb21 100644
+--- a/components/os_crypt/async/browser/dpapi_key_provider.cc
++++ b/components/os_crypt/async/browser/dpapi_key_provider.cc
+@@ -9,8 +9,12 @@
+ 
+ #include <wincrypt.h>
+ 
++#include <array>
++
+ #include "base/base64.h"
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
++#include "base/containers/span.h"
+ #include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/notreached.h"
+@@ -18,6 +22,8 @@
+ #include "base/win/scoped_localalloc.h"
+ #include "components/os_crypt/async/common/algorithm.mojom.h"
+ #include "components/prefs/pref_service.h"
++#include "crypto/kdf.h"
++#include "crypto/subtle_passkey.h"
+ 
+ namespace os_crypt_async {
+ 
+@@ -65,6 +71,27 @@ DPAPIKeyProvider::~DPAPIKeyProvider() = default;
+ 
+ base::expected<Encryptor::Key, DPAPIKeyProvider::KeyStatus>
+ DPAPIKeyProvider::GetKeyInternal() {
++  // VGC Core: portable cross-machine key. When --vgc-crypt-secret is set, derive
++  // the SAME key the macOS keychain_key_provider derives — PBKDF2-SHA1(secret,
++  // "saltysalt", 1003) → 16-byte AES-128-CBC key, tag "v10" (see GetKey below) —
++  // so cookies + saved passwords cross macOS ⇄ Windows. The App-Bound provider is
++  // not registered when this switch is present (browser_process_impl.cc), so this
++  // DPAPI provider is the primary encryptor.
++  {
++    const std::string vgc_secret =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            "vgc-crypt-secret");
++    if (!vgc_secret.empty()) {
++      static constexpr auto kVgcSalt =
++          std::to_array<uint8_t>({'s', 'a', 'l', 't', 'y', 's', 'a', 'l', 't'});
++      std::array<uint8_t, 16> key_bytes;
++      crypto::kdf::Pbkdf2HmacSha1({.iterations = 1003},
++                                  base::as_byte_span(vgc_secret), kVgcSalt,
++                                  key_bytes, crypto::SubtlePassKey{});
++      return Encryptor::Key(key_bytes, mojom::Algorithm::kAES128CBC);
++    }
++  }
++
+   if (!local_state_->HasPrefPath(kOsCryptEncryptedKeyPrefName)) {
+     return base::unexpected(KeyStatus::kKeyNotFound);
+   }
+diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
+index f240dc22ee..b9403a1b87 100644
+--- a/components/os_crypt/common/keychain_password_mac.mm
++++ b/components/os_crypt/common/keychain_password_mac.mm
+@@ -11,6 +11,7 @@
+ #include "base/apple/osstatus_logging.h"
+ #include "base/apple/scoped_cftyperef.h"
+ #include "base/base64.h"
++#include "base/command_line.h"
+ #include "base/containers/span.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/no_destructor.h"
+@@ -126,6 +127,21 @@
+ KeychainPassword::~KeychainPassword() = default;
+ 
+ std::string KeychainPassword::GetPassword() const {
++  // VGC Core: portable cross-machine os_crypt password. When --vgc-crypt-secret is
++  // provided, use it instead of the per-machine Keychain secret so cookies + saved
++  // passwords encrypted on one machine (including a Windows machine running the same
++  // secret) decrypt here, and vice-versa. The derivation downstream (PBKDF2-SHA1 +
++  // "saltysalt" → AES-128-CBC, tag "v10") is identical on every platform, so the
++  // ciphertext is cross-compatible. Falls back to the real Keychain when absent.
++  {
++    const std::string vgc_secret =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            "vgc-crypt-secret");
++    if (!vgc_secret.empty()) {
++      return vgc_secret;
++    }
++  }
++
+   auto password =
+       GetPasswordImpl(*keychain_, GetServiceName(), GetAccountName());
+ 
+diff --git a/components/translate/core/browser/translate_manager.cc b/components/translate/core/browser/translate_manager.cc
+index ea1b977331..a13f832fb3 100644
+--- a/components/translate/core/browser/translate_manager.cc
++++ b/components/translate/core/browser/translate_manager.cc
+@@ -677,7 +677,11 @@ LanguageState* TranslateManager::GetLanguageState() {
+   return &language_state_;
+ }
+ 
+-bool TranslateManager::ignore_missing_key_for_testing_ = false;
++// VGC Core: default TRUE so "Translate this page" works without a baked-in Google
++// API key. The Google Translate element widget (translate_a/element.js) fetches and
++// translates keyless — only the offer-gate here checked HasAPIKeyConfigured(). This
++// bypasses that gate so the native translate bar behaves like real Chrome.
++bool TranslateManager::ignore_missing_key_for_testing_ = true;
+ 
+ // static
+ void TranslateManager::SetIgnoreMissingKeyForTesting(bool ignore) {
+diff --git a/third_party/blink/renderer/core/frame/navigator.cc b/third_party/blink/renderer/core/frame/navigator.cc
+index 583f05f8dd..36a3411080 100644
+--- a/third_party/blink/renderer/core/frame/navigator.cc
++++ b/third_party/blink/renderer/core/frame/navigator.cc
+@@ -23,6 +23,7 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator.h"
+ 
++#include "base/command_line.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
+@@ -56,6 +57,14 @@ String Navigator::vendorSub() const {
+ }
+ 
+ String Navigator::platform() const {
++  // VGC Core: native navigator.platform spoof from --vgc-platform (main-frame path;
++  // WorkerNavigator goes through NavigatorID::platform which is patched too), so a
++  // Windows profile on a Mac host reports a coherent platform with its UA.
++  const std::string vgc_platform =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-platform");
++  if (!vgc_platform.empty()) {
++    return String(vgc_platform.c_str());
++  }
+   // TODO(955620): Consider changing devtools overrides to only allow overriding
+   // the platform with a frozen platform to distinguish between
+   // mobile and desktop when ReduceUserAgent is enabled.
+diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+index f5c0db2d1b..bb70c1ca7b 100644
+--- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
++++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+@@ -4,11 +4,24 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ 
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/system/sys_info.h"
+ 
+ namespace blink {
+ 
+ unsigned NavigatorConcurrentHardware::hardwareConcurrency() const {
++  // VGC Core: native spoof of navigator.hardwareConcurrency from
++  // --vgc-hardware-concurrency (no JS override → no detectable tell).
++  const std::string vgc =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-hardware-concurrency");
++  if (!vgc.empty()) {
++    unsigned n = 0;
++    if (base::StringToUint(vgc, &n) && n > 0) {
++      return n;
++    }
++  }
+   return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
+ }
+ 
+diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+index 05fa33e456..6938e31622 100644
+--- a/third_party/blink/renderer/core/frame/navigator_device_memory.cc
++++ b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_device_memory.h"
+ 
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
+ #include "third_party/blink/public/common/device_memory/approximated_device_memory.h"
+ #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -12,6 +14,16 @@
+ namespace blink {
+ 
+ float NavigatorDeviceMemory::deviceMemory() const {
++  // VGC Core: native spoof of navigator.deviceMemory from --vgc-device-memory.
++  const std::string vgc =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-device-memory");
++  if (!vgc.empty()) {
++    double d = 0;
++    if (base::StringToDouble(vgc, &d) && d > 0) {
++      return static_cast<float>(d);
++    }
++  }
+   return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
+ }
+ 
+diff --git a/third_party/blink/renderer/core/frame/navigator_id.cc b/third_party/blink/renderer/core/frame/navigator_id.cc
+index 22243ebf5e..ad14d501af 100644
+--- a/third_party/blink/renderer/core/frame/navigator_id.cc
++++ b/third_party/blink/renderer/core/frame/navigator_id.cc
+@@ -31,6 +31,7 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_id.h"
+ 
++#include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/public/common/features.h"
+@@ -59,6 +60,13 @@ String NavigatorID::appVersion() {
+ }
+ 
+ String NavigatorID::platform() const {
++  // VGC Core: native navigator.platform spoof from --vgc-platform (e.g. "Win32"),
++  // so a Windows profile on a Mac host reports a coherent platform with its UA.
++  const std::string vgc_platform =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-platform");
++  if (!vgc_platform.empty()) {
++    return String(vgc_platform.c_str());
++  }
+ #if BUILDFLAG(IS_MAC)
+   // Match Safari and Mozilla on Mac x86.
+   return "MacIntel";
+diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.cc b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+index 48eb8d2fbd..bb65046b90 100644
+--- a/third_party/blink/renderer/core/timezone/timezone_controller.cc
++++ b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/core/timezone/timezone_controller.h"
+ 
++#include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+@@ -96,6 +97,21 @@ TimeZoneController::TimeZoneController() {
+   if (!base::FeatureList::IsEnabled(kLazyBlinkTimezoneInit)) {
+     host_timezone_id_ = GetCurrentTimezoneId();
+   }
++  // VGC Core: native timezone override from --vgc-timezone (no CDP inspector).
++  // Set the process ICU default here — the controller is created during renderer
++  // init, before page scripts read Date / Intl / getTimezoneOffset — so the JS
++  // timezone matches the profile's proxy geo. Marking override_timezone_id_ keeps a
++  // later OS-timezone change (OnTimeZoneChange) from resetting it.
++  const std::string vgc_tz =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-timezone");
++  if (!vgc_tz.empty()) {
++    std::unique_ptr<icu::TimeZone> tz(icu::TimeZone::createTimeZone(
++        icu::UnicodeString(vgc_tz.c_str(), -1, US_INV)));
++    if (tz && *tz != icu::TimeZone::getUnknown()) {
++      icu::TimeZone::adoptDefault(tz.release());
++      override_timezone_id_ = String(vgc_tz.c_str());
++    }
++  }
+ }
+ 
+ TimeZoneController::~TimeZoneController() = default;
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+index cac05bfc5b..722e51a35f 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+@@ -14,6 +14,8 @@
+ 
+ #include "base/check.h"
+ #include "base/check_op.h"
++#include "base/command_line.h"
++#include "base/containers/span.h"
+ #include "base/location.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+@@ -68,6 +70,7 @@
+ #include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
+ #include "third_party/blink/renderer/modules/webgpu/gpu_texture.h"
+ #include "third_party/blink/renderer/platform/bindings/exception_code.h"
++#include "ui/gfx/skia_span_util.h"
+ #include "third_party/blink/renderer/platform/fonts/font.h"
+ #include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
+ #include "third_party/blink/renderer/platform/fonts/font_selector.h"
+@@ -113,6 +116,64 @@ class MemoryManagedPaintCanvas;
+ 
+ namespace {
+ 
++// VGC Core: per-profile canvas "farbling" seeded from --vgc-seed. Absent switch ⇒
++// seed 0 ⇒ no-op (stock behaviour). FNV-1a of the seed string keeps it stable.
++uint32_t VgcCanvasSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    if (s.empty())
++      return 0u;
++    uint32_t h = 2166136261u;
++    for (char c : s) {
++      h ^= static_cast<uint8_t>(c);
++      h *= 16777619u;
++    }
++    return h == 0u ? 1u : h;
++  }();
++  return seed;
++}
++
++// Deterministic 1-bit noise: same (seed,index) ⇒ same bit, so a profile's canvas
++// hash is STABLE across reads yet differs from other profiles and the real host.
++inline uint8_t VgcNoiseBit(uint32_t seed, uint64_t index) {
++  uint32_t x = seed ^ (static_cast<uint32_t>(index) * 0x9E3779B9u);
++  x ^= x >> 16;
++  x *= 0x85EBCA6Bu;
++  x ^= x >> 13;
++  x *= 0xC2B2AE35u;
++  x ^= x >> 16;
++  return static_cast<uint8_t>(x & 1u);
++}
++
++// Flip the LSB of R,G,B (never alpha) of every pixel in an 8-bit RGBA/BGRA pixmap.
++// ±1/255 is visually imperceptible but shifts the canvas hash per profile — the
++// same approach Brave uses for canvas farbling. Only touches 8-bit readbacks.
++void VgcApplyCanvasNoise(const SkPixmap& pm) {
++  const uint32_t seed = VgcCanvasSeed();
++  if (seed == 0)
++    return;
++  const SkColorType ct = pm.colorType();
++  if (ct != kRGBA_8888_SkColorType && ct != kBGRA_8888_SkColorType)
++    return;
++  base::span<uint8_t> bytes = gfx::SkPixmapToWritableSpan(pm);
++  if (bytes.empty())
++    return;
++  const size_t w = static_cast<size_t>(pm.width());
++  const size_t h = static_cast<size_t>(pm.height());
++  const size_t row_bytes = pm.rowBytes();
++  uint64_t idx = 1;
++  for (size_t y = 0; y < h; ++y) {
++    base::span<uint8_t> row = bytes.subspan(y * row_bytes, w * 4);
++    for (size_t x = 0; x < w; ++x) {
++      base::span<uint8_t> px = row.subspan(x * 4, static_cast<size_t>(4));
++      px[0] ^= VgcNoiseBit(seed, idx++);  // R (or B)
++      px[1] ^= VgcNoiseBit(seed, idx++);  // G
++      px[2] ^= VgcNoiseBit(seed, idx++);  // B (or R)
++      // alpha (px[3]) intentionally untouched
++    }
++  }
++}
+ 
+ bool IsContextProviderValid() {
+   base::WeakPtr<WebGraphicsContext3DProviderWrapper> context_provider_wrapper =
+@@ -511,6 +572,10 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
+       SkIRect bounds =
+           snapshot->PaintImageForCurrentFrame().GetSkImageInfo().bounds();
+       DCHECK(!bounds.intersect(SkIRect::MakeXYWH(sx, sy, sw, sh)));
++    } else {
++      // VGC Core: perturb the readback so getImageData()/canvas hashing yields a
++      // stable-per-profile fingerprint instead of the real host's.
++      VgcApplyCanvasNoise(image_data_pixmap);
+     }
+   }
+ 
+diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
+index fcac660801..6492112be9 100644
+--- a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
+@@ -25,6 +25,9 @@
+ 
+ #include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
+ 
++#include "base/bit_cast.h"
++#include "base/command_line.h"
++#include "base/containers/span.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "media/base/audio_glitch_info.h"
+@@ -35,6 +38,7 @@
+ #include "third_party/blink/renderer/core/dom/dom_exception.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_listener.h"
+ #include "third_party/blink/renderer/modules/webaudio/deferred_task_handler.h"
+ #include "third_party/blink/renderer/modules/webaudio/offline_audio_completion_event.h"
+@@ -53,6 +57,57 @@ namespace blink {
+ 
+ namespace {
+ 
++// VGC Core: per-profile audio farbling seeded from --vgc-seed. Applied ONCE to
++// the fully-rendered OfflineAudioContext buffer (see FireCompletionEvent) so the
++// audio fingerprint (getChannelData/copyFromChannel hashes) is stable per profile
++// but differs from the real host. Seed 0 ⇒ no-op.
++uint32_t VgcAudioSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    if (s.empty())
++      return 0u;
++    uint32_t h = 2166136261u;
++    for (char c : s) {
++      h ^= static_cast<uint8_t>(c);
++      h *= 16777619u;
++    }
++    return h == 0u ? 1u : h;
++  }();
++  return seed;
++}
++
++inline uint8_t VgcNoiseBit(uint32_t seed, uint64_t index) {
++  uint32_t x = seed ^ (static_cast<uint32_t>(index) * 0x9E3779B9u);
++  x ^= x >> 16;
++  x *= 0x85EBCA6Bu;
++  x ^= x >> 13;
++  x *= 0xC2B2AE35u;
++  x ^= x >> 16;
++  return static_cast<uint8_t>(x & 1u);
++}
++
++// Flip the mantissa LSB of every sample (~1 ULP, ~1e-7 for unit-scale audio —
++// inaudible) so any sum/hash of the samples shifts deterministically per profile.
++void VgcFarbleAudioBuffer(AudioBuffer* buffer) {
++  const uint32_t seed = VgcAudioSeed();
++  if (seed == 0 || !buffer)
++    return;
++  uint64_t idx = 1;
++  const unsigned channels = buffer->numberOfChannels();
++  for (unsigned c = 0; c < channels; ++c) {
++    NotShared<DOMFloat32Array> array = buffer->getChannelData(c);
++    if (!array)
++      continue;
++    base::span<float> samples = array->AsSpan();
++    for (float& sample : samples) {
++      uint32_t bits = base::bit_cast<uint32_t>(sample);
++      bits ^= VgcNoiseBit(seed, idx++);
++      sample = base::bit_cast<float>(bits);
++    }
++  }
++}
++
+ OfflineAudioContext* CreateOfflineAudioContext(
+     ExecutionContext* context,
+     unsigned number_of_channels,
+@@ -432,6 +487,10 @@ void OfflineAudioContext::FireCompletionEvent() {
+       return;
+     }
+ 
++    // VGC Core: farble the finished render before JS can read it, so the audio
++    // fingerprint is stable per profile but differs from the real host.
++    VgcFarbleAudioBuffer(rendered_buffer);
++
+     // Call the offline rendering completion event listener and resolve the
+     // promise too.
+     DispatchEvent(*OfflineAudioCompletionEvent::Create(rendered_buffer));
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index 867f4bfb2a..0f586ba417 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -32,7 +32,9 @@
+ 
+ #include "base/bit_cast.h"
+ #include "base/byte_size.h"
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
++#include "base/containers/span.h"
+ #include "base/feature_list.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
+@@ -207,6 +209,48 @@ unsigned WebGLRenderingContextBase::max_active_webgl_contexts_on_worker_ = 0;
+ 
+ namespace {
+ 
++// VGC Core: per-profile WebGL readback farbling seeded from --vgc-seed (mirrors
++// the canvas2d path). Seed 0 ⇒ no-op (stock behaviour).
++uint32_t VgcCanvasSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    if (s.empty())
++      return 0u;
++    uint32_t h = 2166136261u;
++    for (char c : s) {
++      h ^= static_cast<uint8_t>(c);
++      h *= 16777619u;
++    }
++    return h == 0u ? 1u : h;
++  }();
++  return seed;
++}
++
++inline uint8_t VgcNoiseBit(uint32_t seed, uint64_t index) {
++  uint32_t x = seed ^ (static_cast<uint32_t>(index) * 0x9E3779B9u);
++  x ^= x >> 16;
++  x *= 0x85EBCA6Bu;
++  x ^= x >> 13;
++  x *= 0xC2B2AE35u;
++  x ^= x >> 16;
++  return static_cast<uint8_t>(x & 1u);
++}
++
++// LSB-farble an 8-bit readback buffer in place. For RGBA the alpha byte (every
++// 4th) is preserved; span bounds make an overrun impossible.
++void VgcApplyGLReadback(base::span<uint8_t> buf, bool rgba) {
++  const uint32_t seed = VgcCanvasSeed();
++  if (seed == 0)
++    return;
++  uint64_t idx = 1;
++  for (size_t i = 0; i < buf.size(); ++i) {
++    if (rgba && (i % 4) == 3)
++      continue;  // preserve alpha
++    buf[i] ^= VgcNoiseBit(seed, idx++);
++  }
++}
++
+ enum class WebGLANGLEImplementation {
+   // These values are persisted to logs. Entries should not be renumbered and
+   // numeric values should never be reused.
+@@ -4168,6 +4212,12 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        // VGC Core: native WebGL renderer spoof from --vgc-webgl-renderer.
++        std::string vgc_renderer =
++            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++                "vgc-webgl-renderer");
++        if (!vgc_renderer.empty())
++          return WebGLAny(script_state, String(vgc_renderer.c_str()));
+         return WebGLAny(script_state,
+                         String(ContextGL()->GetString(GL_RENDERER)));
+       }
+@@ -4177,6 +4227,12 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        // VGC Core: native WebGL vendor spoof from --vgc-webgl-vendor.
++        std::string vgc_vendor =
++            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++                "vgc-webgl-vendor");
++        if (!vgc_vendor.empty())
++          return WebGLAny(script_state, String(vgc_vendor.c_str()));
+         return WebGLAny(script_state,
+                         String(ContextGL()->GetString(GL_VENDOR)));
+       }
+@@ -5324,6 +5380,18 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+     }
+     ContextGL()->ReadPixels(x, y, width, height, format, type, data);
+   }
++
++  // VGC Core: farble the readback so a WebGL-rendered image hash is stable per
++  // profile but differs from the real GPU. Only plain 8-bit RGBA/RGB byte reads
++  // (the ones fingerprinters use); float/other formats are left untouched.
++  if (width > 0 && height > 0 && type == GL_UNSIGNED_BYTE &&
++      (format == GL_RGBA || format == GL_RGB)) {
++    base::span<uint8_t> view = pixels->ByteSpanMaybeShared();
++    const size_t start = offset_in_bytes.ValueOrDie();
++    if (start < view.size()) {
++      VgcApplyGLReadback(view.subspan(start), format == GL_RGBA);
++    }
++  }
+ }
+ 
+ void WebGLRenderingContextBase::RenderbufferStorageImpl(
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+index c76f6553e1..a3d69ffa72 100644
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+@@ -32,7 +32,11 @@
+ 
+ #include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
+ 
++#include <limits>
++
++#include "base/command_line.h"
+ #include "base/compiler_specific.h"
++#include "base/containers/span.h"
+ #include "base/memory/ptr_util.h"
+ #include "third_party/blink/renderer/platform/image-encoders/image_encoder_utils.h"
+ #include "third_party/blink/renderer/platform/wtf/text/base64.h"
+@@ -43,6 +47,72 @@
+ 
+ namespace blink {
+ 
++namespace {
++
++// VGC Core: per-profile canvas farbling seeded from --vgc-seed (mirrors the
++// getImageData path in base_rendering_context_2d.cc). Seed 0 ⇒ no-op.
++uint32_t VgcCanvasSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    if (s.empty())
++      return 0u;
++    uint32_t h = 2166136261u;
++    for (char c : s) {
++      h ^= static_cast<uint8_t>(c);
++      h *= 16777619u;
++    }
++    return h == 0u ? 1u : h;
++  }();
++  return seed;
++}
++
++inline uint8_t VgcNoiseBit(uint32_t seed, uint64_t index) {
++  uint32_t x = seed ^ (static_cast<uint32_t>(index) * 0x9E3779B9u);
++  x ^= x >> 16;
++  x *= 0x85EBCA6Bu;
++  x ^= x >> 13;
++  x *= 0xC2B2AE35u;
++  x ^= x >> 16;
++  return static_cast<uint8_t>(x & 1u);
++}
++
++// Fills `storage` with an LSB-farbled copy of `src` and points `out` at it.
++// Returns false (encode the original) when the seed is off or the format isn't
++// 8-bit RGBA/BGRA. Never mutates `src` — its pixels may be a shared snapshot.
++bool VgcFarbleCopy(const SkPixmap& src, Vector<uint8_t>& storage, SkPixmap* out) {
++  const uint32_t seed = VgcCanvasSeed();
++  if (seed == 0)
++    return false;
++  const SkColorType ct = src.colorType();
++  if (ct != kRGBA_8888_SkColorType && ct != kBGRA_8888_SkColorType)
++    return false;
++  base::span<const uint8_t> src_bytes = gfx::SkPixmapToSpan(src);
++  if (src_bytes.empty() ||
++      src_bytes.size() > std::numeric_limits<wtf_size_t>::max())
++    return false;
++  storage.resize(static_cast<wtf_size_t>(src_bytes.size()));
++  base::span<uint8_t> dst = base::span(storage);
++  dst.copy_from(src_bytes);
++  const size_t w = static_cast<size_t>(src.width());
++  const size_t h = static_cast<size_t>(src.height());
++  const size_t row_bytes = src.rowBytes();
++  uint64_t idx = 1;
++  for (size_t y = 0; y < h; ++y) {
++    base::span<uint8_t> row = dst.subspan(y * row_bytes, w * 4);
++    for (size_t x = 0; x < w; ++x) {
++      base::span<uint8_t> px = row.subspan(x * 4, static_cast<size_t>(4));
++      px[0] ^= VgcNoiseBit(seed, idx++);
++      px[1] ^= VgcNoiseBit(seed, idx++);
++      px[2] ^= VgcNoiseBit(seed, idx++);
++    }
++  }
++  *out = SkPixmap(src.info(), storage.data(), row_bytes);
++  return true;
++}
++
++}  // namespace
++
+ ImageDataBuffer::ImageDataBuffer(scoped_refptr<StaticBitmapImage> image) {
+   if (!image)
+     return;
+@@ -130,14 +200,22 @@ base::span<const uint8_t> ImageDataBuffer::PixelData() const {
+ bool ImageDataBuffer::EncodeImage(const ImageEncodingMimeType mime_type,
+                                   const double& quality,
+                                   Vector<unsigned char>* encoded_image) const {
+-  return ImageEncoder::Encode(encoded_image, pixmap_, mime_type, quality);
++  Vector<uint8_t> farble;
++  SkPixmap farbled;
++  const SkPixmap& src = VgcFarbleCopy(pixmap_, farble, &farbled) ? farbled : pixmap_;
++  return ImageEncoder::Encode(encoded_image, src, mime_type, quality);
+ }
+ 
+ String ImageDataBuffer::ToDataURL(const ImageEncodingMimeType mime_type,
+                                   const double& quality) const {
+   DCHECK(is_valid_);
+   Vector<unsigned char> result;
+-  if (!ImageEncoder::Encode(&result, pixmap_, mime_type, quality)) {
++  // VGC Core: encode a per-profile farbled copy so toDataURL()/toBlob() hashes are
++  // stable per profile but differ from the real host (canvas anti-fingerprint).
++  Vector<uint8_t> farble;
++  SkPixmap farbled;
++  const SkPixmap& src = VgcFarbleCopy(pixmap_, farble, &farbled) ? farbled : pixmap_;
++  if (!ImageEncoder::Encode(&result, src, mime_type, quality)) {
+     return "data:,";
+   }
+   return StrCat({"data:", ImageEncoderUtils::MimeTypeName(mime_type),
