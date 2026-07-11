@@ -157,6 +157,10 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     // (the source of truth): if a profile currently routes through this proxy's IP, mark
     // it assigned to that profile; otherwise leave it blank ("trống"). Keeps the pool in
     // sync even when a proxy was set on a profile outside this modal (import, generate…).
+    // Match the FULL proxy (incl. password) — iProyal rotating proxies share the same
+    // host/port/username and differ ONLY by the password (session), so matching without
+    // the password would assign every US-x proxy to the one profile that uses that
+    // gateway. The password uniquely identifies each proxy's exit IP.
     const usedByProfile = (p: SavedProxy): string => {
       const m = profs.find(
         (pr) =>
@@ -164,7 +168,8 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
           pr.proxy.type !== 'none' &&
           (pr.proxy.host || '') === (p.host || '') &&
           Number(pr.proxy.port) === Number(p.port) &&
-          (pr.proxy.username || '') === (p.username || '')
+          (pr.proxy.username || '') === (p.username || '') &&
+          (pr.proxy.password || '') === (p.password || '')
       )
       return m ? m.id : ''
     }
