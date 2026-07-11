@@ -13,7 +13,15 @@
 // via setCloudSession() so we can call the Storage REST API directly from main.
 
 import { app } from 'electron'
-import { promises as fs, existsSync, readdirSync, type Dirent } from 'fs'
+import {
+  promises as fs,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  type Dirent
+} from 'fs'
 import { join, relative, sep } from 'path'
 import AdmZip from 'adm-zip'
 import { getSettings } from './settings'
@@ -97,6 +105,51 @@ function profileDir(id: string): string {
 
 function storagePath(uid: string, id: string): string {
   return `${uid}/${id}.zip`
+}
+
+// ── Freshness marker ─────────────────────────────────────────────────────────
+// Records the cloud object's ETag the last time we successfully synced this profile
+// (upload OR download). Stored OUTSIDE the profile dir so it is never itself zipped/
+// synced. On open we compare the cloud's current ETag against this: if unchanged, the
+// cloud has nothing newer than what we already have — so we must NOT extract it over a
+// possibly-newer local session (e.g. our last close-upload failed or the app was
+// force-quit). ETag is server-side, so it is immune to cross-machine clock skew.
+function syncTagPath(id: string): string {
+  return join(app.getPath('userData'), 'sync-meta', `${id}.tag`)
+}
+function readSyncTag(id: string): string {
+  try {
+    return readFileSync(syncTagPath(id), 'utf-8').trim()
+  } catch {
+    return ''
+  }
+}
+function writeSyncTag(id: string, tag: string): void {
+  try {
+    mkdirSync(join(app.getPath('userData'), 'sync-meta'), { recursive: true })
+    writeFileSync(syncTagPath(id), tag)
+  } catch {
+    // best-effort — worst case we just re-download next time
+  }
+}
+
+/** The cloud object's current ETag, or '' if missing/unknowable. Uses a 1-byte Range
+ *  GET so it works even where HEAD isn't supported, without downloading the whole zip. */
+async function getCloudEtag(objUrl: string, token: string, anon: string): Promise<string> {
+  try {
+    const r = await fetch(objUrl, {
+      headers: { Authorization: `Bearer ${token}`, apikey: anon, Range: 'bytes=0-0' }
+    })
+    try {
+      await r.body?.cancel()
+    } catch {
+      // ignore — we only wanted the headers
+    }
+    if (!r.ok && r.status !== 206) return ''
+    return (r.headers.get('etag') || '').replace(/"/g, '')
+  } catch {
+    return ''
+  }
 }
 
 /** True once Chromium has populated the profile (so we have real session data). */
@@ -226,6 +279,17 @@ export async function uploadProfileData(id: string): Promise<void> {
     }
     throw new Error(`Upload dữ liệu lỗi HTTP ${res.status} (${mb}MB) ${detail}`)
   }
+  // Record the new cloud ETag as our synced version, so the next open recognises this
+  // upload as "already have it" (skips a redundant download) and, crucially, so a later
+  // failed upload leaves the marker on the LAST-GOOD version (freshness guard above).
+  const newTag = (res.headers.get('etag') || '').replace(/"/g, '')
+  if (newTag) {
+    writeSyncTag(id, newTag)
+  } else {
+    const tag = await getCloudEtag(url, session.accessToken, s.supabaseAnonKey)
+    if (tag) writeSyncTag(id, tag)
+  }
+
   // Mark that this profile now has cloud session data.
   const p = await getProfile(id)
   if (p) {
@@ -247,6 +311,15 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   // Read from the owner's folder for shared profiles (see uploadProfileData).
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
+
+  // Freshness guard: only overwrite the local session if the cloud copy actually
+  // CHANGED since our last successful sync. If the ETag matches what we last synced,
+  // the cloud has nothing newer — extracting it would clobber a possibly-NEWER local
+  // session (our last close-upload failed / app force-quit) and destroy new logins +
+  // tabs. Skip and keep local (it re-uploads on the next close).
+  const cloudTag = await getCloudEtag(url, session.accessToken, s.supabaseAnonKey)
+  if (cloudTag && readSyncTag(id) === cloudTag) return false
+
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
   })
@@ -268,7 +341,25 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   const root = profileDir(id)
   await fs.mkdir(root, { recursive: true })
   const zip = new AdmZip(buf)
+  // Make the synced tab/session state AUTHORITATIVE. adm-zip only overwrites same-named
+  // files, so extracting the other machine's Sessions/ would leave THIS machine's older
+  // timestamped Session_<ts> files behind → --restore-last-session might reopen this
+  // machine's stale tabs instead of the ones synced from the other machine. If the
+  // incoming zip carries Sessions, wipe the local Sessions/ + Session Storage first so
+  // extraction fully REPLACES them.
+  const carriesSessions = zip
+    .getEntries()
+    .some((e) => e.entryName.replace(/\\/g, '/').startsWith('Default/Sessions/'))
+  if (carriesSessions) {
+    await fs.rm(join(root, 'Default', 'Sessions'), { recursive: true, force: true }).catch(() => {})
+    await fs
+      .rm(join(root, 'Default', 'Session Storage'), { recursive: true, force: true })
+      .catch(() => {})
+  }
   zip.extractAllTo(root, /* overwrite */ true)
+  // Remember the cloud version we now hold so the next open can tell if cloud changed.
+  const newTag = (res.headers.get('etag') || cloudTag || '').replace(/"/g, '')
+  if (newTag) writeSyncTag(id, newTag)
   return true
 }
 

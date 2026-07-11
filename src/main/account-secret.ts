@@ -14,15 +14,43 @@
 // breaks during rollout.
 
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'crypto'
-import { existsSync, writeFileSync } from 'fs'
+import { existsSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import { getCloudSession } from './session'
 import { getSettings } from './settings'
 
 let cached: { uid: string; secret: string } | null = null
 // True once we've obtained a secret for the signed-in account this session.
 let encryptionActive = false
+
+// PERSISTENT, OS-encrypted copy of the account secret (macOS Keychain / Windows DPAPI
+// via Electron safeStorage). The secret is generated ONCE per account and never rotates,
+// so caching it on disk is safe — and CRITICAL: it means a network blip, an app restart,
+// or a brief sign-out can NEVER make getAccountSecret() return null (→ a DIFFERENT
+// os_crypt key → the profile's Cookies/Login Data become undecryptable = silent logout +
+// lost saved passwords). Once fetched on a machine, the SAME key is always available.
+function secretStorePath(uid: string): string {
+  return join(app.getPath('userData'), `acct-secret-${uid}.bin`)
+}
+function persistSecret(uid: string, secret: string): void {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return
+    writeFileSync(secretStorePath(uid), safeStorage.encryptString(secret))
+  } catch {
+    // best-effort — the in-memory cache still holds it for this session
+  }
+}
+function loadPersistedSecret(uid: string): string | null {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null
+    const p = secretStorePath(uid)
+    if (!existsSync(p)) return null
+    return safeStorage.decryptString(readFileSync(p))
+  } catch {
+    return null
+  }
+}
 
 // A PERSISTENT marker (per account uid) written the first time encryption succeeds.
 // Without it, the guard only covered mid-session uploads: the very FIRST upload of a
@@ -62,6 +90,17 @@ export async function getAccountSecret(): Promise<string | null> {
   if (!session) return null
   if (cached && cached.uid === session.uid) return cached.secret
 
+  // Persisted OS-encrypted copy → same STABLE key across restarts / offline / network
+  // blips. The secret never rotates, so this is authoritative once fetched on this
+  // machine; no need to hit the network again (which is exactly what used to fail and
+  // flip the key to a divergent fallback).
+  const persisted = loadPersistedSecret(session.uid)
+  if (persisted) {
+    cached = { uid: session.uid, secret: persisted }
+    markEncryptionActive(session.uid)
+    return persisted
+  }
+
   const s = await getSettings()
   if (!s.supabaseUrl || !s.supabaseAnonKey) return null
   const base = `${s.supabaseUrl}/rest/v1/account_secrets`
@@ -99,6 +138,7 @@ export async function getAccountSecret(): Promise<string | null> {
     if (res.status === 'ok') {
       cached = { uid: session.uid, secret: res.secret }
       markEncryptionActive(session.uid)
+      persistSecret(session.uid, res.secret)
       return res.secret
     }
     if (res.status === 'nomigration') return null
@@ -115,6 +155,7 @@ export async function getAccountSecret(): Promise<string | null> {
           const finalSecret = after.status === 'ok' ? after.secret : secret
           cached = { uid: session.uid, secret: finalSecret }
           markEncryptionActive(session.uid)
+          persistSecret(session.uid, finalSecret)
           return finalSecret
         }
       } catch {

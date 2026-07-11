@@ -36,7 +36,7 @@ import {
   uploadProfileCookies
 } from './cloud-data'
 import { getCloudSession } from './session'
-import { getAccountSecret } from './account-secret'
+import { getAccountSecret, isEncryptionActive } from './account-secret'
 
 interface RunningProfile {
   proc: ChildProcess
@@ -86,14 +86,24 @@ function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
  * off then anyway, so the engine keeps its normal machine-bound key.
  */
 async function cryptSecretFor(id: string): Promise<string> {
-  // Prefer the random per-account secret (not derivable from public ids).
+  // The random per-account secret (not derivable from public ids) → the ONE stable
+  // portable key. Now persisted OS-encrypted on first fetch, so it survives blips.
   const accSecret = await getAccountSecret()
   if (accSecret) return createHash('sha256').update(`${accSecret}:${id}`).digest('hex')
-  // Fallback before supabase/account-secrets.sql is run: derive from uid. Still
-  // works cross-machine, just derivable; auto-upgrades once the secret exists.
-  const uid = getCloudSession()?.uid ?? ''
-  if (!uid) return ''
-  return createHash('sha256').update(`vgc-os-crypt:${uid}:${id}`).digest('hex')
+  // No account secret available. If this account has EVER encrypted a profile (a
+  // persisted marker proves it), the on-disk Cookies + Login Data are sealed with the
+  // account key. Handing the engine ANY other key — the old uid-derived fallback OR
+  // the engine's machine key — would make them undecryptable: silent logout of every
+  // site and PERMANENT loss of saved passwords. So we REFUSE to open with a wrong key
+  // (the launcher surfaces a "thử lại" message) instead of corrupting the session.
+  // (The previous `sha256('vgc-os-crypt:uid:id')` fallback was exactly this divergent
+  // key and is removed.)
+  if (getCloudSession() && isEncryptionActive()) {
+    throw new Error('VGC_CRYPT_KEY_UNAVAILABLE')
+  }
+  // Genuinely fresh / never-encrypted account (or signed out and never used the
+  // portable key) → let the engine keep its normal machine-bound key.
+  return ''
 }
 
 function profileDataDir(id: string): string {
@@ -177,23 +187,28 @@ async function syncDataOnClose(id: string): Promise<void> {
   try {
     if (isQuitting) return // the app-quit path uploads everything via stopAllAndSync
     if (!getCloudSession()) return
-    // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
-    await new Promise((r) => setTimeout(r, 1200))
-    broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
-    // Per-profile lock: a re-open of this profile won't extract the cloud zip over
-    // the dir while we're still reading it to build the upload zip.
-    await withDataLock(id, () => uploadProfileData(id))
-    // Cross-machine login: upload the decrypted cookies separately (plaintext) so
-    // they survive the trip to a different-OS machine where the encrypted Cookies
-    // DB can't be read.
-    const cookies = lastCookieSnapshot.get(id)
-    if (cookies && cookies.length) {
-      try {
-        await uploadProfileCookies(id, cookies)
-      } catch (e) {
-        console.error('[vgc] upload cookies lỗi:', e)
+    // Hold the per-profile lock for the WHOLE flush+upload, and take it BEFORE the
+    // flush-grace sleep. Otherwise a reopen within ~1.2s takes the lock first,
+    // downloads a stale cloud snapshot over the freshest local dir, and this delayed
+    // upload then zips the just-relaunched (mid-write) profile → corrupt/downgraded
+    // session propagates to every machine. Holding the lock makes a reopen wait.
+    await withDataLock(id, async () => {
+      // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
+      await new Promise((r) => setTimeout(r, 1200))
+      broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
+      await uploadProfileData(id)
+      // Cross-machine login: upload the decrypted cookies separately (plaintext) so
+      // they survive the trip to a different-OS machine where the encrypted Cookies
+      // DB can't be read.
+      const cookies = lastCookieSnapshot.get(id)
+      if (cookies && cookies.length) {
+        try {
+          await uploadProfileCookies(id, cookies)
+        } catch (e) {
+          console.error('[vgc] upload cookies lỗi:', e)
+        }
       }
-    }
+    })
     broadcastData({ id, phase: 'done' })
   } catch (err) {
     broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -410,7 +425,22 @@ export async function launchProfile(
   // Passed via the ENVIRONMENT (VGC_CRYPT_SECRET), NOT argv — argv is readable via
   // `ps` by any other local user, and this secret decrypts the profile's cookies +
   // saved passwords. The engine reads env first, falling back to the old switch.
-  const cryptSecret = await cryptSecretFor(id)
+  let cryptSecret: string
+  try {
+    cryptSecret = await cryptSecretFor(id)
+  } catch (e) {
+    // Encryption key momentarily unavailable (network blip fetching account_secrets on
+    // a machine with no persisted copy yet). Opening now would use a wrong os_crypt key
+    // and log the profile out of everything → abort with a clear, retryable message.
+    const msg =
+      e instanceof Error && e.message === 'VGC_CRYPT_KEY_UNAVAILABLE'
+        ? 'Chưa lấy được khoá mã hoá tài khoản (mạng chập chờn). Hãy kiểm tra mạng và mở lại — KHÔNG mở bằng khoá sai để tránh mất đăng nhập.'
+        : e instanceof Error
+          ? e.message
+          : String(e)
+    broadcast({ id, status: 'error', error: msg })
+    throw new Error(msg)
+  }
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
   if (cryptSecret) childEnv.VGC_CRYPT_SECRET = cryptSecret
 
