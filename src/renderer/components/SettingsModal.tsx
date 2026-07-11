@@ -1,5 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import type { UpdateStatus } from '../../shared/types'
+
+const inp: CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  background: 'var(--panel-2)',
+  border: '1px solid var(--border)',
+  borderRadius: 7,
+  color: 'var(--text)',
+  outline: 'none'
+}
 
 interface Props {
   onClose: () => void
@@ -44,8 +54,27 @@ export function SettingsModal({
 }: Props): JSX.Element {
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  // iProyal proxy provider credentials (used by Proxy → "Tạo proxy qua API").
+  const [ipToken, setIpToken] = useState('')
+  const [ipUser, setIpUser] = useState('')
+  const [ipPass, setIpPass] = useState('')
+  const [ipMsg, setIpMsg] = useState('')
+
+  const saveIproyal = async (): Promise<void> => {
+    await window.vgc.saveProviderCreds({
+      iproyal: { username: ipUser.trim(), password: ipPass.trim(), apiToken: ipToken.trim() }
+    })
+    setIpMsg('✓ Đã lưu tài khoản iProyal.')
+  }
 
   useEffect(() => {
+    void window.vgc.getProviderCreds().then((c) => {
+      if (c.iproyal) {
+        setIpUser(c.iproyal.username || '')
+        setIpPass(c.iproyal.password || '')
+        setIpToken(c.iproyal.apiToken || '')
+      }
+    })
     void window.vgc.getVersion().then(setVersion)
     // The engine always runs in Native (VGC Core) mode — the antidetect-correct
     // config that also keeps Google login working — so the manual toggles were
@@ -111,6 +140,54 @@ export function SettingsModal({
               >
                 ☀ Sáng
               </button>
+            </div>
+          </section>
+
+          <section className="card">
+            <h3>🌐 Nhà cung cấp Proxy — iProyal</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Nhập 1 lần ở đây, sau đó vào <b>Proxy</b> chỉ cần bấm <b>Tạo proxy</b>. Lấy{' '}
+              <b>API token</b> tại{' '}
+              <a
+                href="https://dashboard.iproyal.com/me/settings"
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                Settings → API
+              </a>
+              ; <b>Username/Password</b> ở mục Residential → “Change proxies credentials”.
+            </p>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <input
+                placeholder="API token"
+                value={ipToken}
+                onChange={(e) => setIpToken(e.target.value)}
+                style={inp}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  placeholder="Username"
+                  value={ipUser}
+                  onChange={(e) => setIpUser(e.target.value)}
+                  style={inp}
+                />
+                <input
+                  placeholder="Password"
+                  type="password"
+                  value={ipPass}
+                  onChange={(e) => setIpPass(e.target.value)}
+                  style={inp}
+                />
+              </div>
+              <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
+                <button className="btn primary" onClick={() => void saveIproyal()}>
+                  💾 Lưu tài khoản iProyal
+                </button>
+                {ipMsg && (
+                  <span style={{ color: 'var(--green)', fontSize: 12 }}>{ipMsg}</span>
+                )}
+              </div>
             </div>
           </section>
 

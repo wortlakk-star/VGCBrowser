@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import type { Profile, ProviderCreds, ProxyType, SavedProxy } from '../../shared/types'
+import type { Profile, ProxyType, SavedProxy } from '../../shared/types'
 import { deleteCloudProxy } from '../cloud'
 
 const genId = (): string =>
@@ -139,10 +139,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [importName, setImportName] = useState('')
   const [msg, setMsg] = useState('')
 
-  // iProyal API — credentials + generate options
-  const [ipToken, setIpToken] = useState('')
-  const [ipUser, setIpUser] = useState('')
-  const [ipPass, setIpPass] = useState('')
+  // iProyal API — generate options (credentials live in Settings → Nhà cung cấp Proxy)
   const [genCountry, setGenCountry] = useState('')
   const [genProtocol, setGenProtocol] = useState<'http' | 'socks5'>('http')
   const [genSticky, setGenSticky] = useState(true)
@@ -157,30 +154,18 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   }
   useEffect(() => {
     void refresh()
-    void window.vgc.getProviderCreds().then((c) => {
-      if (c.iproyal) {
-        setIpUser(c.iproyal.username || '')
-        setIpPass(c.iproyal.password || '')
-        setIpToken(c.iproyal.apiToken || '')
-      }
-    })
   }, [])
 
-  const saveIproyal = async (): Promise<ProviderCreds['iproyal']> => {
-    const iproyal = { username: ipUser.trim(), password: ipPass.trim(), apiToken: ipToken.trim() }
-    await window.vgc.saveProviderCreds({ iproyal })
-    return iproyal
-  }
-
   const generate = async (): Promise<void> => {
-    if (!ipToken.trim() || !ipUser.trim() || !ipPass.trim()) {
-      setMsg('Lỗi: nhập đủ API token + username + password iProyal trước khi tạo.')
+    const creds = await window.vgc.getProviderCreds()
+    const ip = creds.iproyal
+    if (!ip?.apiToken || !ip?.username || !ip?.password) {
+      setMsg('Lỗi: chưa có tài khoản iProyal. Vào Cài đặt → Nhà cung cấp Proxy để nhập token + user/pass.')
       return
     }
     setGenerating(true)
     setMsg(`Đang tạo ${genCount} proxy qua API iProyal…`)
     try {
-      await saveIproyal() // persist so the backend has the creds
       const created = await window.vgc.generateProviderProxies({
         count: genCount,
         country: genCountry,
@@ -373,44 +358,10 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
           <section className="card">
             <h3>⚡ Lấy proxy qua API iProyal</h3>
             <p className="hint" style={{ marginTop: 0 }}>
-              Tự động tạo proxy theo yêu cầu từ tài khoản iProyal. Lấy <b>API token</b> tại{' '}
-              <a
-                href="https://dashboard.iproyal.com/me/settings"
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: 'var(--accent)' }}
-              >
-                dashboard.iproyal.com → Settings → API
-              </a>{' '}
-              và <b>username/password</b> gói Residential.
+              Tài khoản iProyal (API token + username/password) nhập ở{' '}
+              <b>Cài đặt → Nhà cung cấp Proxy</b>. Ở đây chỉ cần chọn thông số rồi bấm{' '}
+              <b>Tạo proxy</b>.
             </p>
-            <div className="proxy-check" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input
-                placeholder="API token iProyal"
-                value={ipToken}
-                onChange={(e) => setIpToken(e.target.value)}
-                style={inp(230)}
-              />
-              <input
-                placeholder="Username"
-                value={ipUser}
-                onChange={(e) => setIpUser(e.target.value)}
-                style={inp(150)}
-              />
-              <input
-                placeholder="Password"
-                type="password"
-                value={ipPass}
-                onChange={(e) => setIpPass(e.target.value)}
-                style={inp(150)}
-              />
-              <button
-                className="btn"
-                onClick={() => void saveIproyal().then(() => setMsg('✓ Đã lưu tài khoản iProyal.'))}
-              >
-                💾 Lưu tài khoản
-              </button>
-            </div>
             <div
               className="proxy-check"
               style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}
