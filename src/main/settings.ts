@@ -25,7 +25,7 @@ function defaults(): AppSettings {
     apiToken: makeToken(),
     supabaseUrl: 'https://pwiledrttvbnmytghyip.supabase.co',
     supabaseAnonKey: 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO',
-    engineUrl: 'https://vgcbrowser.com/dl/vgc-core-149.zip',
+    engineUrl: 'https://vgcbrowser.com/dl/vgc-core-151.zip',
     // macOS VGC Core engine (built + packaged by scripts/package-mac-engine.sh,
     // hosted on vgcbrowser.com/dl). Other Macs auto-download it on first launch;
     // the build machine uses its local userData/engine/VGC Core.app regardless.
