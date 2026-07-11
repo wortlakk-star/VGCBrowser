@@ -61,8 +61,18 @@ import {
   getSharedWithMe
 } from './profile-share'
 import { listGroups, createGroup, deleteGroup } from './group-store'
-import { getProviderCreds, saveProviderCreds, buildProviderProxy } from './proxy-providers'
-import type { ProviderCreds, ProxyBuildOpts, ProxyProviderId } from '../shared/types'
+import {
+  getProviderCreds,
+  saveProviderCreds,
+  buildProviderProxy,
+  generateIproyalProxies
+} from './proxy-providers'
+import type {
+  ProviderCreds,
+  ProxyBuildOpts,
+  ProxyProviderId,
+  GenerateProxiesOpts
+} from '../shared/types'
 
 function focusedWindow(): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
@@ -269,6 +279,11 @@ export function registerIpc(): void {
   ipcMain.handle('providers:save', (_e, patch: ProviderCreds) => saveProviderCreds(patch))
   ipcMain.handle('providers:build', (_e, provider: ProxyProviderId, opts: ProxyBuildOpts) =>
     buildProviderProxy(provider, opts)
+  )
+  // Generate proxies on demand via the iProyal API (returns SavedProxy[] — the
+  // renderer adds them to the pool with saveManyProxies).
+  ipcMain.handle('providers:generate', (_e, opts: GenerateProxiesOpts) =>
+    generateIproyalProxies(opts)
   )
 
   ipcMain.handle('dialog:pickFolder', async (): Promise<string | null> => {

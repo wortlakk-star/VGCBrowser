@@ -1,9 +1,49 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import type { Profile, ProxyType, SavedProxy } from '../../shared/types'
 import { deleteCloudProxy } from '../cloud'
 
 const genId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
+
+// Common iProyal residential countries for the generate dropdown (ISO-2 code → tên).
+const IP_COUNTRIES: Array<[string, string]> = [
+  ['', 'Bất kỳ (toàn cầu)'],
+  ['us', 'Hoa Kỳ'],
+  ['gb', 'Anh'],
+  ['ca', 'Canada'],
+  ['au', 'Úc'],
+  ['de', 'Đức'],
+  ['fr', 'Pháp'],
+  ['nl', 'Hà Lan'],
+  ['it', 'Ý'],
+  ['es', 'Tây Ban Nha'],
+  ['vn', 'Việt Nam'],
+  ['sg', 'Singapore'],
+  ['jp', 'Nhật Bản'],
+  ['kr', 'Hàn Quốc'],
+  ['th', 'Thái Lan'],
+  ['my', 'Malaysia'],
+  ['ph', 'Philippines'],
+  ['id', 'Indonesia'],
+  ['in', 'Ấn Độ'],
+  ['hk', 'Hồng Kông'],
+  ['tw', 'Đài Loan'],
+  ['br', 'Brazil']
+]
+
+// iProyal sticky lifetimes in the API-accepted format (s/h — the minutes unit 'm'
+// is rejected). Value → nhãn. '' = bỏ trống (iProyal chọn mặc định). Tối đa 7 ngày.
+const IP_LIFETIMES: Array<[string, string]> = [
+  ['', 'Mặc định (bỏ trống)'],
+  ['600s', '10 phút'],
+  ['1800s', '30 phút'],
+  ['1h', '1 giờ'],
+  ['6h', '6 giờ'],
+  ['12h', '12 giờ'],
+  ['24h', '24 giờ (1 ngày)'],
+  ['72h', '3 ngày'],
+  ['168h', '7 ngày (tối đa)']
+]
 
 function isPort(x?: string): boolean {
   if (!x) return false
@@ -99,6 +139,15 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [importName, setImportName] = useState('')
   const [msg, setMsg] = useState('')
 
+  // iProyal API — generate options (credentials live in Settings → Nhà cung cấp Proxy)
+  const [genCountry, setGenCountry] = useState('')
+  const [genProtocol, setGenProtocol] = useState<'http' | 'socks5'>('http')
+  const [genSticky, setGenSticky] = useState(true)
+  const [genLifetime, setGenLifetime] = useState('24h')
+  const [genCount, setGenCount] = useState(5)
+  const [genLabel, setGenLabel] = useState('')
+  const [generating, setGenerating] = useState(false)
+
   const refresh = async (): Promise<void> => {
     setProxies(await window.vgc.listProxies())
     setProfiles(await window.vgc.listProfiles())
@@ -106,6 +155,34 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   useEffect(() => {
     void refresh()
   }, [])
+
+  const generate = async (): Promise<void> => {
+    const creds = await window.vgc.getProviderCreds()
+    const ip = creds.iproyal
+    if (!ip?.apiToken || !ip?.username || !ip?.password) {
+      setMsg('Lỗi: chưa có tài khoản iProyal. Vào Cài đặt → Nhà cung cấp Proxy để nhập token + user/pass.')
+      return
+    }
+    setGenerating(true)
+    setMsg(`Đang tạo ${genCount} proxy qua API iProyal…`)
+    try {
+      const created = await window.vgc.generateProviderProxies({
+        count: genCount,
+        country: genCountry,
+        protocol: genProtocol,
+        sticky: genSticky,
+        lifetime: genSticky ? genLifetime : undefined,
+        label: genLabel.trim() || undefined
+      })
+      await window.vgc.saveManyProxies(created)
+      setMsg(`✓ Đã tạo ${created.length} proxy iProyal và thêm vào pool.`)
+      await refresh()
+    } catch (e) {
+      setMsg(`Lỗi: ${(e as Error).message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const profileName = (id?: string): string =>
     id ? profiles.find((p) => p.id === id)?.name ?? '(đã xoá)' : ''
@@ -256,6 +333,17 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
 
   const used = proxies.filter((p) => p.assignedTo).length
 
+  const inp = (w: number): CSSProperties => ({
+    width: w,
+    padding: '8px 10px',
+    background: 'var(--panel-2)',
+    border: '1px solid var(--border)',
+    borderRadius: 7,
+    color: 'var(--text)',
+    outline: 'none'
+  })
+  const lbl: CSSProperties = { fontSize: 12, color: 'var(--dim)' }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 1000, maxWidth: '96vw' }}>
@@ -267,6 +355,88 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         </header>
 
         <div className="modal-body">
+          <section className="card">
+            <h3>⚡ Lấy proxy qua API iProyal</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Tài khoản iProyal (API token + username/password) nhập ở{' '}
+              <b>Cài đặt → Nhà cung cấp Proxy</b>. Ở đây chỉ cần chọn thông số rồi bấm{' '}
+              <b>Tạo proxy</b>.
+            </p>
+            <div
+              className="proxy-check"
+              style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}
+            >
+              <span style={lbl}>Quốc gia</span>
+              <select
+                className="group-select"
+                value={genCountry}
+                onChange={(e) => setGenCountry(e.target.value)}
+              >
+                {IP_COUNTRIES.map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <span style={lbl}>Giao thức</span>
+              <select
+                className="group-select"
+                value={genProtocol}
+                onChange={(e) => setGenProtocol(e.target.value as 'http' | 'socks5')}
+              >
+                <option value="http">HTTP</option>
+                <option value="socks5">SOCKS5</option>
+              </select>
+              <span style={lbl}>Phiên</span>
+              <select
+                className="group-select"
+                value={genSticky ? 'sticky' : 'rotating'}
+                onChange={(e) => setGenSticky(e.target.value === 'sticky')}
+              >
+                <option value="sticky">Sticky (giữ IP)</option>
+                <option value="rotating">Xoay (đổi IP)</option>
+              </select>
+              {genSticky && (
+                <>
+                  <span style={lbl}>Giữ IP</span>
+                  <select
+                    className="group-select"
+                    value={genLifetime}
+                    onChange={(e) => setGenLifetime(e.target.value)}
+                  >
+                    {IP_LIFETIMES.map(([val, name]) => (
+                      <option key={val} value={val}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+              <span style={lbl}>Số lượng</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={genCount}
+                onChange={(e) => setGenCount(Number(e.target.value) || 1)}
+                style={inp(70)}
+              />
+              <input
+                placeholder="Tên (tuỳ chọn)"
+                value={genLabel}
+                onChange={(e) => setGenLabel(e.target.value)}
+                style={inp(140)}
+              />
+              <button className="btn primary" disabled={generating} onClick={() => void generate()}>
+                {generating ? 'Đang tạo…' : '⚡ Tạo proxy'}
+              </button>
+            </div>
+            <p className="hint">
+              Proxy tạo ra được thêm thẳng vào pool bên dưới — bấm <b>Kiểm tra</b> để xác nhận sống,
+              rồi <b>Gán cho profile</b>.
+            </p>
+          </section>
+
           <section className="card">
             <h3>Dán / Import proxy</h3>
             <textarea

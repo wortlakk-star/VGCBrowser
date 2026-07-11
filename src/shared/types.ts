@@ -131,7 +131,9 @@ export type ProxyProviderId = 'iproyal' | 'oxylabs' | 'brightdata'
 
 /** Stored account credentials for proxy providers (per cloud account). */
 export interface ProviderCreds {
-  iproyal?: { username: string; password: string }
+  // iProyal: username/password are the residential gateway login; apiToken (from
+  // dashboard.iproyal.com → Settings → API) enables generating proxies via the API.
+  iproyal?: { username: string; password: string; apiToken?: string }
   oxylabs?: { username: string; password: string }
   brightdata?: { customer: string; zone: string; password: string }
 }
@@ -141,6 +143,19 @@ export interface ProxyBuildOpts {
   country?: string // ISO-2, e.g. 'us', 'vn' (empty = any)
   sticky?: boolean // keep the same IP for a session vs rotating
   sessionMinutes?: number // sticky session lifetime
+}
+
+/** Options for generating proxies on demand via the iProyal API. */
+export interface GenerateProxiesOpts {
+  count: number // how many proxies to create (1–100)
+  country?: string // ISO-2, e.g. 'us', 'vn' (empty = any/global)
+  protocol: 'http' | 'socks5' // proxy protocol
+  sticky: boolean // sticky (same IP for a lifetime) vs rotating (new IP each request)
+  // iProyal sticky lifetime, already in the API's accepted format (seconds/hours,
+  // e.g. '1800s', '24h', '168h' = 7 days). Empty ⇒ omit (default sticky). iProyal
+  // rejects the minutes unit ('30m' → failed_validation), so the UI only emits s/h.
+  lifetime?: string
+  label?: string // optional name prefix for the created proxies
 }
 
 /** A reusable proxy saved in the Proxy Manager. */
