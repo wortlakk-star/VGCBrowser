@@ -665,6 +665,7 @@ export default function App(): JSX.Element {
               onRun={run}
               onStop={stop}
               onCheck={check}
+              onCheckProxy={(id) => autoCheckProxies([id])}
               onLoginClean={loginClean}
               onEdit={setEditing}
               onDuplicate={duplicate}

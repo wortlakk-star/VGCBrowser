@@ -13,6 +13,7 @@ interface Props {
   onRun: (id: string) => void
   onStop: (id: string) => void
   onCheck: (id: string) => void
+  onCheckProxy: (id: string) => void | Promise<void>
   onLoginClean?: (id: string) => void
   onEdit: (p: Profile) => void
   onDuplicate: (id: string) => void
@@ -101,6 +102,7 @@ export function ProfileTable({
   onRun,
   onStop,
   onCheck,
+  onCheckProxy,
   onEdit,
   onDuplicate,
   onShare,
@@ -108,6 +110,20 @@ export function ProfileTable({
   onMoveGroup
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [checkingProxy, setCheckingProxy] = useState<Set<string>>(new Set())
+
+  const runProxyCheck = async (id: string): Promise<void> => {
+    setCheckingProxy((s) => new Set(s).add(id))
+    try {
+      await onCheckProxy(id)
+    } finally {
+      setCheckingProxy((s) => {
+        const n = new Set(s)
+        n.delete(id)
+        return n
+      })
+    }
+  }
 
   // Close the ⋯ menu on any outside click.
   useEffect(() => {
@@ -155,7 +171,19 @@ export function ProfileTable({
                   </span>
                 </td>
                 <td className="col-proxy">
-                  <span className="mono">{proxyInfo(p, proxyPool)}</span>
+                  <div className="proxy-cell">
+                    <span className="mono">{proxyInfo(p, proxyPool)}</span>
+                    {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
+                      <button
+                        className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
+                        title="Kiểm tra proxy (IP + vị trí)"
+                        disabled={checkingProxy.has(p.id)}
+                        onClick={() => void runProxyCheck(p.id)}
+                      >
+                        ↻
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="col-act">
                   <div className="row-actions">
@@ -181,6 +209,14 @@ export function ProfileTable({
                       </button>
                       {menuFor === p.id && (
                         <div className="row-menu" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => {
+                              void runProxyCheck(p.id)
+                              setMenuFor(null)
+                            }}
+                          >
+                            🌐 Kiểm tra proxy
+                          </button>
                           <button
                             onClick={() => {
                               onCheck(p.id)
