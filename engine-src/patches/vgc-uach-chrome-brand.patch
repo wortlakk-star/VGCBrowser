@@ -1,0 +1,45 @@
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+index 608bea5cb3..743b8519df 100644
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -502,6 +502,14 @@ blink::UserAgentBrandList GenerateBrandVersionList(
+ 
+   blink::UserAgentBrandList brand_version_list = {std::move(greasey_bv),
+                                                   std::move(chromium_bv)};
++  // VGC: this is an un-branded Chromium build, so `brand` (which would be
++  // "Google Chrome" on an official build) is empty and UA-CH would advertise only
++  // "Chromium". That contradicts the "Chrome/NNN" UA string and is a high-signal tell
++  // anti-bot services (Cloudflare Turnstile) use to reject non-Chrome browsers. Force
++  // the "Google Chrome" brand so UA-CH matches a genuine Chrome.
++  if (!brand) {
++    brand = std::string("Google Chrome");
++  }
+   if (brand) {
+     brand_version_list.emplace_back(brand.value(), version);
+   }
+@@ -643,18 +651,13 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+   metadata.mobile = GetMobileBitForUAMetadata();
+   metadata.platform = GetPlatformForUAMetadata();
+ 
+-  // For users providing a valid user-agent override via the command line:
+-  // If kUACHOverrideBlank is enabled, set user-agent metadata with the
+-  // default blank values, otherwise return the default UserAgentMetadata values
+-  // to populate and send only the low entropy client hints.
+-  // Notes: Sending low entropy hints with empty values may cause requests being
+-  // blocked by web application firewall software, etc.
+-  std::optional<std::string> custom_ua = GetUserAgentFromCommandLine();
+-  if (custom_ua.has_value()) {
+-    return base::FeatureList::IsEnabled(blink::features::kUACHOverrideBlank)
+-               ? blink::UserAgentMetadata()
+-               : metadata;
+-  }
++  // VGC: stock Chromium blanks (or truncates to low-entropy) the UA client hints
++  // whenever a custom --user-agent is set on the command line — which every VGC profile
++  // does. That leaves navigator.userAgentData.getHighEntropyValues() returning an EMPTY
++  // fullVersionList and empty platformVersion/architecture, which real Chrome NEVER does
++  // → an instant anti-bot tell (Cloudflare). We deliberately DO NOT early-return here, so
++  // the full, self-consistent high-entropy hints below are populated even with a custom
++  // UA. (The brand list still gets "Google Chrome" via GenerateBrandVersionList.)
+ 
+   if (only_low_entropy_ch) {
+     return metadata;
