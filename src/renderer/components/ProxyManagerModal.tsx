@@ -5,6 +5,32 @@ import { deleteCloudProxy } from '../cloud'
 const genId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
 
+// Common iProyal residential countries for the generate dropdown (ISO-2 code → tên).
+const IP_COUNTRIES: Array<[string, string]> = [
+  ['', 'Bất kỳ (toàn cầu)'],
+  ['us', 'Hoa Kỳ'],
+  ['gb', 'Anh'],
+  ['ca', 'Canada'],
+  ['au', 'Úc'],
+  ['de', 'Đức'],
+  ['fr', 'Pháp'],
+  ['nl', 'Hà Lan'],
+  ['it', 'Ý'],
+  ['es', 'Tây Ban Nha'],
+  ['vn', 'Việt Nam'],
+  ['sg', 'Singapore'],
+  ['jp', 'Nhật Bản'],
+  ['kr', 'Hàn Quốc'],
+  ['th', 'Thái Lan'],
+  ['my', 'Malaysia'],
+  ['ph', 'Philippines'],
+  ['id', 'Indonesia'],
+  ['in', 'Ấn Độ'],
+  ['hk', 'Hồng Kông'],
+  ['tw', 'Đài Loan'],
+  ['br', 'Brazil']
+]
+
 function isPort(x?: string): boolean {
   if (!x) return false
   const n = Number(x)

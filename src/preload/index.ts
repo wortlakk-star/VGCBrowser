@@ -11,6 +11,7 @@ import type {
   DataSyncState,
   EngineProgress,
   Fingerprint,
+  GenerateProxiesOpts,
   OsType,
   Profile,
   ProfileRuntimeState,
@@ -181,6 +182,8 @@ const api = {
     ipcRenderer.invoke('providers:save', patch),
   buildProviderProxy: (provider: ProxyProviderId, opts: ProxyBuildOpts): Promise<ProxyConfig> =>
     ipcRenderer.invoke('providers:build', provider, opts),
+  generateProviderProxies: (opts: GenerateProxiesOpts): Promise<SavedProxy[]> =>
+    ipcRenderer.invoke('providers:generate', opts),
 
   onDataSync: (cb: (state: DataSyncState) => void): (() => void) => {
     const listener = (_e: unknown, state: DataSyncState): void => cb(state)
