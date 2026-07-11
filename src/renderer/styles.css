@@ -1698,10 +1698,12 @@ code {
   height: 30px;
 }
 .row-menu {
+  /* Positioned via inline style (position: fixed) from ProfileTable so it escapes the
+     table's overflow and flips up for bottom rows. These are fallback values only. */
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  z-index: 50;
+  z-index: 200;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1710,6 +1712,9 @@ code {
   min-width: 214px;
   display: flex;
   flex-direction: column;
+  /* Never taller than the window; scroll internally on very short screens. */
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
 }
 .row-menu button {
   display: block;

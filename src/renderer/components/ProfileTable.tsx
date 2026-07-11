@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import type { Profile, ProfileStatus, SavedProxy } from '../../shared/types'
 
 interface Props {
@@ -110,7 +110,26 @@ export function ProfileTable({
   onMoveGroup
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
   const [checkingProxy, setCheckingProxy] = useState<Set<string>>(new Set())
+
+  // Position the ⋯ menu relative to the button's on-screen rect (position: fixed, so
+  // it escapes the table's overflow) and FLIP IT UP when there isn't enough room below
+  // — otherwise bottom-row menus render off the bottom of the window and can't be used.
+  const openMenu = (id: string, btn: HTMLElement): void => {
+    const rect = btn.getBoundingClientRect()
+    const MENU_W = 230
+    const EST_H = 360 // approx full menu height; used only to decide flip direction
+    const left = Math.max(8, Math.min(rect.right - MENU_W, window.innerWidth - MENU_W - 8))
+    const spaceBelow = window.innerHeight - rect.bottom
+    const flipUp = spaceBelow < EST_H && rect.top > spaceBelow
+    setMenuStyle(
+      flipUp
+        ? { position: 'fixed', left, right: 'auto', top: 'auto', bottom: window.innerHeight - rect.top + 6 }
+        : { position: 'fixed', left, right: 'auto', bottom: 'auto', top: rect.bottom + 6 }
+    )
+    setMenuFor(id)
+  }
 
   const runProxyCheck = async (id: string): Promise<void> => {
     setCheckingProxy((s) => new Set(s).add(id))
@@ -125,12 +144,19 @@ export function ProfileTable({
     }
   }
 
-  // Close the ⋯ menu on any outside click.
+  // Close the ⋯ menu on any outside click, or on scroll/resize (its fixed position is
+  // a snapshot of the button's rect, so it must close when the layout moves under it).
   useEffect(() => {
     if (!menuFor) return
     const close = (): void => setMenuFor(null)
     document.addEventListener('click', close)
-    return () => document.removeEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
   }, [menuFor])
 
   return (
@@ -202,13 +228,18 @@ export function ProfileTable({
                         title="Thêm hành động"
                         onClick={(e) => {
                           e.stopPropagation()
-                          setMenuFor(menuFor === p.id ? null : p.id)
+                          if (menuFor === p.id) setMenuFor(null)
+                          else openMenu(p.id, e.currentTarget)
                         }}
                       >
                         ⋯
                       </button>
                       {menuFor === p.id && (
-                        <div className="row-menu" onClick={(e) => e.stopPropagation()}>
+                        <div
+                          className="row-menu"
+                          style={menuStyle}
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             onClick={() => {
                               void runProxyCheck(p.id)
