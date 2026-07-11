@@ -1,5 +1,5 @@
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index 608bea5cb3..a8d7bb550e 100644
+index 608bea5cb3..890f115afe 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
 @@ -181,10 +181,30 @@ const blink::UserAgentBrandList GetUserAgentBrandList(
@@ -60,7 +60,42 @@ index 608bea5cb3..a8d7bb550e 100644
    if (brand) {
      brand_version_list.emplace_back(brand.value(), version);
    }
-@@ -643,18 +670,13 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+@@ -583,6 +610,16 @@ bool GetMobileBitForUAMetadata() {
+ }
+ 
+ std::string GetPlatformVersion() {
++  // VGC: report the profile's spoofed OS version (--vgc-ua-platform-version) so the
++  // Sec-CH-UA-Platform-Version high-entropy hint matches the claimed OS instead of the
++  // host Mac's version (26.5.2), which contradicts a Windows/Linux UA.
++  {
++    std::string v = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++        "vgc-ua-platform-version");
++    if (!v.empty()) {
++      return v;
++    }
++  }
+ #if BUILDFLAG(IS_ANDROID)
+   if (base::android::device_info::is_desktop() ||
+       base::android::device_info::is_xr()) {
+@@ -603,6 +640,17 @@ std::string GetPlatformVersion() {
+ }
+ 
+ std::string GetPlatformForUAMetadata() {
++  // VGC: report the profile's spoofed OS (--vgc-ua-platform, e.g. "Windows") so the
++  // UA-CH platform (navigator.userAgentData.platform + the Sec-CH-UA-Platform header)
++  // matches the UA STRING's OS. Without this a Windows-UA profile running on this Mac
++  // leaks "macOS" here → a blatant OS mismatch that anti-bot (Cloudflare) flags → loop.
++  {
++    std::string p = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++        "vgc-ua-platform");
++    if (!p.empty()) {
++      return p;
++    }
++  }
+ #if BUILDFLAG(IS_ANDROID)
+   if (base::android::device_info::is_desktop() ||
+       base::android::device_info::is_xr()) {
+@@ -643,18 +691,13 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
    metadata.mobile = GetMobileBitForUAMetadata();
    metadata.platform = GetPlatformForUAMetadata();
  
@@ -86,7 +121,7 @@ index 608bea5cb3..a8d7bb550e 100644
  
    if (only_low_entropy_ch) {
      return metadata;
-@@ -663,7 +685,9 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+@@ -663,7 +706,9 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
    // High entropy client hints.
    metadata.brand_full_version_list =
        GetUserAgentBrandFullVersionListInternal(std::nullopt);
@@ -97,3 +132,34 @@ index 608bea5cb3..a8d7bb550e 100644
    metadata.architecture = GetCpuArchitecture();
    metadata.model = BuildModelInfo();
    metadata.form_factors = GetFormFactorsClientHint(metadata, metadata.mobile);
+@@ -701,6 +746,15 @@ std::string GetUnifiedPlatformForTesting() {
+ // Return the CPU architecture in Windows/Mac/POSIX/Fuchsia and the empty string
+ // on Android or if unknown.
+ std::string GetCpuArchitecture() {
++  // VGC: spoof the UA-CH architecture (--vgc-ua-arch, e.g. "x86") to match the profile's
++  // claimed OS instead of the host Mac's real "arm".
++  {
++    std::string a = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++        "vgc-ua-arch");
++    if (!a.empty()) {
++      return a;
++    }
++  }
+ #if BUILDFLAG(IS_WIN)
+   base::win::OSInfo::WindowsArchitecture windows_architecture =
+       base::win::OSInfo::GetInstance()->GetArchitecture();
+@@ -761,6 +815,14 @@ std::string GetCpuArchitecture() {
+ // Return the CPU bitness in Windows/Mac/POSIX/Fuchsia and the empty string
+ // on Android.
+ std::string GetCpuBitness() {
++  // VGC: spoof the UA-CH bitness (--vgc-ua-bitness, e.g. "64") to match the claimed OS.
++  {
++    std::string b = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++        "vgc-ua-bitness");
++    if (!b.empty()) {
++      return b;
++    }
++  }
+ #if BUILDFLAG(IS_WIN)
+   return (base::win::OSInfo::GetInstance()->GetArchitecture() ==
+           base::win::OSInfo::X86_ARCHITECTURE)

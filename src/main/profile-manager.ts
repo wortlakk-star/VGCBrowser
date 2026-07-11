@@ -406,6 +406,26 @@ export async function launchProfile(
     // hard anti-bot tell that makes Cloudflare's challenge loop. The engine reads this
     // for its UA-CH brand list + fullVersionList + high-entropy full_version.
     `--vgc-ua-full-version=${fp.uaFullVersion || fp.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || ''}`,
+    // UA Client Hints OS spoof: make Sec-CH-UA-Platform / platformVersion / architecture
+    // match the profile's CLAIMED OS (from its UA), not the host machine. A Windows-UA
+    // profile running on this Mac otherwise leaks platform "macOS" + a mac version/arch in
+    // UA-CH — a blatant OS mismatch vs the Windows UA that makes Cloudflare's challenge loop.
+    ...(() => {
+      const plat =
+        fp.platform === 'Win32' || profile.os === 'windows'
+          ? { os: 'Windows', arch: 'x86', ver: fp.uaPlatformVersion || '15.0.0' }
+          : fp.platform === 'MacIntel' || profile.os === 'macos'
+            ? { os: 'macOS', arch: 'x86', ver: fp.uaPlatformVersion || '14.6.0' }
+            : profile.os === 'android'
+              ? { os: 'Android', arch: '', ver: fp.uaPlatformVersion || '14.0.0' }
+              : { os: 'Linux', arch: 'x86', ver: fp.uaPlatformVersion || '' }
+      return [
+        `--vgc-ua-platform=${plat.os}`,
+        `--vgc-ua-platform-version=${plat.ver}`,
+        `--vgc-ua-arch=${plat.arch}`,
+        `--vgc-ua-bitness=64`
+      ]
+    })(),
     // VGC Core native fingerprint switches (stock Chrome ignores unknown flags).
     `--vgc-hardware-concurrency=${fp.hardwareConcurrency}`,
     `--vgc-device-memory=${fp.deviceMemory}`,
