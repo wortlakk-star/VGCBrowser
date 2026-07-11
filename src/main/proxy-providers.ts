@@ -102,16 +102,24 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
   const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
   const cc = (opts.country ?? '').trim().toLowerCase()
 
+  // The dashboard "Proxy password" often already has session modifiers appended
+  // (e.g. "BASE_country-us_state-colorado_session-xxx_lifetime-59s"). The API wants
+  // only the BASE password (it re-adds location/session/lifetime from our params),
+  // so strip anything from the first '_' on. iProyal base passwords have no '_'.
+  const basePassword = c.password.split('_')[0]
+
   const body: Record<string, unknown> = {
     format: '{hostname}:{port}:{username}:{password}',
     hostname: 'geo.iproyal.com',
     port: opts.protocol === 'socks5' ? 'socks5' : 'http|https',
     rotation: opts.sticky ? 'sticky' : 'random',
-    location: cc ? `_country-${cc}` : '',
     proxy_count: count,
-    username: c.username,
-    password: c.password
+    username: c.username.trim(),
+    password: basePassword
   }
+  // Country: only send `location` when a country is chosen. iProyal rejects an empty
+  // location ("The location must be a string"); omitting it = any/global.
+  if (cc) body.location = `_country-${cc}`
   // Sticky lifetime is already in iProyal's accepted format (s/h). Only send it when
   // provided; an empty value means "default sticky" (iProyal picks the duration).
   const lifetime = (opts.lifetime ?? '').trim()
