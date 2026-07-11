@@ -1,52 +1,57 @@
 :root {
-  /* ── VGC Browser — DARK theme (higher-contrast teal) ── */
-  --bg: #0c1613;
-  --bg-2: #11211c;
-  --panel: #16271f;
-  --panel-2: #1f342b;
-  --sidebar: #0e1a16;
-  --border: #2e4a3e;
-  --border-soft: #23392f;
-  --text: #f2f8f5;
-  --dim: #a6bcb3;
-  --accent: #1fceb9;
-  --accent-hover: #34e2cd;
-  --accent-grad: linear-gradient(135deg, #25d4bf 0%, #0fa18d 100%);
-  --accent-soft: rgba(31, 206, 185, 0.16);
-  --green: #34c878;
+  /* ── VGC Browser — DARK theme (premium near-black + teal) ── */
+  --bg: #08090b;
+  --bg-2: #0d0e11;
+  --panel: #141519;
+  --panel-2: #1c1e24;
+  --sidebar: #0a0b0d;
+  --border: #26282f;
+  --border-soft: #1a1c21;
+  --text: #f4f5f7;
+  --dim: #8b8e98;
+  --accent: #22d3bb;
+  --accent-hover: #3fe6d0;
+  --accent-grad: linear-gradient(135deg, #2ee0c8 0%, #12a894 100%);
+  --accent-soft: rgba(34, 211, 187, 0.14);
+  --green: #34d399;
   --red: #ff5a5f;
-  --amber: #f7d24e;
-  --hover: #1d3229;
+  --amber: #fbbf24;
+  --hover: #17181d;
+  /* ambient accent glow behind the app (very subtle on black) */
+  --glow-1: rgba(34, 211, 187, 0.07);
+  --glow-2: rgba(18, 168, 148, 0.05);
   /* design tokens */
   --radius: 10px;
   --radius-lg: 18px;
-  --ring: 0 0 0 3px rgba(31, 206, 185, 0.32);
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.58);
+  --ring: 0 0 0 3px rgba(34, 211, 187, 0.30);
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.72);
 }
 
-/* ── LIGHT theme (clean, high-contrast) ── */
+/* ── LIGHT theme (clean, professional) ── */
 :root[data-theme='light'] {
-  --bg: #eef2f1;
-  --bg-2: #f4f7f6;
+  --bg: #f4f5f7;
+  --bg-2: #fafbfc;
   --panel: #ffffff;
-  --panel-2: #f1f6f4;
-  --sidebar: #e4ece9;
-  --border: #bcccc5;
-  --border-soft: #d3e0db;
-  --text: #0d1a16;
-  --dim: #495a54;
+  --panel-2: #f1f3f5;
+  --sidebar: #ffffff;
+  --border: #e3e5ea;
+  --border-soft: #edeef1;
+  --text: #14161a;
+  --dim: #5c626c;
   --accent: #0f9e8d;
   --accent-hover: #0c8576;
   --accent-grad: linear-gradient(135deg, #14b3a0 0%, #0b8576 100%);
-  --accent-soft: rgba(15, 158, 141, 0.12);
-  --green: #1f9d57;
-  --red: #d83a40;
+  --accent-soft: rgba(15, 158, 141, 0.10);
+  --green: #10a86f;
+  --red: #e5484d;
   --amber: #b9821a;
-  --hover: #dde9e4;
-  --ring: 0 0 0 3px rgba(15, 158, 141, 0.22);
-  --shadow: 0 8px 24px rgba(18, 60, 54, 0.12);
-  --shadow-lg: 0 24px 60px rgba(18, 60, 54, 0.18);
+  --hover: #eef0f3;
+  --glow-1: rgba(15, 158, 141, 0.05);
+  --glow-2: rgba(20, 179, 160, 0.04);
+  --ring: 0 0 0 3px rgba(15, 158, 141, 0.20);
+  --shadow: 0 6px 24px rgba(20, 22, 26, 0.10);
+  --shadow-lg: 0 24px 60px rgba(20, 22, 26, 0.16);
 }
 
 * {
@@ -62,13 +67,15 @@ body,
 
 body {
   background:
-    radial-gradient(1200px 560px at 84% -14%, rgba(24, 192, 173, 0.16), transparent 60%),
-    radial-gradient(1000px 520px at -6% 112%, rgba(14, 143, 126, 0.12), transparent 60%),
-    linear-gradient(180deg, var(--bg-2), var(--bg) 60%);
+    radial-gradient(1000px 520px at 90% -12%, var(--glow-1), transparent 58%),
+    radial-gradient(820px 520px at -6% 112%, var(--glow-2), transparent 58%),
+    linear-gradient(180deg, var(--bg-2), var(--bg) 55%);
   background-attachment: fixed;
   color: var(--text);
-  font-family: -apple-system, 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-family:
+    -apple-system, 'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
   font-size: 14px;
+  letter-spacing: 0.1px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -1738,4 +1745,80 @@ code {
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 4px 6px;
+}
+
+/* ═══ Premium polish (đen xịn, cả sáng & tối) ═══════════════════════════════ */
+
+/* Sidebar: subtle accent glow at the top + hairline border */
+.sidebar {
+  background:
+    radial-gradient(560px 260px at 24% -4%, var(--accent-soft), transparent 62%),
+    var(--sidebar);
+  border-right: 1px solid var(--border-soft);
+}
+
+/* Primary action + avatar get a soft accent glow */
+.add-profile {
+  box-shadow:
+    0 8px 24px rgba(34, 211, 187, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+.acct-av {
+  box-shadow: 0 4px 14px rgba(34, 211, 187, 0.28);
+}
+
+/* Buttons + rows: smooth micro-transitions */
+.ptable tbody tr,
+.run-btn,
+.nav-row,
+.btn,
+.add-profile {
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.06s ease;
+}
+
+/* Cards/panels: crisp hairline + soft depth */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+}
+
+/* Glassy, blurred modal backdrop + elevated dialog */
+.modal-backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+.modal {
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border);
+}
+
+/* Search + inputs: subtle inner depth */
+.searchbox {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+:root[data-theme='light'] .searchbox {
+  box-shadow: inset 0 1px 2px rgba(20, 22, 26, 0.05);
+}
+
+/* Table header: solid so sticky scroll stays clean on pure black */
+.ptable thead th {
+  background: var(--bg);
+  backdrop-filter: blur(6px);
+}
+
+/* Refined scrollbar for the dark theme */
+::-webkit-scrollbar-thumb {
+  background: #26282f;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #33363f;
+}
+:root[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: #d3d6dc;
 }
