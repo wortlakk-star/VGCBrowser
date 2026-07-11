@@ -162,3 +162,28 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
   if (!out.length) throw new Error('Không phân tích được proxy iProyal trả về.')
   return out
 }
+
+/**
+ * Remaining residential traffic (GB) left on the iProyal account, via the API token.
+ * iProyal residential proxies are billed by traffic, so this is the "GB còn lại".
+ * Docs: GET https://resi-api.iproyal.com/v1/me → { available_traffic: <GB>, subusers_count }.
+ */
+export async function iproyalBalance(): Promise<{ availableGb: number; subusers: number }> {
+  const creds = await getProviderCreds()
+  const c = creds.iproyal
+  if (!c?.apiToken) {
+    throw new Error('Chưa nhập API token iProyal (Cài đặt → Nhà cung cấp Proxy).')
+  }
+  const res = await fetch('https://resi-api.iproyal.com/v1/me', {
+    headers: { Authorization: `Bearer ${c.apiToken}` }
+  })
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(`iProyal API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
+  }
+  const data = (await res.json()) as { available_traffic?: number; subusers_count?: number }
+  return {
+    availableGb: typeof data.available_traffic === 'number' ? data.available_traffic : 0,
+    subusers: typeof data.subusers_count === 'number' ? data.subusers_count : 0
+  }
+}

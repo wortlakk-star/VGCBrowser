@@ -147,6 +147,22 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [genCount, setGenCount] = useState(5)
   const [genLabel, setGenLabel] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [balance, setBalance] = useState<{ availableGb: number; subusers: number } | null>(null)
+  const [loadingBal, setLoadingBal] = useState(false)
+
+  // Remaining iProyal residential traffic (GB) — proxies are billed by traffic.
+  const checkBalance = async (): Promise<void> => {
+    setLoadingBal(true)
+    try {
+      const b = await window.vgc.getProviderBalance()
+      setBalance(b)
+      setMsg(`✓ iProyal còn ${b.availableGb.toFixed(2)} GB traffic.`)
+    } catch (e) {
+      setMsg(`Lỗi xem GB: ${(e as Error).message}`)
+    } finally {
+      setLoadingBal(false)
+    }
+  }
 
   const refresh = async (): Promise<void> => {
     const [px, profs] = await Promise.all([
@@ -391,8 +407,18 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
 
         <div className="modal-body">
           <section className="card">
-            <h3>⚡ Lấy proxy qua API iProyal</h3>
-            <p className="hint" style={{ marginTop: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0 }}>⚡ Lấy proxy qua API iProyal</h3>
+              <button className="btn" onClick={() => void checkBalance()} disabled={loadingBal}>
+                {loadingBal ? '⏳ Đang kiểm tra…' : '📊 Xem GB còn lại'}
+              </button>
+              {balance && (
+                <span style={{ color: 'var(--green)', fontWeight: 600 }}>
+                  Còn <b>{balance.availableGb.toFixed(2)} GB</b> · {balance.subusers} sub-user
+                </span>
+              )}
+            </div>
+            <p className="hint" style={{ marginTop: 8 }}>
               Tài khoản iProyal (API token + username/password) nhập ở{' '}
               <b>Cài đặt → Nhà cung cấp Proxy</b>. Ở đây chỉ cần chọn thông số rồi bấm{' '}
               <b>Tạo proxy</b>.

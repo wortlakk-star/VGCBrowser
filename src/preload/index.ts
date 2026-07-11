@@ -184,6 +184,8 @@ const api = {
     ipcRenderer.invoke('providers:build', provider, opts),
   generateProviderProxies: (opts: GenerateProxiesOpts): Promise<SavedProxy[]> =>
     ipcRenderer.invoke('providers:generate', opts),
+  getProviderBalance: (): Promise<{ availableGb: number; subusers: number }> =>
+    ipcRenderer.invoke('providers:balance'),
 
   onDataSync: (cb: (state: DataSyncState) => void): (() => void) => {
     const listener = (_e: unknown, state: DataSyncState): void => cb(state)

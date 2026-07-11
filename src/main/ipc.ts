@@ -65,7 +65,8 @@ import {
   getProviderCreds,
   saveProviderCreds,
   buildProviderProxy,
-  generateIproyalProxies
+  generateIproyalProxies,
+  iproyalBalance
 } from './proxy-providers'
 import type {
   ProviderCreds,
@@ -285,6 +286,8 @@ export function registerIpc(): void {
   ipcMain.handle('providers:generate', (_e, opts: GenerateProxiesOpts) =>
     generateIproyalProxies(opts)
   )
+  // Remaining residential traffic (GB) on the iProyal account.
+  ipcMain.handle('providers:balance', () => iproyalBalance())
 
   ipcMain.handle('dialog:pickFolder', async (): Promise<string | null> => {
     const win = focusedWindow()
