@@ -177,9 +177,15 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     // host/port/username and differ ONLY by the password (session), so matching without
     // the password would assign every US-x proxy to the one profile that uses that
     // gateway. The password uniquely identifies each proxy's exit IP.
+    // A profile uses exactly ONE proxy, so a profile may be claimed by at most one pool
+    // entry — otherwise N fully-identical proxies (rotating, or a double import) would all
+    // show "đang dùng cho" the same profile and the used/free counts would be wrong. Claim
+    // each profile once, in pool order.
+    const claimed = new Set<string>()
     const usedByProfile = (p: SavedProxy): string => {
       const m = profs.find(
         (pr) =>
+          !claimed.has(pr.id) &&
           pr.proxy &&
           pr.proxy.type !== 'none' &&
           (pr.proxy.host || '') === (p.host || '') &&
@@ -187,13 +193,19 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
           (pr.proxy.username || '') === (p.username || '') &&
           (pr.proxy.password || '') === (p.password || '')
       )
-      return m ? m.id : ''
+      if (m) {
+        claimed.add(m.id)
+        return m.id
+      }
+      return ''
     }
     const changed: SavedProxy[] = []
     const synced = px.map((p) => {
       const to = usedByProfile(p)
       if ((p.assignedTo || '') !== to) {
-        const np = { ...p, assignedTo: to }
+        // Stamp updatedAt so this local assignment-sync WINS over a stale cloud copy in
+        // saveManyProxies' newer-wins merge (else a concurrent cloud pull could drop it).
+        const np = { ...p, assignedTo: to, updatedAt: new Date().toISOString() }
         changed.push(np)
         return np
       }
@@ -303,23 +315,32 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   }
 
   const assign = async (proxy: SavedProxy, profileId: string): Promise<void> => {
-    // If this proxy was on a different profile, clear that profile's proxy first.
-    if (proxy.assignedTo && proxy.assignedTo !== profileId) {
-      await window.vgc.updateProfile(proxy.assignedTo, { proxy: { type: 'none' } })
-    }
-    if (profileId) {
-      await window.vgc.updateProfile(profileId, {
-        proxy: { type: proxy.type, host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password }
-      })
-      // ensure 1 proxy ↔ 1 profile: clear other proxies pointing at this profile
-      for (const x of proxies) {
-        if (x.id !== proxy.id && x.assignedTo === profileId) {
-          await window.vgc.saveProxy({ ...x, assignedTo: '' })
+    try {
+      // If this proxy was on a different profile, clear that profile's proxy first.
+      // That profile may have been DELETED while the modal was open (stale state) →
+      // updateProfile would throw "không tìm thấy profile"; ignore it so we don't abort
+      // mid-assign and leave the pool desynced.
+      if (proxy.assignedTo && proxy.assignedTo !== profileId) {
+        await window.vgc
+          .updateProfile(proxy.assignedTo, { proxy: { type: 'none' } })
+          .catch(() => {})
+      }
+      if (profileId) {
+        await window.vgc.updateProfile(profileId, {
+          proxy: { type: proxy.type, host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password }
+        })
+        // ensure 1 proxy ↔ 1 profile: clear other proxies pointing at this profile
+        for (const x of proxies) {
+          if (x.id !== proxy.id && x.assignedTo === profileId) {
+            await window.vgc.saveProxy({ ...x, assignedTo: '' })
+          }
         }
       }
+      await window.vgc.saveProxy({ ...proxy, assignedTo: profileId || '' })
+      setMsg(profileId ? `✓ Đã gán "${proxy.label}" cho "${profileName(profileId)}"` : 'Đã bỏ gán.')
+    } catch (e) {
+      setMsg(`Lỗi gán proxy: ${(e as Error).message}`)
     }
-    await window.vgc.saveProxy({ ...proxy, assignedTo: profileId || '' })
-    setMsg(profileId ? `✓ Đã gán "${proxy.label}" cho "${profileName(profileId)}"` : 'Đã bỏ gán.')
     await refresh()
   }
 
@@ -355,7 +376,10 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const dedupe = async (): Promise<void> => {
     const seen = new Set<string>()
     for (const p of proxies) {
-      const key = `${p.type}://${p.host}:${p.port}:${p.username ?? ''}`
+      // Include the password: iProyal rotating/sticky proxies share host/port/username
+      // and differ ONLY by the password (session = exit IP), so omitting it would delete
+      // valid distinct-IP proxies as "duplicates".
+      const key = `${p.type}://${p.host}:${p.port}:${p.username ?? ''}:${p.password ?? ''}`
       if (seen.has(key)) await delOne(p.id)
       else seen.add(key)
     }

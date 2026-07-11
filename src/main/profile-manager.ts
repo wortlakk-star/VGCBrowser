@@ -411,19 +411,24 @@ export async function launchProfile(
     // profile running on this Mac otherwise leaks platform "macOS" + a mac version/arch in
     // UA-CH — a blatant OS mismatch vs the Windows UA that makes Cloudflare's challenge loop.
     ...(() => {
+      // Apple-Silicon Macs report Sec-CH-UA-Arch "arm" (while the UA still says "Intel
+      // Mac OS X" — frozen). A mac profile whose WebGL renderer is an Apple GPU must
+      // therefore say arm, not x86, or the arch contradicts the GPU. Android reports an
+      // empty arch + bitness and the mobile bit; desktop is 64-bit.
+      const macArm = /apple/i.test(fp.webgl?.renderer || '')
       const plat =
         fp.platform === 'Win32' || profile.os === 'windows'
-          ? { os: 'Windows', arch: 'x86', ver: fp.uaPlatformVersion || '15.0.0' }
+          ? { os: 'Windows', arch: 'x86', bitness: '64', ver: fp.uaPlatformVersion || '15.0.0' }
           : fp.platform === 'MacIntel' || profile.os === 'macos'
-            ? { os: 'macOS', arch: 'x86', ver: fp.uaPlatformVersion || '14.6.0' }
+            ? { os: 'macOS', arch: macArm ? 'arm' : 'x86', bitness: '64', ver: fp.uaPlatformVersion || '14.6.0' }
             : profile.os === 'android'
-              ? { os: 'Android', arch: '', ver: fp.uaPlatformVersion || '14.0.0' }
-              : { os: 'Linux', arch: 'x86', ver: fp.uaPlatformVersion || '' }
+              ? { os: 'Android', arch: '', bitness: '', ver: fp.uaPlatformVersion || '14.0.0' }
+              : { os: 'Linux', arch: 'x86', bitness: '64', ver: fp.uaPlatformVersion || '' }
       return [
         `--vgc-ua-platform=${plat.os}`,
         `--vgc-ua-platform-version=${plat.ver}`,
         `--vgc-ua-arch=${plat.arch}`,
-        `--vgc-ua-bitness=64`
+        `--vgc-ua-bitness=${plat.bitness}`
       ]
     })(),
     // VGC Core native fingerprint switches (stock Chrome ignores unknown flags).
