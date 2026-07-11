@@ -29,32 +29,33 @@
   --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.65);
 }
 
-/* ── LIGHT theme (soft gray-white — easy on the eyes, not glaring) ── */
+/* ── LIGHT theme (airy blue-tinted — crisp white panels floating on a soft
+   gradient, layered shadows for depth; not the old flat glaring white) ── */
 :root[data-theme='light'] {
-  --bg: #e9ebf0;
-  --bg-2: #e2e5eb;
-  --panel: #fbfcfd;
-  --panel-2: #eef0f4;
-  --sidebar: #eef0f4;
-  --border: #d3d8df;
-  --border-soft: #e0e3e9;
-  --text: #1d2128;
-  --dim: #596170;
-  --accent: #0a66c2;
-  --accent-hover: #084d94;
-  --accent-grad: linear-gradient(135deg, #2b7de9 0%, #0a66c2 100%);
-  --accent-soft: rgba(10, 102, 194, 0.10);
-  --accent-glow: rgba(10, 102, 194, 0.20);
+  --bg: #e7ecf4;
+  --bg-2: #dde5f0;
+  --panel: #ffffff;
+  --panel-2: #f1f4f9;
+  --sidebar: #ffffff;
+  --border: #e0e6ef;
+  --border-soft: #eef1f7;
+  --text: #17202e;
+  --dim: #647082;
+  --accent: #2563eb;
+  --accent-hover: #1b4ed8;
+  --accent-grad: linear-gradient(135deg, #4f8cf7 0%, #2563eb 100%);
+  --accent-soft: rgba(37, 99, 235, 0.09);
+  --accent-glow: rgba(37, 99, 235, 0.2);
   --on-accent: #ffffff;
-  --green: #157f3b;
-  --red: #c93838;
-  --amber: #9a6a00;
-  --hover: #e3e6ec;
-  --glow-1: rgba(10, 102, 194, 0.035);
-  --glow-2: rgba(10, 102, 194, 0.025);
-  --ring: 0 0 0 3px rgba(10, 102, 194, 0.18);
-  --shadow: 0 6px 24px rgba(30, 40, 60, 0.09);
-  --shadow-lg: 0 24px 60px rgba(30, 40, 60, 0.15);
+  --green: #12934a;
+  --red: #dc2626;
+  --amber: #b45309;
+  --hover: #eef4fd;
+  --glow-1: rgba(37, 99, 235, 0.08);
+  --glow-2: rgba(56, 189, 248, 0.07);
+  --ring: 0 0 0 3px rgba(37, 99, 235, 0.2);
+  --shadow: 0 4px 18px rgba(23, 32, 46, 0.08), 0 1px 3px rgba(23, 32, 46, 0.05);
+  --shadow-lg: 0 24px 60px rgba(23, 32, 46, 0.16);
 }
 
 * {
@@ -1903,9 +1904,10 @@ code {
 /* ═══ Tidy table: aligned columns + clean row dividers (card look) ═══════════ */
 .ptable-wrap {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
   background: var(--panel);
+  box-shadow: var(--shadow);
 }
 .ptable {
   table-layout: fixed;
