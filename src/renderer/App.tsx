@@ -45,6 +45,28 @@ export default function App(): JSX.Element {
   const [theme, setTheme] = useState<Theme>(getTheme())
   const [engineProg, setEngineProg] = useState<EngineProgress | null>(null)
   const [dataSync, setDataSync] = useState<DataSyncState | null>(null)
+  const [tzSyncing, setTzSyncing] = useState(false)
+
+  const syncTimezones = useCallback(async (): Promise<void> => {
+    setTzSyncing(true)
+    setDataSync({ id: 'tz', phase: 'download', message: '🕐 Đang khớp múi giờ theo proxy…' })
+    try {
+      const r = await window.vgc.syncTimezones()
+      setDataSync({
+        id: 'tz',
+        phase: 'done',
+        message:
+          `✓ Đã khớp múi giờ theo proxy: ${r.synced}/${r.total} profile` +
+          (r.failed ? ` (${r.failed} proxy không tra được — thử lại sau)` : '')
+      })
+      setTimeout(() => setDataSync(null), 5000)
+    } catch (e) {
+      setDataSync({ id: 'tz', phase: 'error', message: `Lỗi đồng bộ múi giờ: ${(e as Error).message}` })
+      setTimeout(() => setDataSync(null), 5000)
+    } finally {
+      setTzSyncing(false)
+    }
+  }, [])
   const [updateReady, setUpdateReady] = useState<UpdateStatus | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
   const [refreshing, setRefreshing] = useState(false)

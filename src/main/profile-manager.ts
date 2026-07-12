@@ -24,7 +24,7 @@ import { ensureEngine, type EngineProgress } from './engine-download'
 import { resolveSystemBrowser } from './engine'
 import { checkProxy } from './proxy-check'
 import { localeForCountry } from '../shared/fingerprint'
-import { getProfile, patchProfile } from './store'
+import { getProfile, patchProfile, listProfiles } from './store'
 import { getSettings } from './settings'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
@@ -242,6 +242,59 @@ export async function stopAllAndSync(): Promise<void> {
 }
 
 /**
+ * Batch: for every profile that has a proxy, look up the proxy's exit-IP timezone,
+ * geolocation and locale and PERSIST them onto the profile's fingerprint — so each
+ * profile's clock/location matches the country its proxy exits from (a Vietnam clock
+ * behind a US proxy is a classic anti-bot tell). Runs the proxy checks with limited
+ * concurrency. Returns how many were aligned.
+ */
+export async function syncTimezonesToProxies(): Promise<{
+  synced: number
+  total: number
+  failed: number
+}> {
+  const profiles = await listProfiles()
+  const targets = profiles.filter(
+    (p) => p.proxy && p.proxy.type !== 'none' && p.proxy.host && p.proxy.port
+  )
+  let synced = 0
+  let failed = 0
+  let i = 0
+  const worker = async (): Promise<void> => {
+    while (i < targets.length) {
+      const p = targets[i++]
+      try {
+        const geo = await Promise.race([
+          checkProxy(p.proxy),
+          new Promise<null>((r) => setTimeout(() => r(null), 8000))
+        ])
+        if (geo && geo.ok && geo.timezone) {
+          const loc = localeForCountry(geo.countryCode)
+          const fpNext: Fingerprint = {
+            ...p.fingerprint,
+            timezone: geo.timezone,
+            geolocation:
+              typeof geo.latitude === 'number' && typeof geo.longitude === 'number'
+                ? { latitude: geo.latitude, longitude: geo.longitude, accuracy: 100 }
+                : p.fingerprint.geolocation,
+            language: loc ? loc.language : p.fingerprint.language,
+            languages: loc ? loc.languages : p.fingerprint.languages
+          }
+          await patchProfile(p.id, { fingerprint: fpNext })
+          synced++
+        } else {
+          failed++
+        }
+      } catch {
+        failed++
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(5, targets.length) }, () => worker()))
+  return { synced, total: targets.length, failed }
+}
+
+/**
  * Spawn the engine and resolve only once it has actually started (the child's
  * 'spawn' event). Rejects on failure — INCLUDING async failures: on Windows a
  * CreateProcess error like `spawn UNKNOWN` (engine blocked by antivirus / locked /
@@ -378,6 +431,24 @@ export async function launchProfile(
           next.languages = loc.languages
         }
         fp = next
+        // PERSIST the proxy-aligned timezone/geo/locale (NOT the rotating IP) so the
+        // profile's stored fingerprint matches its proxy — stable across launches and
+        // correct even when a later live lookup times out (which would otherwise leave a
+        // random stored timezone contradicting the proxy). Only write when it changed.
+        if (
+          next.timezone !== profile.fingerprint.timezone ||
+          next.language !== profile.fingerprint.language ||
+          JSON.stringify(next.geolocation) !== JSON.stringify(profile.fingerprint.geolocation)
+        ) {
+          const persisted: Fingerprint = {
+            ...profile.fingerprint,
+            timezone: next.timezone,
+            geolocation: next.geolocation,
+            language: next.language,
+            languages: next.languages
+          }
+          await patchProfile(id, { fingerprint: persisted }).catch(() => {})
+        }
       }
       broadcastData({ id, phase: 'done' })
     } catch {

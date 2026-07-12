@@ -54,6 +54,9 @@ const api = {
   removeProfiles: (ids: string[]): Promise<void> =>
     ipcRenderer.invoke('profiles:removeMany', ids),
 
+  syncTimezones: (): Promise<{ synced: number; total: number; failed: number }> =>
+    ipcRenderer.invoke('profiles:syncTimezones'),
+
   launchProfile: (id: string): Promise<ProfileRuntimeState> =>
     ipcRenderer.invoke('profiles:launch', id),
 

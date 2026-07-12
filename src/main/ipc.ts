@@ -36,7 +36,8 @@ import {
   allRuntimeStates,
   checkFingerprint,
   getProfileCookies,
-  cookieRobot
+  cookieRobot,
+  syncTimezonesToProxies
 } from './profile-manager'
 import {
   listProxies,
@@ -193,6 +194,9 @@ export function registerIpc(): void {
   ipcMain.handle('profiles:bulkUpsert', (_e, profiles: Profile[]) => saveMany(profiles))
 
   ipcMain.handle('profiles:removeMany', (_e, ids: string[]) => removeMany(ids))
+
+  // Align every profile's timezone/geo/locale to its proxy's exit IP (persisted).
+  ipcMain.handle('profiles:syncTimezones', () => syncTimezonesToProxies())
 
   ipcMain.handle('profiles:launch', (_e, id: string) => launchProfile(id))
 
