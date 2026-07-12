@@ -223,13 +223,14 @@ const EVOMI_API = 'https://api.evomi.com'
 const EVOMI_HOST: Record<string, string> = {
   rp: 'rp.evomi.com',
   rpc: 'rp.evomi.com',
-  dcp: 'dcp.evomi.com',
   mp: 'mp.evomi.com'
 }
 const EVOMI_PORTS: Record<string, { http: number; socks5: number }> = {
+  // Residential ports are doc-confirmed (rp.evomi.com HTTP 1000 / SOCKS5 1002). The
+  // generate endpoint returns the HTTP port even for a socks5 request, so we pin the
+  // right port here by product+protocol rather than trusting the returned port.
   rp: { http: 1000, socks5: 1002 },
   rpc: { http: 1000, socks5: 1002 },
-  dcp: { http: 2000, socks5: 2002 },
   mp: { http: 3000, socks5: 3002 }
 }
 
@@ -309,6 +310,9 @@ export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<S
     if (mins) qs.set('lifetime', String(mins))
   }
 
+  // Evomi's generate endpoint documents auth via the `apikey` query param; the sibling
+  // endpoints also accept the `x-apikey` header. Send BOTH so auth works either way.
+  qs.set('apikey', c.apiKey.trim())
   const res = await fetch(`${EVOMI_API}/public/generate?${qs.toString()}`, {
     headers: { 'x-apikey': c.apiKey.trim() }
   })
@@ -382,5 +386,7 @@ export async function evomiBalance(product?: string): Promise<{ availableGb: num
           (sum, p) => sum + (typeof p.balance_mb === 'number' ? p.balance_mb : 0),
           0
         )
-  return { availableGb: mb / 1024, subusers: 0 }
+  // Evomi reports GB in DECIMAL (SI) units to match its dashboard: GB = MB / 1000
+  // (their bandwidth API proves it: 43971237.38 MB = 43971.24 GB). NOT MB / 1024.
+  return { availableGb: mb / 1000, subusers: 0 }
 }

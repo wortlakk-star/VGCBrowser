@@ -8,12 +8,13 @@ const PROVIDERS: Array<[ProxyProviderId, string]> = [
   ['evomi', 'Evomi']
 ]
 
-// Evomi products (code → tên hiển thị) — the API param `product`.
+// Evomi products (code → tên hiển thị) — the API param `product`. Only the products
+// whose code is identical across Evomi's generate + balance endpoints are listed, so a
+// pick always works (datacenter uses conflicting codes in Evomi's own docs — omitted).
 const EVOMI_PRODUCTS: Array<[string, string]> = [
   ['rpc', 'Residential (Core)'],
   ['rp', 'Residential (Premium)'],
-  ['mp', 'Mobile'],
-  ['dcp', 'Datacenter']
+  ['mp', 'Mobile']
 ]
 
 const genId = (): string =>
