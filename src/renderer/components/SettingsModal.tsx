@@ -201,6 +201,39 @@ export function SettingsModal({
           </section>
 
           <section className="card">
+            <h3>🌐 Nhà cung cấp Proxy — Evomi</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Chỉ cần nhập <b>API key</b> — lấy tại{' '}
+              <a
+                href="https://my.evomi.com"
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                my.evomi.com → Settings → API
+              </a>
+              . Sau đó vào <b>Proxy</b>, chọn nhà cung cấp <b>Evomi</b> + sản phẩm rồi bấm{' '}
+              <b>Tạo proxy</b>.
+            </p>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <input
+                placeholder="API key Evomi"
+                value={evoKey}
+                onChange={(e) => setEvoKey(e.target.value)}
+                style={inp}
+              />
+              <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
+                <button className="btn primary" onClick={() => void saveEvomi()}>
+                  💾 Lưu API key Evomi
+                </button>
+                {evoMsg && (
+                  <span style={{ color: 'var(--green)', fontSize: 12 }}>{evoMsg}</span>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
             <h3>Phiên bản &amp; Cập nhật</h3>
             <p className="hint" style={{ marginTop: 0 }}>
               VGC Browser {version ? `v${version}` : '…'}
