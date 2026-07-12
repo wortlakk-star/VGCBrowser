@@ -16,6 +16,16 @@ const OS_OPTIONS: Array<{ v: OsType; label: string; icon: string }> = [
   { v: 'android', label: 'Android', icon: '🤖' }
 ]
 
+// Default a new profile to THIS machine's OS — a profile whose OS matches the host is the
+// hardest to detect (its claimed GPU/Canvas matches what the engine actually renders).
+const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
+  ? 'macos'
+  : /Win/i.test(navigator.userAgent)
+    ? 'windows'
+    : /Android/i.test(navigator.userAgent)
+      ? 'android'
+      : 'linux'
+
 export function CreateProfileModal({
   groups,
   defaultGroup,
@@ -24,7 +34,7 @@ export function CreateProfileModal({
   onCreated
 }: Props): JSX.Element {
   const [name, setName] = useState(defaultName)
-  const [os, setOs] = useState<OsType>('windows')
+  const [os, setOs] = useState<OsType>(HOST_OS)
   const [group, setGroup] = useState(defaultGroup ?? '')
   const [count, setCount] = useState(1)
   const [url, setUrl] = useState('')

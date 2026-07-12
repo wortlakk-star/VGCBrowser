@@ -17,7 +17,7 @@ import type {
 } from '../shared/types'
 import { generateFingerprint } from '../shared/fingerprint'
 import { checkProxy } from './proxy-check'
-import { createProfile, updateProfile } from './profiles-service'
+import { createProfile, updateProfile, hostOs } from './profiles-service'
 import { getSettings, saveSettings, regenerateToken, type AppSettings } from './settings'
 import { restartApiServer } from './api-manager'
 import { ensureEngine, isEngineInstalled, type EngineProgress } from './engine-download'
@@ -170,7 +170,7 @@ export function registerIpc(): void {
     // Defensive defaults: a hand-edited / foreign export may miss proxy/fingerprint/
     // startUrls, which would otherwise crash launchProfile later. Fill them in.
     const incoming: Profile[] = parsed.map((p: Partial<Profile>) => {
-      const os: OsType = p.os ?? 'windows'
+      const os: OsType = p.os ?? hostOs()
       return {
         ...p,
         id: randomUUID(),
@@ -210,8 +210,8 @@ export function registerIpc(): void {
     checkFingerprint(id, url)
   )
 
-  ipcMain.handle('fingerprint:generate', (_e, os: OsType = 'windows') =>
-    generateFingerprint(os)
+  ipcMain.handle('fingerprint:generate', (_e, os?: OsType) =>
+    generateFingerprint(os ?? hostOs())
   )
 
   ipcMain.handle('proxy:check', (_e, proxy: ProxyConfig) => checkProxy(proxy))
