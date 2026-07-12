@@ -22,7 +22,7 @@ import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
 import { resolveSystemBrowser } from './engine'
-import { checkProxy } from './proxy-check'
+import { checkProxy, directGeo } from './proxy-check'
 import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, patchProfile } from './store'
 import { getSettings } from './settings'
@@ -358,11 +358,22 @@ export async function launchProfile(
   // tell. Looked up live so it works with rotating residential proxies; capped at
   // 6s and falls back to the profile's stored fingerprint so launch never hangs.
   let fp: Fingerprint = profile.fingerprint
-  if (profile.proxy && profile.proxy.type !== 'none' && profile.proxy.host && profile.proxy.port) {
+  const hasProxyForGeo =
+    !!profile.proxy && profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
+  // Align timezone/locale/geo to the EXIT IP — the proxy's when there is one, otherwise the
+  // machine's REAL public IP. A no-proxy profile that keeps a random stored timezone
+  // (e.g. Europe/Paris) while the real IP is elsewhere (e.g. Vietnam) is incoherent and
+  // makes Cloudflare Turnstile fail to load (error 600010). Either way, IP ⇄ timezone ⇄
+  // language must agree.
+  {
     try {
-      broadcastData({ id, phase: 'download', message: 'Đang khớp múi giờ/vị trí theo proxy…' })
+      broadcastData({
+        id,
+        phase: 'download',
+        message: hasProxyForGeo ? 'Đang khớp múi giờ/vị trí theo proxy…' : 'Đang khớp múi giờ theo IP thật…'
+      })
       const geo = await Promise.race([
-        checkProxy(profile.proxy),
+        hasProxyForGeo ? checkProxy(profile.proxy) : directGeo(),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000))
       ])
       if (geo && geo.ok) {

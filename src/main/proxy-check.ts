@@ -93,6 +93,45 @@ function httpsOver(socket: net.Socket): Promise<string> {
   })
 }
 
+/**
+ * Geo of the DIRECT (no-proxy) connection = the machine's real public IP. Used to keep a
+ * NO-PROXY profile's timezone/locale/geolocation coherent with the real IP: a profile
+ * opened without a proxy but carrying a random stored timezone (e.g. Europe/Paris) while
+ * the real IP is in Vietnam is a classic incoherence that makes Cloudflare Turnstile fail
+ * to load (error 600010). Aligning to the real IP removes that contradiction.
+ */
+export async function directGeo(): Promise<ProxyCheckResult> {
+  const t0 = Date.now()
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 8000)
+    const res = await fetch(`https://${GEO_HOST}/`, { signal: ctrl.signal }).finally(() =>
+      clearTimeout(timer)
+    )
+    const latencyMs = Date.now() - t0
+    const j = (await res.json()) as Record<string, unknown>
+    if (!j || j.success === false) return { ok: false, error: 'geo lỗi', latencyMs }
+    const tzRaw = j.timezone
+    const tz =
+      tzRaw && typeof tzRaw === 'object'
+        ? String((tzRaw as Record<string, unknown>).id ?? '')
+        : String(tzRaw ?? '')
+    return {
+      ok: true,
+      ip: String(j.ip ?? ''),
+      country: String(j.country ?? ''),
+      countryCode: String(j.country_code ?? ''),
+      city: String(j.city ?? ''),
+      timezone: tz,
+      latitude: typeof j.latitude === 'number' ? j.latitude : undefined,
+      longitude: typeof j.longitude === 'number' ? j.longitude : undefined,
+      latencyMs
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - t0 }
+  }
+}
+
 export async function checkProxy(proxy: ProxyConfig): Promise<ProxyCheckResult> {
   if (proxy.type === 'none' || !proxy.host || !proxy.port) {
     return { ok: false, error: 'Chưa cấu hình proxy' }
