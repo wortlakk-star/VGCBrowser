@@ -127,7 +127,7 @@ export interface Profile {
 }
 
 /** Supported proxy providers with an API/gateway connector. */
-export type ProxyProviderId = 'iproyal' | 'oxylabs' | 'brightdata'
+export type ProxyProviderId = 'iproyal' | 'oxylabs' | 'brightdata' | 'evomi'
 
 /** Stored account credentials for proxy providers (per cloud account). */
 export interface ProviderCreds {
@@ -136,6 +136,10 @@ export interface ProviderCreds {
   iproyal?: { username: string; password: string; apiToken?: string }
   oxylabs?: { username: string; password: string }
   brightdata?: { customer: string; zone: string; password: string }
+  // Evomi: a single API key (my.evomi.com → Settings → API) is enough — the public
+  // API returns the per-product username/password/balance and formats ready-to-use
+  // proxies, so no separate gateway login is stored.
+  evomi?: { apiKey: string }
 }
 
 /** Options for building a provider proxy connection string. */
@@ -145,7 +149,7 @@ export interface ProxyBuildOpts {
   sessionMinutes?: number // sticky session lifetime
 }
 
-/** Options for generating proxies on demand via the iProyal API. */
+/** Options for generating proxies on demand via a provider's API. */
 export interface GenerateProxiesOpts {
   count: number // how many proxies to create (1–100)
   country?: string // ISO-2, e.g. 'us', 'vn' (empty = any/global)
@@ -154,8 +158,14 @@ export interface GenerateProxiesOpts {
   // iProyal sticky lifetime, already in the API's accepted format (seconds/hours,
   // e.g. '1800s', '24h', '168h' = 7 days). Empty ⇒ omit (default sticky). iProyal
   // rejects the minutes unit ('30m' → failed_validation), so the UI only emits s/h.
+  // Evomi accepts the same string and converts it to minutes (max 1440).
   lifetime?: string
   label?: string // optional name prefix for the created proxies
+  // Which provider to generate from. Default 'iproyal' (back-compat with old callers).
+  provider?: ProxyProviderId
+  // Evomi product code: 'rpc' (Core Residential) | 'rp' (Premium Residential) |
+  // 'mp' (Mobile) | 'dcp' (Datacenter). Ignored by other providers.
+  product?: string
 }
 
 /** A reusable proxy saved in the Proxy Manager. */

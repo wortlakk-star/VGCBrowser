@@ -1,6 +1,20 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import type { Profile, ProxyType, SavedProxy } from '../../shared/types'
+import type { Profile, ProxyProviderId, ProxyType, SavedProxy } from '../../shared/types'
 import { deleteCloudProxy } from '../cloud'
+
+// Providers that support "Tạo proxy qua API" in this screen.
+const PROVIDERS: Array<[ProxyProviderId, string]> = [
+  ['iproyal', 'iProyal'],
+  ['evomi', 'Evomi']
+]
+
+// Evomi products (code → tên hiển thị) — the API param `product`.
+const EVOMI_PRODUCTS: Array<[string, string]> = [
+  ['rpc', 'Residential (Core)'],
+  ['rp', 'Residential (Premium)'],
+  ['mp', 'Mobile'],
+  ['dcp', 'Datacenter']
+]
 
 const genId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
@@ -139,7 +153,9 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [importName, setImportName] = useState('')
   const [msg, setMsg] = useState('')
 
-  // iProyal API — generate options (credentials live in Settings → Nhà cung cấp Proxy)
+  // Provider API — generate options (credentials live in Settings → Nhà cung cấp Proxy)
+  const [genProvider, setGenProvider] = useState<ProxyProviderId>('iproyal')
+  const [genProduct, setGenProduct] = useState('rpc') // Evomi product
   const [genCountry, setGenCountry] = useState('')
   const [genProtocol, setGenProtocol] = useState<'http' | 'socks5'>('http')
   const [genSticky, setGenSticky] = useState(true)
@@ -150,13 +166,20 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [balance, setBalance] = useState<{ availableGb: number; subusers: number } | null>(null)
   const [loadingBal, setLoadingBal] = useState(false)
 
-  // Remaining iProyal residential traffic (GB) — proxies are billed by traffic.
+  const providerName = (p: ProxyProviderId): string =>
+    PROVIDERS.find(([id]) => id === p)?.[1] ?? p
+
+  // Remaining traffic/balance (GB) on the selected provider account.
   const checkBalance = async (): Promise<void> => {
     setLoadingBal(true)
+    setBalance(null)
     try {
-      const b = await window.vgc.getProviderBalance()
+      const b = await window.vgc.getProviderBalance(
+        genProvider,
+        genProvider === 'evomi' ? genProduct : undefined
+      )
       setBalance(b)
-      setMsg(`✓ iProyal còn ${b.availableGb.toFixed(2)} GB traffic.`)
+      setMsg(`✓ ${providerName(genProvider)} còn ${b.availableGb.toFixed(2)} GB traffic.`)
     } catch (e) {
       setMsg(`Lỗi xem GB: ${(e as Error).message}`)
     } finally {
@@ -221,15 +244,24 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
 
   const generate = async (): Promise<void> => {
     const creds = await window.vgc.getProviderCreds()
-    const ip = creds.iproyal
-    if (!ip?.apiToken || !ip?.username || !ip?.password) {
-      setMsg('Lỗi: chưa có tài khoản iProyal. Vào Cài đặt → Nhà cung cấp Proxy để nhập token + user/pass.')
-      return
+    if (genProvider === 'evomi') {
+      if (!creds.evomi?.apiKey) {
+        setMsg('Lỗi: chưa có API key Evomi. Vào Cài đặt → Nhà cung cấp Proxy để nhập API key.')
+        return
+      }
+    } else {
+      const ip = creds.iproyal
+      if (!ip?.apiToken || !ip?.username || !ip?.password) {
+        setMsg('Lỗi: chưa có tài khoản iProyal. Vào Cài đặt → Nhà cung cấp Proxy để nhập token + user/pass.')
+        return
+      }
     }
     setGenerating(true)
-    setMsg(`Đang tạo ${genCount} proxy qua API iProyal…`)
+    setMsg(`Đang tạo ${genCount} proxy qua API ${providerName(genProvider)}…`)
     try {
       const created = await window.vgc.generateProviderProxies({
+        provider: genProvider,
+        product: genProvider === 'evomi' ? genProduct : undefined,
         count: genCount,
         country: genCountry,
         protocol: genProtocol,
@@ -238,7 +270,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         label: genLabel.trim() || undefined
       })
       await window.vgc.saveManyProxies(created)
-      setMsg(`✓ Đã tạo ${created.length} proxy iProyal và thêm vào pool.`)
+      setMsg(`✓ Đã tạo ${created.length} proxy ${providerName(genProvider)} và thêm vào pool.`)
       await refresh()
     } catch (e) {
       setMsg(`Lỗi: ${(e as Error).message}`)
@@ -432,25 +464,66 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         <div className="modal-body">
           <section className="card">
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <h3 style={{ margin: 0 }}>⚡ Lấy proxy qua API iProyal</h3>
+              <h3 style={{ margin: 0 }}>⚡ Lấy proxy qua API</h3>
+              <select
+                className="group-select"
+                value={genProvider}
+                onChange={(e) => {
+                  setGenProvider(e.target.value as ProxyProviderId)
+                  setBalance(null)
+                }}
+                title="Chọn nhà cung cấp proxy"
+              >
+                {PROVIDERS.map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
               <button className="btn" onClick={() => void checkBalance()} disabled={loadingBal}>
                 {loadingBal ? '⏳ Đang kiểm tra…' : '📊 Xem GB còn lại'}
               </button>
               {balance && (
                 <span style={{ color: 'var(--green)', fontWeight: 600 }}>
-                  Còn <b>{balance.availableGb.toFixed(2)} GB</b> · {balance.subusers} sub-user
+                  Còn <b>{balance.availableGb.toFixed(2)} GB</b>
+                  {genProvider === 'iproyal' ? ` · ${balance.subusers} sub-user` : ''}
                 </span>
               )}
             </div>
             <p className="hint" style={{ marginTop: 8 }}>
-              Tài khoản iProyal (API token + username/password) nhập ở{' '}
-              <b>Cài đặt → Nhà cung cấp Proxy</b>. Ở đây chỉ cần chọn thông số rồi bấm{' '}
-              <b>Tạo proxy</b>.
+              {genProvider === 'evomi' ? (
+                <>
+                  API key Evomi nhập ở <b>Cài đặt → Nhà cung cấp Proxy</b>. Chọn sản phẩm + thông số
+                  rồi bấm <b>Tạo proxy</b>.
+                </>
+              ) : (
+                <>
+                  Tài khoản iProyal (API token + username/password) nhập ở{' '}
+                  <b>Cài đặt → Nhà cung cấp Proxy</b>. Ở đây chỉ cần chọn thông số rồi bấm{' '}
+                  <b>Tạo proxy</b>.
+                </>
+              )}
             </p>
             <div
               className="proxy-check"
               style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}
             >
+              {genProvider === 'evomi' && (
+                <>
+                  <span style={lbl}>Sản phẩm</span>
+                  <select
+                    className="group-select"
+                    value={genProduct}
+                    onChange={(e) => setGenProduct(e.target.value)}
+                  >
+                    {EVOMI_PRODUCTS.map(([code, name]) => (
+                      <option key={code} value={code}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
               <span style={lbl}>Quốc gia</span>
               <select
                 className="group-select"

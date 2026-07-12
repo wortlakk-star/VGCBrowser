@@ -59,12 +59,20 @@ export function SettingsModal({
   const [ipUser, setIpUser] = useState('')
   const [ipPass, setIpPass] = useState('')
   const [ipMsg, setIpMsg] = useState('')
+  // Evomi proxy provider — a single API key is enough.
+  const [evoKey, setEvoKey] = useState('')
+  const [evoMsg, setEvoMsg] = useState('')
 
   const saveIproyal = async (): Promise<void> => {
     await window.vgc.saveProviderCreds({
       iproyal: { username: ipUser.trim(), password: ipPass.trim(), apiToken: ipToken.trim() }
     })
     setIpMsg('✓ Đã lưu tài khoản iProyal.')
+  }
+
+  const saveEvomi = async (): Promise<void> => {
+    await window.vgc.saveProviderCreds({ evomi: { apiKey: evoKey.trim() } })
+    setEvoMsg('✓ Đã lưu API key Evomi.')
   }
 
   useEffect(() => {
@@ -74,6 +82,7 @@ export function SettingsModal({
         setIpPass(c.iproyal.password || '')
         setIpToken(c.iproyal.apiToken || '')
       }
+      if (c.evomi) setEvoKey(c.evomi.apiKey || '')
     })
     void window.vgc.getVersion().then(setVersion)
     // The engine always runs in Native (VGC Core) mode — the antidetect-correct

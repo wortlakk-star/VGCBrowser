@@ -81,6 +81,25 @@ export async function buildProviderProxy(
     return { type: 'http', host: 'brd.superproxy.io', port: 33335, username: user, password: c.password, provider: 'Bright Data' }
   }
 
+  if (provider === 'evomi') {
+    // Evomi bakes country/session/lifetime into the credentials server-side, so ask
+    // its generate API for a single proxy and return it — that guarantees the exact
+    // username/password format instead of us hand-building it.
+    const c = creds.evomi
+    if (!c?.apiKey) throw new Error('Chưa nhập API key Evomi.')
+    const list = await generateEvomiProxies({
+      count: 1,
+      country: cc,
+      protocol: 'http',
+      sticky: !!opts.sticky,
+      lifetime: opts.sticky ? `${mins}m` : undefined,
+      product: 'rpc'
+    })
+    const p = list[0]
+    if (!p) throw new Error('Evomi không trả về proxy.')
+    return { type: p.type, host: p.host, port: p.port, username: p.username, password: p.password, provider: 'Evomi' }
+  }
+
   throw new Error('Nhà cung cấp không hỗ trợ.')
 }
 
@@ -188,4 +207,180 @@ export async function iproyalBalance(): Promise<{ availableGb: number; subusers:
     availableGb: typeof data.available_traffic === 'number' ? data.available_traffic : 0,
     subusers: typeof data.subusers_count === 'number' ? data.subusers_count : 0
   }
+}
+
+// ── Evomi ───────────────────────────────────────────────────────────────────
+// Evomi's Public API (https://api.evomi.com, header `x-apikey`) is enough on its
+// own: GET /public returns each product's username/password/balance, and GET
+// /public/generate returns ready-to-use proxy lines with country/session baked in.
+// So the app stores ONLY the API key. Docs: https://docs.evomi.com/public-api
+
+const EVOMI_API = 'https://api.evomi.com'
+
+// Connect host + the port for each product's protocol. The generate output already
+// carries the right host, but its listed port can be the HTTP port even for a socks5
+// request — so we pin the port from this table by product+protocol to be safe.
+const EVOMI_HOST: Record<string, string> = {
+  rp: 'rp.evomi.com',
+  rpc: 'rp.evomi.com',
+  dcp: 'dcp.evomi.com',
+  mp: 'mp.evomi.com'
+}
+const EVOMI_PORTS: Record<string, { http: number; socks5: number }> = {
+  rp: { http: 1000, socks5: 1002 },
+  rpc: { http: 1000, socks5: 1002 },
+  dcp: { http: 2000, socks5: 2002 },
+  mp: { http: 3000, socks5: 3002 }
+}
+
+/** Convert an iProyal-style lifetime string ('600s' | '1h' | '30m') to Evomi minutes
+ *  (1–1440). Empty/invalid ⇒ undefined (Evomi picks a default). */
+function evomiLifetimeMinutes(lt?: string): number | undefined {
+  const s = (lt ?? '').trim().toLowerCase()
+  if (!s) return undefined
+  const m = /^(\d+)\s*(s|m|h)?$/.exec(s)
+  if (!m) return undefined
+  const n = Number(m[1])
+  const unit = m[2] || 's'
+  let mins = unit === 'h' ? n * 60 : unit === 'm' ? n : Math.round(n / 60)
+  if (!Number.isFinite(mins)) return undefined
+  return Math.min(1440, Math.max(1, mins))
+}
+
+/** Parse one Evomi generate line into host/user/pass. Handles, in any order:
+ *  `host:port:user:pass`, `scheme://host:port:user:pass`, `scheme://user:pass@host:port`,
+ *  `user:pass@host:port`. The password can contain ':' (taken as the remainder). */
+function parseEvomiLine(
+  line: string
+): { host: string; port: number; username?: string; password?: string } | null {
+  let s = line.trim()
+  if (!s) return null
+  const scheme = s.match(/^(https?|socks5):\/\//i)
+  if (scheme) s = s.slice(scheme[0].length)
+  if (s.includes('@')) {
+    const [cred, hp] = s.split('@')
+    const c = cred.split(':')
+    const h = hp.split(':')
+    const port = Number(h[1])
+    if (!h[0] || !Number.isInteger(port) || port <= 0) return null
+    return { host: h[0], port, username: c[0], password: c.slice(1).join(':') || undefined }
+  }
+  const parts = s.split(':')
+  if (parts.length >= 4) {
+    const port = Number(parts[1])
+    if (!parts[0] || !Number.isInteger(port) || port <= 0) return null
+    return { host: parts[0], port, username: parts[2], password: parts.slice(3).join(':') }
+  }
+  if (parts.length === 2) {
+    const port = Number(parts[1])
+    if (!parts[0] || !Number.isInteger(port) || port <= 0) return null
+    return { host: parts[0], port }
+  }
+  return null
+}
+
+/**
+ * Generate N ready-to-use proxies via the Evomi Public API and return them as
+ * SavedProxy records (NOT persisted — the caller adds them to the pool). Needs only
+ * the account apiKey. Docs: GET https://api.evomi.com/public/generate
+ */
+export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<SavedProxy[]> {
+  const creds = await getProviderCreds()
+  const c = creds.evomi
+  if (!c?.apiKey) throw new Error('Chưa nhập API key Evomi (Cài đặt → Nhà cung cấp Proxy).')
+
+  const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
+  const product = (opts.product || 'rpc').trim()
+  const proto: 'http' | 'socks5' = opts.protocol === 'socks5' ? 'socks5' : 'http'
+  const cc = (opts.country ?? '').trim().toUpperCase()
+
+  const qs = new URLSearchParams()
+  qs.set('product', product)
+  qs.set('amount', String(count))
+  qs.set('protocol', proto)
+  qs.set('format', '2') // host:port:user:pass
+  qs.set('prepend_protocol', 'false')
+  if (cc) qs.set('countries', cc)
+  // Sticky ⇒ keep the same IP for `lifetime` minutes. Rotating ⇒ omit `session` so
+  // Evomi hands out a new IP each request.
+  if (opts.sticky) {
+    qs.set('session', 'sticky')
+    const mins = evomiLifetimeMinutes(opts.lifetime)
+    if (mins) qs.set('lifetime', String(mins))
+  }
+
+  const res = await fetch(`${EVOMI_API}/public/generate?${qs.toString()}`, {
+    headers: { 'x-apikey': c.apiKey.trim() }
+  })
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(`Evomi API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
+  }
+
+  const text = await res.text()
+  // The generate endpoint returns plain text (one proxy per line); on rejection it may
+  // instead return a JSON error body with 200 — surface its message.
+  const trimmed = text.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    let j: { success?: boolean; message?: string; error?: string } | null = null
+    try {
+      j = JSON.parse(trimmed)
+    } catch {
+      j = null
+    }
+    if (j && j.success === false) throw new Error(j.message || j.error || 'Evomi API từ chối yêu cầu.')
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (!lines.length) throw new Error('Evomi API không trả về proxy nào.')
+
+  const type: SavedProxy['type'] = proto === 'socks5' ? 'socks5' : 'http'
+  const fallbackHost = EVOMI_HOST[product] ?? 'rp.evomi.com'
+  const pinnedPort = EVOMI_PORTS[product]?.[proto]
+  const prefix = (opts.label ?? '').trim() || `Evomi${cc ? '-' + cc : ''}`
+  const out: SavedProxy[] = []
+  lines.forEach((line, i) => {
+    const parsed = parseEvomiLine(line)
+    if (!parsed) return
+    const host = parsed.host || fallbackHost
+    const port = pinnedPort || parsed.port
+    if (!host || !port || !parsed.username || !parsed.password) return
+    out.push({
+      id: genProxyId(),
+      label: `${prefix} ${i + 1}`,
+      type,
+      host,
+      port,
+      username: parsed.username,
+      password: parsed.password
+    })
+  })
+  if (!out.length) throw new Error('Không phân tích được proxy Evomi trả về.')
+  return out
+}
+
+/**
+ * Remaining balance (GB) on the Evomi account for a product, via GET /public.
+ * Evomi reports `balance_mb` per product; residential is billed by traffic.
+ */
+export async function evomiBalance(product?: string): Promise<{ availableGb: number; subusers: number }> {
+  const creds = await getProviderCreds()
+  const c = creds.evomi
+  if (!c?.apiKey) throw new Error('Chưa nhập API key Evomi (Cài đặt → Nhà cung cấp Proxy).')
+  const res = await fetch(`${EVOMI_API}/public`, { headers: { 'x-apikey': c.apiKey.trim() } })
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(`Evomi API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
+  }
+  const data = (await res.json()) as { products?: Record<string, { balance_mb?: number }> }
+  const products = data.products || {}
+  const key = (product || 'rpc').trim()
+  const mb =
+    typeof products[key]?.balance_mb === 'number'
+      ? (products[key]!.balance_mb as number)
+      : Object.values(products).reduce(
+          (sum, p) => sum + (typeof p.balance_mb === 'number' ? p.balance_mb : 0),
+          0
+        )
+  return { availableGb: mb / 1024, subusers: 0 }
 }

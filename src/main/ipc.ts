@@ -67,7 +67,9 @@ import {
   saveProviderCreds,
   buildProviderProxy,
   generateIproyalProxies,
-  iproyalBalance
+  iproyalBalance,
+  generateEvomiProxies,
+  evomiBalance
 } from './proxy-providers'
 import type {
   ProviderCreds,
@@ -285,13 +287,15 @@ export function registerIpc(): void {
   ipcMain.handle('providers:build', (_e, provider: ProxyProviderId, opts: ProxyBuildOpts) =>
     buildProviderProxy(provider, opts)
   )
-  // Generate proxies on demand via the iProyal API (returns SavedProxy[] — the
-  // renderer adds them to the pool with saveManyProxies).
+  // Generate proxies on demand via the chosen provider's API (returns SavedProxy[] —
+  // the renderer adds them to the pool with saveManyProxies). Defaults to iProyal.
   ipcMain.handle('providers:generate', (_e, opts: GenerateProxiesOpts) =>
-    generateIproyalProxies(opts)
+    opts.provider === 'evomi' ? generateEvomiProxies(opts) : generateIproyalProxies(opts)
   )
-  // Remaining residential traffic (GB) on the iProyal account.
-  ipcMain.handle('providers:balance', () => iproyalBalance())
+  // Remaining balance (GB) on the provider account.
+  ipcMain.handle('providers:balance', (_e, provider?: ProxyProviderId, product?: string) =>
+    provider === 'evomi' ? evomiBalance(product) : iproyalBalance()
+  )
 
   ipcMain.handle('dialog:pickFolder', async (): Promise<string | null> => {
     const win = focusedWindow()
