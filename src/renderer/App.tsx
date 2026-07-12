@@ -639,6 +639,14 @@ export default function App(): JSX.Element {
           <button className="btn" onClick={exportAll}>
             ↥ Xuất
           </button>
+          <button
+            className="btn"
+            onClick={syncTimezones}
+            disabled={tzSyncing}
+            title="Khớp múi giờ & vị trí của mỗi profile theo IP proxy của nó (chống lệch giờ/nước — dấu hiệu bot)"
+          >
+            {tzSyncing ? '🕐 Đang khớp…' : '🕐 Khớp múi giờ'}
+          </button>
           <button className="btn primary" onClick={() => setShowCreate(true)}>
             + Tạo profile
           </button>

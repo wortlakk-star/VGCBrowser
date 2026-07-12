@@ -545,6 +545,14 @@ export async function launchProfile(
   }
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
   if (cryptSecret) childEnv.VGC_CRYPT_SECRET = cryptSecret
+  // Kill Chromium's yellow "Google API keys are missing" infobar that shows on EVERY
+  // page — it's clutter AND an antidetect tell (real Chrome never shows it). Chromium
+  // reads these keys from the environment at runtime; any non-default value makes
+  // HasAPIKeyConfigured() true so the bar never appears. They're NOT used for login
+  // (profiles sign in via the web) and are never exposed to web pages.
+  childEnv.GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'no-key'
+  childEnv.GOOGLE_DEFAULT_CLIENT_ID = process.env.GOOGLE_DEFAULT_CLIENT_ID || 'no-id'
+  childEnv.GOOGLE_DEFAULT_CLIENT_SECRET = process.env.GOOGLE_DEFAULT_CLIENT_SECRET || 'no-secret'
 
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local
   // relay because Chromium can't pass credentials via the flag; no-auth proxies
