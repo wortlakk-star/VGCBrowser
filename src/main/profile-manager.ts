@@ -39,14 +39,7 @@ import {
   downloadProfileCookiesDb,
   uploadProfileCookiesDb
 } from './cloud-data'
-import {
-  exportLogins,
-  importLogins,
-  exportCookies,
-  importCookies,
-  migrateCookiesToPortable,
-  migrateLoginsToPortable
-} from './password-bridge'
+import { exportLogins, importLogins, exportCookies, importCookies } from './password-bridge'
 import { getCloudSession } from './session'
 import { getAccountSecret, isEncryptionActive } from './account-secret'
 
@@ -415,17 +408,6 @@ export async function launchProfile(
       // SAME profile finishes before we extract the cloud zip over its dir.
       const got = await withDataLock(id, async () => {
         const g = await downloadProfileData(id)
-        // One-time key migration: profiles opened before the --vgc-crypt-secret switch fix
-        // have cookies/passwords sealed with the OLD per-machine DPAPI key; the now-portable
-        // engine couldn't read them (= mass re-login). Re-seal them for the portable key so
-        // the session survives. Self-terminating + fail-safe. Runs before the cloud merge.
-        try {
-          const mc = await migrateCookiesToPortable(profileDataDir(id), id)
-          const ml = await migrateLoginsToPortable(profileDataDir(id), id)
-          if (mc + ml > 0) console.error(`[vgc-pw] migrated ${mc} cookie(s) + ${ml} password(s) to portable key`)
-        } catch (e) {
-          console.error('[vgc-pw] migrate lỗi:', e)
-        }
         // Saved passwords: merge the cloud logins into the just-synced Login Data,
         // RE-ENCRYPTING with THIS machine's key so the local engine can read them (the
         // synced zip's blobs were sealed with the other machine's key). Held under the

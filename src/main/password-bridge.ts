@@ -699,7 +699,7 @@ export async function exportCookies(userDataDir: string, id: string): Promise<Sa
         const ev = row[evI] as Uint8Array | null
         let value: string
         if (ev && ev.length) {
-          const pt = decryptV10Bytes(Buffer.from(ev), key)
+          const pt = decryptEngine(Buffer.from(ev), ek)
           if (!pt) continue // wrong key / not ours
           // Strip the SHA256(host_key) domain prefix (cookies DB v24+). A mismatch also
           // reliably filters wrong-key garbage that happened to unpad cleanly.
@@ -772,12 +772,37 @@ export async function importCookies(
     const insSql = `INSERT OR REPLACE INTO cookies (${targetCols
       .map((c) => `"${c}"`)
       .join(',')}) VALUES (${targetCols.map((c) => '$' + c).join(',')})`
+    // Find the matching local cookie (by the cookies unique index) so we never clobber a
+    // FRESHER local cookie with an older cloud copy — that would log the user out on this
+    // machine. Only overwrite when the incoming (cloud) copy is newer-or-equal.
+    const findStmt = db.prepare(
+      `SELECT last_update_utc FROM cookies
+       WHERE host_key=$hk AND IFNULL(top_frame_site_key,'')=$tf
+         AND has_cross_site_ancestor=$hca AND name=$nm AND IFNULL(path,'')=$pa
+         AND source_scheme=$ss AND source_port=$sp`
+    )
 
     let changed = 0
     db.exec('BEGIN')
     try {
       for (const r of cookies) {
         if (!r || !r.cols || !r.cols.host_key || !r.cols.name) continue
+        findStmt.bind({
+          $hk: r.cols.host_key,
+          $tf: String(r.cols.top_frame_site_key ?? ''),
+          $hca: Number(r.cols.has_cross_site_ancestor ?? 0),
+          $nm: r.cols.name,
+          $pa: String(r.cols.path ?? ''),
+          $ss: Number(r.cols.source_scheme ?? 0),
+          $sp: Number(r.cols.source_port ?? 0)
+        })
+        const localRow = findStmt.step()
+          ? (findStmt.getAsObject() as { last_update_utc?: number })
+          : null
+        findStmt.reset()
+        if (localRow && Number(localRow.last_update_utc ?? 0) > Number(r.cols.last_update_utc ?? 0)) {
+          continue // local cookie is newer → keep it (don't clobber a fresh session)
+        }
         const params: Record<string, unknown> = {}
         for (const c of targetCols) {
           if (c === 'value') params['$' + c] = r.value ?? ''
@@ -796,6 +821,8 @@ export async function importCookies(
         /* ignore */
       }
       throw inner
+    } finally {
+      findStmt.free()
     }
 
     if (changed === 0) {
