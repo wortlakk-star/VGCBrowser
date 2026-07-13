@@ -15,38 +15,42 @@
 //         so the local engine can read them. INSERT-or-update only, never deletes.
 //
 // SAFETY: everything is wrapped so a failure can only make the bridge a NO-OP (never a
-// crash, never data loss). Writes go through a .vgcbak backup + PRAGMA integrity_check;
-// any anomaly restores the backup. better-sqlite3 is loaded lazily so a missing/broken
-// native binding just disables the bridge instead of breaking a launch.
+// crash, never data loss). We use sql.js (pure-WASM SQLite — no native build, works
+// identically on Windows + macOS): the DB is loaded from bytes into memory, mutated,
+// integrity-checked in memory, then written back ATOMICALLY (temp file + rename), so the
+// live Login Data is never left half-written. A broken sql.js load just disables it.
 
 import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync } from 'crypto'
 import { execFileSync } from 'child_process'
-import { existsSync, copyFileSync, rmSync, statSync } from 'fs'
-import { join } from 'path'
-import { app } from 'electron'
+import { existsSync, readFileSync, writeFileSync, renameSync, rmSync } from 'fs'
+import { join, dirname } from 'path'
 import type { SavedLogin } from '../shared/types'
 import { getAccountSecret } from './account-secret'
 import { getSettings } from './settings'
 
+// sql.js is loaded lazily so a missing/broken WASM just disables the bridge.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Db = any
-
-let sqliteLoaded = false
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let SqliteCtor: any = null
-function loadSqlite(): unknown {
-  if (sqliteLoaded) return SqliteCtor
-  sqliteLoaded = true
+let SQL: any = null
+let sqlTried = false
+async function getSQL(): Promise<unknown> {
+  if (SQL) return SQL
+  if (sqlTried) return null
+  sqlTried = true
   try {
-    // Lazy CJS require (electron-vite externalises deps): a broken/missing native
-    // binding disables the bridge rather than throwing at module load.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    SqliteCtor = require('better-sqlite3')
+    // Runtime CJS require (sql.js is externalised by electron-vite). Resolve the WASM
+    // next to the module's dist entry and hand its bytes to initSqlJs so no on-disk
+    // path lookup (which fails inside app.asar) is needed.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const initSqlJs = require('sql.js')
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const wasmPath = join(dirname(require.resolve('sql.js')), 'sql-wasm.wasm')
+    const wasmBinary = readFileSync(wasmPath)
+    SQL = await initSqlJs({ wasmBinary })
+    return SQL
   } catch (e) {
-    console.error('[vgc-pw] better-sqlite3 unavailable — password bridge disabled:', e)
-    SqliteCtor = null
+    console.error('[vgc-pw] sql.js unavailable — password bridge disabled:', e)
+    return null
   }
-  return SqliteCtor
 }
 
 const V10 = Buffer.from('v10', 'latin1')
@@ -89,11 +93,10 @@ async function localKey(id: string): Promise<Buffer | null> {
       }
       if (!pw) {
         try {
-          pw = execFileSync(
-            'security',
-            ['find-generic-password', '-w', '-s', 'Chrome Safe Storage'],
-            { encoding: 'utf8', timeout: 5000 }
-          ).trim()
+          pw = execFileSync('security', ['find-generic-password', '-w', '-s', 'Chrome Safe Storage'], {
+            encoding: 'utf8',
+            timeout: 5000
+          }).trim()
         } catch {
           return null
         }
@@ -101,7 +104,7 @@ async function localKey(id: string): Promise<Buffer | null> {
       if (!pw) return null
       return pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1')
     }
-    return null // Linux: system Chrome/basic-text varies — bridge off for now.
+    return null // Linux: system Chrome text/basic-storage varies — bridge off for now.
   } catch {
     return null
   }
@@ -123,11 +126,6 @@ function encryptV10(plain: string, key: Buffer): Buffer {
   return Buffer.concat([V10, c.update(Buffer.from(plain, 'utf8')), c.final()])
 }
 
-function tmpCopy(src: string, tag: string): string {
-  const dst = join(app.getPath('temp'), `vgc-pw-${tag}-${process.pid}-${Date.now()}.db`)
-  copyFileSync(src, dst)
-  return dst
-}
 function safeRm(p: string): void {
   try {
     rmSync(p, { force: true })
@@ -136,52 +134,63 @@ function safeRm(p: string): void {
   }
 }
 
+const SELECT_COLS = [
+  'origin_url',
+  'action_url',
+  'username_element',
+  'username_value',
+  'password_element',
+  'password_value',
+  'signon_realm',
+  'scheme',
+  'date_created',
+  'date_password_modified',
+  'times_used',
+  'blacklisted_by_user'
+]
+
 /**
  * Read + DECRYPT the profile's saved logins with the LOCAL key. Returns [] on any
- * problem (no engine, no key, no DB, native module missing). Reads a COPY so it never
- * touches the live file.
+ * problem (no engine key, no DB, WASM missing). Read-only — never touches the file.
  */
 export async function exportLogins(userDataDir: string, id: string): Promise<SavedLogin[]> {
-  const Sqlite = loadSqlite() as (new (p: string, o?: unknown) => Db) | null
-  if (!Sqlite) return []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Sql = (await getSQL()) as any
+  if (!Sql) return []
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return []
   const key = await localKey(id)
   if (!key) return []
 
-  let copy = ''
-  let db: Db | null = null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null
   try {
-    copy = tmpCopy(ld, 'rd')
-    db = new Sqlite(copy, { readonly: true, fileMustExist: true })
-    const rows = db
-      .prepare(
-        `SELECT origin_url, action_url, username_element, username_value,
-                password_element, password_value, signon_realm, scheme,
-                date_created, date_password_modified, times_used, blacklisted_by_user
-         FROM logins`
-      )
-      .all() as Array<Record<string, unknown>>
+    db = new Sql.Database(readFileSync(ld))
+    const res = db.exec(`SELECT ${SELECT_COLS.join(', ')} FROM logins`)
     const out: SavedLogin[] = []
-    for (const r of rows) {
-      const pv = r.password_value as Buffer | null
-      if (!pv || !pv.length) continue // blacklist "never save" rows have no password
-      const plain = decryptV10(Buffer.from(pv), key)
-      if (plain == null || plain === '') continue // couldn't decrypt / empty → skip
-      out.push({
-        origin_url: String(r.origin_url ?? ''),
-        signon_realm: String(r.signon_realm ?? ''),
-        password: plain,
-        action_url: (r.action_url as string) ?? '',
-        username_element: (r.username_element as string) ?? '',
-        username_value: (r.username_value as string) ?? '',
-        password_element: (r.password_element as string) ?? '',
-        scheme: Number(r.scheme ?? 0),
-        date_created: Number(r.date_created ?? 0),
-        date_password_modified: Number(r.date_password_modified ?? 0),
-        times_used: Number(r.times_used ?? 0),
-        blacklisted_by_user: Number(r.blacklisted_by_user ?? 0)
-      })
+    if (res.length) {
+      const cols: string[] = res[0].columns
+      const idx = (c: string): number => cols.indexOf(c)
+      for (const row of res[0].values as unknown[][]) {
+        const pv = row[idx('password_value')] as Uint8Array | null
+        if (!pv || !pv.length) continue // blacklist "never save" rows have no password
+        const plain = decryptV10(Buffer.from(pv), key)
+        if (plain == null || plain === '') continue // couldn't decrypt / empty → skip
+        out.push({
+          origin_url: String(row[idx('origin_url')] ?? ''),
+          signon_realm: String(row[idx('signon_realm')] ?? ''),
+          password: plain,
+          action_url: (row[idx('action_url')] as string) ?? '',
+          username_element: (row[idx('username_element')] as string) ?? '',
+          username_value: (row[idx('username_value')] as string) ?? '',
+          password_element: (row[idx('password_element')] as string) ?? '',
+          scheme: Number(row[idx('scheme')] ?? 0),
+          date_created: Number(row[idx('date_created')] ?? 0),
+          date_password_modified: Number(row[idx('date_password_modified')] ?? 0),
+          times_used: Number(row[idx('times_used')] ?? 0),
+          blacklisted_by_user: Number(row[idx('blacklisted_by_user')] ?? 0)
+        })
+      }
     }
     return out.filter((l) => l.origin_url && l.signon_realm)
   } catch (e) {
@@ -193,15 +202,15 @@ export async function exportLogins(userDataDir: string, id: string): Promise<Sav
     } catch {
       /* ignore */
     }
-    if (copy) safeRm(copy)
   }
 }
 
 /**
  * MERGE cloud logins into the profile's Login Data, RE-ENCRYPTING each with the LOCAL
  * key. Adds new logins (by origin/username/realm) and updates a password only when the
- * incoming copy is NEWER. Never deletes. Fail-safe: backs up + integrity-checks and
- * restores on any anomaly. Returns how many rows were added/updated (0 on skip/error).
+ * incoming copy is NEWER. Never deletes. Everything happens in memory; the file is only
+ * replaced (atomically) if the merged DB passes an integrity_check. Returns how many
+ * rows were added/updated (0 on skip/error).
  */
 export async function importLogins(
   userDataDir: string,
@@ -209,24 +218,28 @@ export async function importLogins(
   logins: SavedLogin[]
 ): Promise<number> {
   if (!logins?.length) return 0
-  const Sqlite = loadSqlite() as (new (p: string, o?: unknown) => Db) | null
-  if (!Sqlite) return 0
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Sql = (await getSQL()) as any
+  if (!Sql) return 0
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return 0 // no schema to merge into (engine makes it on first run)
   const key = await localKey(id)
   if (!key) return 0
 
-  const bak = ld + '.vgcbak'
-  let db: Db | null = null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null
   try {
-    copyFileSync(ld, bak)
-    db = new Sqlite(ld, { fileMustExist: true })
+    db = new Sql.Database(readFileSync(ld))
 
-    const cols = new Set(
-      (db.prepare('PRAGMA table_info(logins)').all() as Array<{ name: string }>).map((c) => c.name)
-    )
     // Only write columns that exist in THIS engine's schema (macOS system Chrome may be
     // a different version) — the rest fall back to their SQLite defaults.
+    const ti = db.exec('PRAGMA table_info(logins)')
+    if (!ti.length) {
+      db.close()
+      return 0
+    }
+    const nameIdx = (ti[0].columns as string[]).indexOf('name')
+    const cols = new Set<string>((ti[0].values as unknown[][]).map((v) => String(v[nameIdx])))
     const wanted = [
       'origin_url',
       'action_url',
@@ -244,31 +257,36 @@ export async function importLogins(
 
     const findStmt = db.prepare(
       `SELECT id, date_password_modified FROM logins
-       WHERE origin_url=? AND username_element=? AND username_value=?
-         AND password_element=? AND signon_realm=?`
+       WHERE origin_url=$o AND username_element=$ue AND username_value=$uv
+         AND password_element=$pe AND signon_realm=$sr`
     )
-    const insStmt = db.prepare(
-      `INSERT OR IGNORE INTO logins (${wanted.join(',')})
-       VALUES (${wanted.map(() => '?').join(',')})`
-    )
-    const updStmt = db.prepare(
-      'UPDATE logins SET password_value=?, date_password_modified=? WHERE id=?'
-    )
+    const insSql = `INSERT OR IGNORE INTO logins (${wanted.join(',')}) VALUES (${wanted
+      .map((c) => '$' + c)
+      .join(',')})`
 
     let changed = 0
-    const tx = db.transaction((recs: SavedLogin[]) => {
-      for (const r of recs) {
+    db.exec('BEGIN')
+    try {
+      for (const r of logins) {
         if (!r.origin_url || !r.signon_realm || !r.password) continue
         const ue = r.username_element ?? ''
         const pe = r.password_element ?? ''
         const uv = r.username_value ?? ''
         const pv = encryptV10(r.password, key)
-        const existing = findStmt.get(r.origin_url, ue, uv, pe, r.signon_realm) as
-          | { id: number; date_password_modified: number }
-          | undefined
+
+        findStmt.bind({ $o: r.origin_url, $ue: ue, $uv: uv, $pe: pe, $sr: r.signon_realm })
+        type ExistingRow = { id: number; date_password_modified: number }
+        let existing: ExistingRow | null = null
+        if (findStmt.step()) existing = findStmt.getAsObject() as unknown as ExistingRow
+        findStmt.reset()
+
         if (existing) {
           if ((r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0)) {
-            updStmt.run(pv, r.date_password_modified ?? 0, existing.id)
+            db.run('UPDATE logins SET password_value=$pv, date_password_modified=$d WHERE id=$id', {
+              $pv: pv,
+              $d: r.date_password_modified ?? 0,
+              $id: existing.id
+            })
             changed++
           }
         } else {
@@ -286,40 +304,59 @@ export async function importLogins(
             date_password_modified: r.date_password_modified ?? 0,
             times_used: r.times_used ?? 0
           }
-          const info = insStmt.run(...wanted.map((c) => val[c]))
-          if (info.changes > 0) changed++
+          const params: Record<string, unknown> = {}
+          for (const c of wanted) params['$' + c] = val[c]
+          db.run(insSql, params)
+          changed++
         }
       }
-    })
-    tx(logins)
+      db.exec('COMMIT')
+    } catch (inner) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw inner
+    } finally {
+      findStmt.free()
+    }
 
-    const integ = db.prepare('PRAGMA integrity_check').get() as { integrity_check?: string }
-    db.close()
-    db = null
-    if (integ?.integrity_check !== 'ok') {
-      // Corruption after write → roll back to the backup, drop everything we did.
-      copyFileSync(bak, ld)
-      console.error('[vgc-pw] integrity_check failed after merge — restored backup')
+    if (changed === 0) {
+      db.close()
+      return 0 // nothing new — leave the file untouched
+    }
+
+    // Verify the mutated DB before it ever reaches disk.
+    const integ = db.exec('PRAGMA integrity_check')
+    const ok = integ.length && String(integ[0].values[0][0]) === 'ok'
+    if (!ok) {
+      db.close()
+      console.error('[vgc-pw] integrity_check failed after merge — file left unchanged')
       return 0
     }
-    safeRm(bak)
+
+    const outBytes = Buffer.from(db.export() as Uint8Array)
+    db.close()
+    db = null
+
+    // Atomic replace: write a sibling then rename over the original so a crash mid-write
+    // can never leave a truncated Login Data. Drop stale journal/WAL siblings so the
+    // engine reads exactly our merged DB.
+    const tmp = ld + '.vgcnew'
+    writeFileSync(tmp, outBytes)
+    renameSync(tmp, ld)
+    safeRm(ld + '-wal')
+    safeRm(ld + '-shm')
+    safeRm(ld + '-journal')
     return changed
   } catch (e) {
-    console.error('[vgc-pw] importLogins failed — restoring backup:', e)
+    console.error('[vgc-pw] importLogins failed (file left unchanged):', e)
     try {
       db?.close()
     } catch {
       /* ignore */
     }
-    try {
-      if (existsSync(bak)) {
-        // Only restore if the backup is a sane size (never clobber with an empty file).
-        if (statSync(bak).size > 0) copyFileSync(bak, ld)
-      }
-    } catch {
-      /* best-effort */
-    }
-    safeRm(bak)
     return 0
   }
 }

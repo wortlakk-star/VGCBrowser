@@ -28,6 +28,9 @@
       "output": "release",
       "buildResources": "resources"
     },
+    "asarUnpack": [
+      "**/node_modules/sql.js/**"
+    ],
     "files": [
       "out/**/*",
       "package.json"
@@ -80,6 +83,7 @@
     "@supabase/supabase-js": "^2.107.0",
     "adm-zip": "^0.5.17",
     "electron-updater": "^6.3.9",
+    "sql.js": "^1.12.0",
     "socks": "^2.8.9",
     "ws": "^8.21.0",
     "zod": "^3.23.8"

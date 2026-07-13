@@ -33,8 +33,11 @@ import {
   downloadProfileData,
   uploadProfileData,
   downloadProfileCookies,
-  uploadProfileCookies
+  uploadProfileCookies,
+  downloadProfilePasswords,
+  uploadProfilePasswords
 } from './cloud-data'
+import { exportLogins, importLogins } from './password-bridge'
 import { getCloudSession } from './session'
 import { getAccountSecret, isEncryptionActive } from './account-secret'
 
@@ -208,6 +211,13 @@ async function syncDataOnClose(id: string): Promise<void> {
           console.error('[vgc] upload cookies lỗi:', e)
         }
       }
+      // Saved passwords: decrypt with THIS machine's key + upload (see password-bridge).
+      try {
+        const logins = await exportLogins(profileDataDir(id), id)
+        if (logins.length) await uploadProfilePasswords(id, logins)
+      } catch (e) {
+        console.error('[vgc] upload mật khẩu lỗi:', e)
+      }
     })
     broadcastData({ id, phase: 'done' })
   } catch (err) {
@@ -233,6 +243,8 @@ export async function stopAllAndSync(): Promise<void> {
         await uploadProfileData(id)
         const cookies = lastCookieSnapshot.get(id)
         if (cookies && cookies.length) await uploadProfileCookies(id, cookies)
+        const logins = await exportLogins(profileDataDir(id), id)
+        if (logins.length) await uploadProfilePasswords(id, logins)
         broadcastData({ id, phase: 'done' })
       } catch {
         // best-effort — don't block quit on a single failure
@@ -387,6 +399,18 @@ export async function launchProfile(
       // Plaintext cookies synced from any machine → seeded into the engine below so
       // the profile is already logged in even across macOS ⇄ Windows.
       syncedCookies = await downloadProfileCookies(id).catch(() => [])
+      // Saved passwords: merge the cloud logins into the just-synced Login Data,
+      // RE-ENCRYPTING with THIS machine's key so the local engine can read them (the
+      // synced zip's blobs were sealed with the other machine's key). Best-effort.
+      try {
+        const cloudLogins = await downloadProfilePasswords(id)
+        if (cloudLogins.length) {
+          const n = await importLogins(profileDataDir(id), id, cloudLogins)
+          if (n > 0) console.error(`[vgc-pw] merged ${n} saved password(s) for ${id}`)
+        }
+      } catch (e) {
+        console.error('[vgc-pw] import passwords lỗi:', e)
+      }
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
       broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
