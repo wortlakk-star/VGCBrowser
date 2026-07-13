@@ -37,7 +37,7 @@ import {
   isEncryptionActive
 } from './account-secret'
 import { getProfileKey, ownerForProfile } from './profile-share'
-import type { Cookie } from '../shared/types'
+import type { Cookie, SavedLogin } from '../shared/types'
 
 /** Encryption key for a profile's cloud data: a SHARED key if the profile is shared
  *  (so members decrypt it), otherwise this account's own secret. null = no key yet
@@ -437,6 +437,80 @@ export async function downloadProfileCookies(id: string): Promise<Cookie[]> {
       return Array.isArray(arr) ? arr : []
     }
     return []
+  } catch {
+    return []
+  }
+}
+
+// ── Cross-machine SAVED PASSWORDS (plaintext, engine-agnostic) ────────────────
+// Same idea as the cookie bridge: saved logins are decrypted with the SOURCE machine's
+// os_crypt key, stored account-secret-encrypted here, and re-encrypted with the TARGET
+// machine's key on open (see password-bridge.ts). This makes autofill passwords survive
+// Windows(VGC Core portable key) ⇄ macOS(system-Chrome keychain key).
+
+function passwordsObjectPath(uid: string, id: string): string {
+  return `${uid}/${id}.passwords.json`
+}
+
+/** Upload the profile's DECRYPTED saved logins (account-secret-encrypted) to the cloud. */
+export async function uploadProfilePasswords(id: string, logins: SavedLogin[]): Promise<void> {
+  if (!logins.length) return
+  const session = getCloudSession()
+  if (!session) return
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${passwordsObjectPath(ownerUid, id)}`
+  const json = JSON.stringify(logins)
+  const secret = await keyForProfile(id)
+  // Never write plaintext passwords once encryption is known to work (transient key
+  // failure would leak credentials) — keep the last encrypted copy instead.
+  if (!secret && isEncryptionActive()) {
+    throw new Error('Bỏ qua lưu mật khẩu: chưa lấy được khoá mã hoá (mạng chập chờn).')
+  }
+  if (!secret) return // pre-migration: refuse to upload plaintext passwords at all
+  const body = Buffer.from(
+    JSON.stringify({ enc: encryptWithSecret(secret, 'passwords', json) }),
+    'utf-8'
+  )
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      apikey: s.supabaseAnonKey,
+      'Content-Type': 'application/json',
+      'x-upsert': 'true'
+    },
+    body: body as unknown as BodyInit
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Upload mật khẩu lỗi HTTP ${res.status} ${detail}`)
+  }
+}
+
+/** Fetch + decrypt the profile's cloud saved logins. [] if none / not decryptable. */
+export async function downloadProfilePasswords(id: string): Promise<SavedLogin[]> {
+  const session = getCloudSession()
+  if (!session) return []
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return []
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${passwordsObjectPath(ownerUid, id)}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+  })
+  if (res.status === 404 || res.status === 400) return []
+  if (!res.ok) return []
+  try {
+    const data = (await res.json()) as { enc?: string }
+    if (!data || typeof data.enc !== 'string') return []
+    const secret = await keyForProfile(id)
+    if (!secret) return []
+    const json = decryptWithSecret(secret, 'passwords', data.enc)
+    if (!json) return []
+    const arr = JSON.parse(json) as SavedLogin[]
+    return Array.isArray(arr) ? arr : []
   } catch {
     return []
   }

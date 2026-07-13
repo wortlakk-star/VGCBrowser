@@ -81,6 +81,26 @@ export interface Fingerprint {
   doNotTrack: '0' | '1' | 'unset'
 }
 
+/** One saved website login (Chrome "Login Data" → `logins` row), with the password
+ *  DECRYPTED. Synced cross-machine as plaintext (then account-secret-encrypted in the
+ *  cloud, exactly like cookies) so passwords survive machines whose engines use a
+ *  different os_crypt key (Windows VGC Core portable key ⇄ macOS system-Chrome keychain
+ *  key). Re-encrypted with the LOCAL key when written back into a profile's Login Data. */
+export interface SavedLogin {
+  origin_url: string
+  signon_realm: string
+  password: string // DECRYPTED plaintext (never leaves the machine unencrypted)
+  action_url?: string | null
+  username_element?: string | null
+  username_value?: string | null
+  password_element?: string | null
+  scheme?: number
+  date_created?: number // Chrome epoch (µs since 1601) — kept so newer wins on merge
+  date_password_modified?: number
+  times_used?: number
+  blacklisted_by_user?: number
+}
+
 /** A browser cookie (import/export format, aligned with CDP Network.Cookie). */
 export interface Cookie {
   name: string
