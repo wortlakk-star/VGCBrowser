@@ -191,17 +191,14 @@ function buildZip(id: string): AdmZip {
 
   // ALLOWLIST approach: a Chromium user-data-dir root also holds big, auto-refetched
   // component/model downloads (TranslateKit, WasmTtsEngine, optimization_guide_*,
-  // *Cache, etc.). The actual login session lives entirely under `Default/` plus the
-  // root `Local State` file. So we sync ONLY those — robust against Chrome adding new
-  // component folders, and keeps the zip tiny (a few MB).
-  const localState = join(root, 'Local State')
-  if (existsSync(localState)) {
-    try {
-      zip.addLocalFile(localState, '', 'Local State')
-    } catch {
-      // ignore
-    }
-  }
+  // *Cache, etc.). The actual login session lives entirely under `Default/`.
+  //
+  // We deliberately DO NOT sync the root `Local State` file: it holds this machine's
+  // os_crypt `encrypted_key` (DPAPI-wrapped on Windows, Keychain on macOS) which is
+  // MACHINE-SPECIFIC. Syncing it made another machine's key overwrite the local one →
+  // the engine couldn't decrypt its own Cookies/Login Data → logged out on every reopen.
+  // Each machine keeps its own stable Local State; the portable --vgc-crypt-secret key
+  // (independent of Local State) is what makes cookies/passwords cross machines.
   const defaultDir = join(root, 'Default')
   if (existsSync(defaultDir)) walk(zip, root, defaultDir)
   return zip
@@ -352,6 +349,18 @@ export async function downloadProfileData(id: string): Promise<boolean> {
     await fs
       .rm(join(root, 'Default', 'Session Storage'), { recursive: true, force: true })
       .catch(() => {})
+  }
+  // Never let a synced zip overwrite this machine's `Local State` (machine-specific
+  // os_crypt key) — doing so churns the key and logs the profile out. New uploads no
+  // longer include it; this also strips it from any zip uploaded before this fix.
+  for (const e of zip.getEntries()) {
+    if (e.entryName.replace(/\\/g, '/') === 'Local State') {
+      try {
+        zip.deleteFile(e.entryName)
+      } catch {
+        /* ignore */
+      }
+    }
   }
   zip.extractAllTo(root, /* overwrite */ true)
   // Remember the cloud version we now hold so the next open can tell if cloud changed.

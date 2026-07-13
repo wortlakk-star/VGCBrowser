@@ -413,6 +413,222 @@ function cookiesDbPath(userDataDir: string): string {
   return join(userDataDir, 'Default', 'Network', 'Cookies')
 }
 
+// ── One-time migration: OLD machine key → portable key ────────────────────────
+// Before the --vgc-crypt-secret switch fix, the engine silently used its per-machine
+// DPAPI key (AES-256-GCM, tag "v10"). After the fix it uses the portable key
+// (AES-128-CBC). So existing cookies/passwords can't be read by the now-portable engine
+// → mass re-login. This migrates them: decrypt with the OLD machine key (auth-tag-
+// verified GCM = reliably a machine-key blob), then re-seal for the portable engine —
+// cookies as PLAINTEXT (empty encrypted_value, engine re-seals on save), passwords by
+// re-encrypting to portable CBC. Windows only (macOS runs stock Chrome/keychain). It is
+// self-terminating (once migrated, GCM decrypt returns null → no-op) and fail-safe.
+
+/** AES-256-GCM v10 decrypt (the Windows machine DPAPI key format). A non-null result
+ *  means the auth tag verified → the blob was written by the machine key. */
+function decryptV10Gcm(blob: Buffer, key: Buffer): Buffer | null {
+  try {
+    if (blob.length < 3 + 12 + 16 || !blob.subarray(0, 3).equals(V10)) return null
+    const nonce = blob.subarray(3, 15)
+    const tag = blob.subarray(blob.length - 16)
+    const ct = blob.subarray(15, blob.length - 16)
+    const d = createDecipheriv('aes-256-gcm', key, nonce)
+    d.setAuthTag(tag)
+    return Buffer.concat([d.update(ct), d.final()])
+  } catch {
+    return null
+  }
+}
+
+// Per-profile Windows machine os_crypt key (AES-256) from Local State via DPAPI. Cached.
+const winMachineKeyCache = new Map<string, Buffer | null>()
+function windowsMachineKey(userDataDir: string): Buffer | null {
+  if (process.platform !== 'win32') return null
+  if (winMachineKeyCache.has(userDataDir)) return winMachineKeyCache.get(userDataDir) ?? null
+  let key: Buffer | null = null
+  try {
+    const ls = join(userDataDir, 'Local State')
+    if (existsSync(ls)) {
+      const j = JSON.parse(readFileSync(ls, 'utf-8')) as { os_crypt?: { encrypted_key?: string } }
+      const b64 = j.os_crypt?.encrypted_key
+      if (b64) {
+        const raw = Buffer.from(b64, 'base64')
+        if (raw.subarray(0, 5).toString('latin1') === 'DPAPI') {
+          const dpapiB64 = raw.subarray(5).toString('base64')
+          const ps = `[Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('${dpapiB64}'),$null,'CurrentUser'))`
+          const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+            encoding: 'utf8',
+            timeout: 10000
+          }).trim()
+          const k = Buffer.from(out, 'base64')
+          if (k.length === 32) key = k
+        }
+      }
+    }
+  } catch {
+    key = null
+  }
+  winMachineKeyCache.set(userDataDir, key)
+  return key
+}
+
+/** Re-seal machine-key cookies as plaintext so the portable-key engine keeps the session. */
+export async function migrateCookiesToPortable(userDataDir: string, id: string): Promise<number> {
+  if (process.platform !== 'win32') return 0
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Sql = (await getSQL()) as any
+  if (!Sql) return 0
+  const ck = cookiesDbPath(userDataDir)
+  if (!existsSync(ck)) return 0
+  const mkey = windowsMachineKey(userDataDir)
+  if (!mkey) return 0
+  try {
+    const j = ck + '-journal'
+    if (existsSync(j) && statSync(j).size > 0) return 0
+  } catch {
+    /* ignore */
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null
+  try {
+    db = new Sql.Database(readFileSync(ck))
+    const res = db.exec('SELECT rowid, host_key, encrypted_value FROM cookies WHERE length(encrypted_value)>30')
+    if (!res.length) {
+      db.close()
+      return 0
+    }
+    let n = 0
+    db.exec('BEGIN')
+    try {
+      for (const row of res[0].values as unknown[][]) {
+        const rowid = row[0]
+        const host = String(row[1] ?? '')
+        const pt = decryptV10Gcm(Buffer.from(row[2] as Uint8Array), mkey)
+        if (!pt) continue // not a machine-key blob (already portable / not ours)
+        const sha = createHash('sha256').update(host).digest()
+        const value =
+          pt.length >= 32 && pt.subarray(0, 32).equals(sha) ? pt.subarray(32).toString('utf8') : pt.toString('utf8')
+        db.run('UPDATE cookies SET encrypted_value=$e, value=$v WHERE rowid=$r', {
+          $e: new Uint8Array(0),
+          $v: value,
+          $r: rowid
+        })
+        n++
+      }
+      db.exec('COMMIT')
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw e
+    }
+    if (n === 0) {
+      db.close()
+      return 0
+    }
+    const integ = db.exec('PRAGMA integrity_check')
+    if (!(integ.length && String(integ[0].values[0][0]) === 'ok')) {
+      db.close()
+      return 0
+    }
+    const out = Buffer.from(db.export() as Uint8Array)
+    db.close()
+    db = null
+    const tmp = ck + '.vgcnew'
+    writeFileSync(tmp, out)
+    renameSync(tmp, ck)
+    safeRm(ck + '-wal')
+    safeRm(ck + '-shm')
+    safeRm(ck + '-journal')
+    return n
+  } catch (e) {
+    console.error('[vgc-pw] migrateCookiesToPortable failed:', e)
+    try {
+      db?.close()
+    } catch {
+      /* ignore */
+    }
+    return 0
+  }
+}
+
+/** Re-encrypt machine-key saved passwords to the portable key so autofill survives. */
+export async function migrateLoginsToPortable(userDataDir: string, id: string): Promise<number> {
+  if (process.platform !== 'win32') return 0
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Sql = (await getSQL()) as any
+  if (!Sql) return 0
+  const ld = loginDataPath(userDataDir)
+  if (!existsSync(ld)) return 0
+  const portable = await localKey(id)
+  const mkey = windowsMachineKey(userDataDir)
+  if (!portable || !mkey) return 0
+  try {
+    const j = ld + '-journal'
+    if (existsSync(j) && statSync(j).size > 0) return 0
+  } catch {
+    /* ignore */
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null
+  try {
+    db = new Sql.Database(readFileSync(ld))
+    const res = db.exec('SELECT rowid, password_value FROM logins WHERE length(password_value)>30')
+    if (!res.length) {
+      db.close()
+      return 0
+    }
+    let n = 0
+    db.exec('BEGIN')
+    try {
+      for (const row of res[0].values as unknown[][]) {
+        const rowid = row[0]
+        const pt = decryptV10Gcm(Buffer.from(row[1] as Uint8Array), mkey)
+        if (!pt) continue
+        const reenc = encryptV10(pt.toString('utf8'), portable)
+        db.run('UPDATE logins SET password_value=$p WHERE rowid=$r', { $p: reenc, $r: rowid })
+        n++
+      }
+      db.exec('COMMIT')
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw e
+    }
+    if (n === 0) {
+      db.close()
+      return 0
+    }
+    const integ = db.exec('PRAGMA integrity_check')
+    if (!(integ.length && String(integ[0].values[0][0]) === 'ok')) {
+      db.close()
+      return 0
+    }
+    const out = Buffer.from(db.export() as Uint8Array)
+    db.close()
+    db = null
+    const tmp = ld + '.vgcnew'
+    writeFileSync(tmp, out)
+    renameSync(tmp, ld)
+    safeRm(ld + '-wal')
+    safeRm(ld + '-shm')
+    safeRm(ld + '-journal')
+    return n
+  } catch (e) {
+    console.error('[vgc-pw] migrateLoginsToPortable failed:', e)
+    try {
+      db?.close()
+    } catch {
+      /* ignore */
+    }
+    return 0
+  }
+}
+
 /** Read + DECRYPT the profile's cookies with the LOCAL key. [] on any problem. */
 export async function exportCookies(userDataDir: string, id: string): Promise<SavedCookie[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -39,7 +39,14 @@ import {
   downloadProfileCookiesDb,
   uploadProfileCookiesDb
 } from './cloud-data'
-import { exportLogins, importLogins, exportCookies, importCookies } from './password-bridge'
+import {
+  exportLogins,
+  importLogins,
+  exportCookies,
+  importCookies,
+  migrateCookiesToPortable,
+  migrateLoginsToPortable
+} from './password-bridge'
 import { getCloudSession } from './session'
 import { getAccountSecret, isEncryptionActive } from './account-secret'
 
@@ -408,6 +415,17 @@ export async function launchProfile(
       // SAME profile finishes before we extract the cloud zip over its dir.
       const got = await withDataLock(id, async () => {
         const g = await downloadProfileData(id)
+        // One-time key migration: profiles opened before the --vgc-crypt-secret switch fix
+        // have cookies/passwords sealed with the OLD per-machine DPAPI key; the now-portable
+        // engine couldn't read them (= mass re-login). Re-seal them for the portable key so
+        // the session survives. Self-terminating + fail-safe. Runs before the cloud merge.
+        try {
+          const mc = await migrateCookiesToPortable(profileDataDir(id), id)
+          const ml = await migrateLoginsToPortable(profileDataDir(id), id)
+          if (mc + ml > 0) console.error(`[vgc-pw] migrated ${mc} cookie(s) + ${ml} password(s) to portable key`)
+        } catch (e) {
+          console.error('[vgc-pw] migrate lỗi:', e)
+        }
         // Saved passwords: merge the cloud logins into the just-synced Login Data,
         // RE-ENCRYPTING with THIS machine's key so the local engine can read them (the
         // synced zip's blobs were sealed with the other machine's key). Held under the
@@ -607,7 +625,18 @@ export async function launchProfile(
     throw new Error(msg)
   }
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
-  if (cryptSecret) childEnv.VGC_CRYPT_SECRET = cryptSecret
+  // CRITICAL: the VGC Core engine reads the portable os_crypt key ONLY from the
+  // --vgc-crypt-secret COMMAND-LINE switch (components/os_crypt/.../dpapi_key_provider.cc
+  // + keychain_password_mac.mm both use GetSwitchValueASCII). It does NOT read any env
+  // var. Passing it via the environment alone was a silent NO-OP: the engine fell back to
+  // its per-machine DPAPI/Keychain key, so every cookie + saved password was machine-
+  // bound → after a "Local State" sync or on another machine the key didn't match →
+  // undecryptable → logged out on every reopen. So pass it as the switch. (Keep the env
+  // too for any future engine that reads it.)
+  if (cryptSecret) {
+    args.push(`--vgc-crypt-secret=${cryptSecret}`)
+    childEnv.VGC_CRYPT_SECRET = cryptSecret
+  }
   // Kill Chromium's yellow "Google API keys are missing" infobar that shows on EVERY
   // page — it's clutter AND an antidetect tell (real Chrome never shows it). Chromium
   // reads these keys from the environment at runtime; any non-default value makes
