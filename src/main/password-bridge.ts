@@ -22,7 +22,7 @@
 
 import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync } from 'crypto'
 import { execFileSync } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, renameSync, rmSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import type { SavedLogin } from '../shared/types'
 import { getAccountSecret } from './account-secret'
@@ -56,6 +56,10 @@ async function getSQL(): Promise<unknown> {
 const V10 = Buffer.from('v10', 'latin1')
 const FIXED_IV = Buffer.alloc(16, 0x20) // 16 spaces — the os_crypt v10 AES-128-CBC IV
 
+// macOS keychain-derived key, resolved at most once per process (undefined = untried,
+// null = unavailable). Machine-wide: stock Chrome uses one key for all profiles.
+let macKeyCache: Buffer | null | undefined
+
 function loginDataPath(userDataDir: string): string {
   return join(userDataDir, 'Default', 'Login Data')
 }
@@ -77,32 +81,32 @@ async function localKey(id: string): Promise<Buffer | null> {
       return pbkdf2Sync(secretStr, 'saltysalt', 1003, 16, 'sha1')
     }
     if (process.platform === 'darwin') {
-      // System Google Chrome → the "Chrome Safe Storage" keychain password.
+      // System Google Chrome → the "Chrome Safe Storage" keychain password. It's the
+      // SAME key for every profile on this Mac (stock Chrome knows nothing about
+      // per-profile keys), so read + cache it once per process. The keychain item's ACL
+      // trusts only Chrome, so the FIRST read shows a macOS prompt — give the user time
+      // to click "Always Allow" (90s) rather than SIGKILLing it with a short timeout.
+      if (macKeyCache !== undefined) return macKeyCache
       let pw = ''
-      for (const acctName of ['Chrome', 'Google Chrome']) {
-        try {
-          pw = execFileSync(
-            'security',
-            ['find-generic-password', '-w', '-s', 'Chrome Safe Storage', '-a', acctName],
-            { encoding: 'utf8', timeout: 5000 }
-          ).trim()
-          if (pw) break
-        } catch {
-          /* try next account name */
-        }
-      }
-      if (!pw) {
+      try {
+        pw = execFileSync(
+          'security',
+          ['find-generic-password', '-w', '-s', 'Chrome Safe Storage', '-a', 'Chrome'],
+          { encoding: 'utf8', timeout: 90000 }
+        ).trim()
+      } catch {
         try {
           pw = execFileSync('security', ['find-generic-password', '-w', '-s', 'Chrome Safe Storage'], {
             encoding: 'utf8',
-            timeout: 5000
+            timeout: 90000
           }).trim()
         } catch {
-          return null
+          pw = ''
         }
       }
-      if (!pw) return null
-      return pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1')
+      macKeyCache = pw ? pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1') : null
+      if (!macKeyCache) console.error('[vgc-pw] macOS keychain key unavailable — grant "Always Allow" once')
+      return macKeyCache
     }
     return null // Linux: system Chrome text/basic-storage varies — bridge off for now.
   } catch {
@@ -226,6 +230,16 @@ export async function importLogins(
   const key = await localKey(id)
   if (!key) return 0
 
+  // A leftover hot rollback journal means an interrupted transaction that a real SQLite
+  // open would ROLL BACK; sql.js reads only the main file and can't, so skip this round
+  // (no-op) rather than persist a half-state. It merges cleanly on the next open.
+  try {
+    const j = ld + '-journal'
+    if (existsSync(j) && statSync(j).size > 0) return 0
+  } catch {
+    /* ignore */
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
   try {
@@ -255,10 +269,13 @@ export async function importLogins(
       'times_used'
     ].filter((c) => cols.has(c))
 
+    // NULL-safe match: Chrome may store NULL (not '') in the element columns, and the
+    // UNIQUE index treats NULL as distinct — a plain `=''` would miss it and we'd INSERT
+    // a DUPLICATE instead of updating. IFNULL(...,'') normalises both sides.
     const findStmt = db.prepare(
       `SELECT id, date_password_modified, password_value FROM logins
-       WHERE origin_url=$o AND username_element=$ue AND username_value=$uv
-         AND password_element=$pe AND signon_realm=$sr`
+       WHERE origin_url=$o AND IFNULL(username_element,'')=$ue AND IFNULL(username_value,'')=$uv
+         AND IFNULL(password_element,'')=$pe AND signon_realm=$sr`
     )
     const insSql = `INSERT OR IGNORE INTO logins (${wanted.join(',')}) VALUES (${wanted
       .map((c) => '$' + c)
@@ -295,10 +312,12 @@ export async function importLogins(
               : false
           const incomingNewer = (r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0)
           if (!localReadable || incomingNewer) {
-            const newDate = Math.max(existing.date_password_modified ?? 0, r.date_password_modified ?? 0)
+            // We write the INCOMING content, so stamp it with the INCOMING record's own
+            // date (never Math.max: reusing a newer FOREIGN date on incoming content would
+            // let stale content beat a genuinely-newer copy elsewhere on the next sync).
             db.run('UPDATE logins SET password_value=$pv, date_password_modified=$d WHERE id=$id', {
               $pv: pv,
-              $d: newDate,
+              $d: r.date_password_modified ?? 0,
               $id: existing.id
             })
             changed++
@@ -321,7 +340,9 @@ export async function importLogins(
           const params: Record<string, unknown> = {}
           for (const c of wanted) params['$' + c] = val[c]
           db.run(insSql, params)
-          changed++
+          // INSERT OR IGNORE may have skipped on a UNIQUE clash — only count real writes
+          // so `changed===0` can correctly avoid an unnecessary full-file rewrite.
+          if (db.getRowsModified() > 0) changed++
         }
       }
       db.exec('COMMIT')

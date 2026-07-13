@@ -395,22 +395,27 @@ export async function launchProfile(
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
       // Held under the per-profile data lock so a still-running close-upload of the
       // SAME profile finishes before we extract the cloud zip over its dir.
-      const got = await withDataLock(id, () => downloadProfileData(id))
+      const got = await withDataLock(id, async () => {
+        const g = await downloadProfileData(id)
+        // Saved passwords: merge the cloud logins into the just-synced Login Data,
+        // RE-ENCRYPTING with THIS machine's key so the local engine can read them (the
+        // synced zip's blobs were sealed with the other machine's key). Held under the
+        // SAME data lock as the extract so a concurrent reopen can't race the atomic
+        // Login Data rename. Best-effort — never blocks the open.
+        try {
+          const cloudLogins = await downloadProfilePasswords(id)
+          if (cloudLogins.length) {
+            const n = await importLogins(profileDataDir(id), id, cloudLogins)
+            if (n > 0) console.error(`[vgc-pw] merged ${n} saved password(s) for ${id}`)
+          }
+        } catch (e) {
+          console.error('[vgc-pw] import passwords lỗi:', e)
+        }
+        return g
+      })
       // Plaintext cookies synced from any machine → seeded into the engine below so
       // the profile is already logged in even across macOS ⇄ Windows.
       syncedCookies = await downloadProfileCookies(id).catch(() => [])
-      // Saved passwords: merge the cloud logins into the just-synced Login Data,
-      // RE-ENCRYPTING with THIS machine's key so the local engine can read them (the
-      // synced zip's blobs were sealed with the other machine's key). Best-effort.
-      try {
-        const cloudLogins = await downloadProfilePasswords(id)
-        if (cloudLogins.length) {
-          const n = await importLogins(profileDataDir(id), id, cloudLogins)
-          if (n > 0) console.error(`[vgc-pw] merged ${n} saved password(s) for ${id}`)
-        }
-      } catch (e) {
-        console.error('[vgc-pw] import passwords lỗi:', e)
-      }
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
       broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
