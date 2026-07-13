@@ -20,7 +20,7 @@
 // integrity-checked in memory, then written back ATOMICALLY (temp file + rename), so the
 // live Login Data is never left half-written. A broken sql.js load just disables it.
 
-import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync } from 'crypto'
+import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes } from 'crypto'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'fs'
 import { join, dirname } from 'path'
@@ -134,6 +134,41 @@ function encryptV10(plain: string, key: Buffer): Buffer {
   return Buffer.concat([V10, c.update(Buffer.from(plain, 'utf8')), c.final()])
 }
 
+// AES-256-GCM v10 encrypt (the Windows machine-key format). "v10" + nonce[12] + ct + tag[16].
+function encryptV10Gcm(plain: string, key: Buffer): Buffer {
+  const nonce = randomBytes(12)
+  const c = createCipheriv('aes-256-gcm', key, nonce)
+  const ct = Buffer.concat([c.update(Buffer.from(plain, 'utf8')), c.final()])
+  return Buffer.concat([V10, nonce, ct, c.getAuthTag()])
+}
+
+// ── The key the ENGINE actually uses (Option B: machine key, engine-agnostic) ─
+// The VGC Core engine does NOT apply the portable --vgc-crypt-secret key (verified: it
+// keeps writing the per-machine DPAPI key). So the bridge decrypts/encrypts with the SAME
+// per-machine key the engine uses — Windows: DPAPI AES-256-GCM (from Local State); macOS:
+// system-Chrome "Chrome Safe Storage" keychain AES-128-CBC. That makes each machine keep
+// its own stable session AND lets the bridge translate cookies/passwords across machines
+// (decrypt local → plaintext cloud → re-encrypt with the TARGET machine's key), no engine
+// rebuild needed.
+type EngKey = { key: Buffer; gcm: boolean }
+async function engineKey(userDataDir: string, id: string): Promise<EngKey | null> {
+  if (process.platform === 'win32') {
+    const k = windowsMachineKey(userDataDir)
+    return k ? { key: k, gcm: true } : null
+  }
+  if (process.platform === 'darwin') {
+    const k = await localKey(id) // macOS localKey = the keychain (machine) key, AES-128-CBC
+    return k ? { key: k, gcm: false } : null
+  }
+  return null
+}
+function decryptEngine(blob: Buffer, ek: EngKey): Buffer | null {
+  return ek.gcm ? decryptV10Gcm(blob, ek.key) : decryptV10Bytes(blob, ek.key)
+}
+function encryptEngine(plain: string, ek: EngKey): Buffer {
+  return ek.gcm ? encryptV10Gcm(plain, ek.key) : encryptV10(plain, ek.key)
+}
+
 function safeRm(p: string): void {
   try {
     rmSync(p, { force: true })
@@ -167,8 +202,8 @@ export async function exportLogins(userDataDir: string, id: string): Promise<Sav
   if (!Sql) return []
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return []
-  const key = await localKey(id)
-  if (!key) return []
+  const ek = await engineKey(userDataDir, id)
+  if (!ek) return []
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
@@ -182,7 +217,8 @@ export async function exportLogins(userDataDir: string, id: string): Promise<Sav
       for (const row of res[0].values as unknown[][]) {
         const pv = row[idx('password_value')] as Uint8Array | null
         if (!pv || !pv.length) continue // blacklist "never save" rows have no password
-        const plain = decryptV10(Buffer.from(pv), key)
+        const pb = decryptEngine(Buffer.from(pv), ek)
+        const plain = pb === null ? null : pb.toString('utf8')
         if (plain == null || plain === '') continue // couldn't decrypt / empty → skip
         out.push({
           origin_url: String(row[idx('origin_url')] ?? ''),
@@ -231,8 +267,8 @@ export async function importLogins(
   if (!Sql) return 0
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return 0 // no schema to merge into (engine makes it on first run)
-  const key = await localKey(id)
-  if (!key) return 0
+  const ek = await engineKey(userDataDir, id)
+  if (!ek) return 0
 
   // A leftover hot rollback journal means an interrupted transaction that a real SQLite
   // open would ROLL BACK; sql.js reads only the main file and can't, so skip this round
@@ -293,7 +329,7 @@ export async function importLogins(
         const ue = r.username_element ?? ''
         const pe = r.password_element ?? ''
         const uv = r.username_value ?? ''
-        const pv = encryptV10(r.password, key)
+        const pv = encryptEngine(r.password, ek)
 
         findStmt.bind({ $o: r.origin_url, $ue: ue, $uv: uv, $pe: pe, $sr: r.signon_realm })
         type ExistingRow = {
@@ -312,7 +348,7 @@ export async function importLogins(
           // blobs the wholesale-overwrite left undecryptable. Never regress the timestamp.
           const localReadable =
             existing.password_value && existing.password_value.length
-              ? decryptV10(Buffer.from(existing.password_value), key) !== null
+              ? decryptEngine(Buffer.from(existing.password_value), ek) !== null
               : false
           const incomingNewer = (r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0)
           if (!localReadable || incomingNewer) {
@@ -636,8 +672,8 @@ export async function exportCookies(userDataDir: string, id: string): Promise<Sa
   if (!Sql) return []
   const ck = cookiesDbPath(userDataDir)
   if (!existsSync(ck)) return []
-  const key = await localKey(id)
-  if (!key) return []
+  const ek = await engineKey(userDataDir, id)
+  if (!ek) return []
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
