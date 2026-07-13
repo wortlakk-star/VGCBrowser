@@ -17,6 +17,18 @@ const EVOMI_PRODUCTS: Array<[string, string]> = [
   ['mp', 'Mobile']
 ]
 
+// Evomi sticky lifetimes (value in s/m/h → nhãn). Max is 24h (Evomi caps sticky at
+// 1440 minutes); to hold an IP longer, use the "Giữ lâu nhất" (hard) session instead.
+const EVOMI_LIFETIMES: Array<[string, string]> = [
+  ['', 'Mặc định (30 phút)'],
+  ['10m', '10 phút'],
+  ['30m', '30 phút'],
+  ['1h', '1 giờ'],
+  ['6h', '6 giờ'],
+  ['12h', '12 giờ'],
+  ['24h', '24 giờ (tối đa)']
+]
+
 const genId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
 
@@ -160,6 +172,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [genCountry, setGenCountry] = useState('')
   const [genProtocol, setGenProtocol] = useState<'http' | 'socks5'>('http')
   const [genSticky, setGenSticky] = useState(true)
+  const [genHard, setGenHard] = useState(false) // Evomi "hard" session (keep IP longest)
   const [genLifetime, setGenLifetime] = useState('24h')
   const [genCount, setGenCount] = useState(5)
   const [genLabel, setGenLabel] = useState('')
@@ -267,7 +280,8 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         country: genCountry,
         protocol: genProtocol,
         sticky: genSticky,
-        lifetime: genSticky ? genLifetime : undefined,
+        hard: genProvider === 'evomi' ? genHard : undefined,
+        lifetime: genSticky && !genHard ? genLifetime : undefined,
         label: genLabel.trim() || undefined
       })
       await window.vgc.saveManyProxies(created)
@@ -470,8 +484,15 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                 className="group-select"
                 value={genProvider}
                 onChange={(e) => {
-                  setGenProvider(e.target.value as ProxyProviderId)
+                  const prov = e.target.value as ProxyProviderId
+                  setGenProvider(prov)
                   setBalance(null)
+                  if (prov === 'evomi') {
+                    // Evomi caps sticky at 24h — clamp an iProyal-only value (e.g. 7 ngày).
+                    if (!EVOMI_LIFETIMES.some(([v]) => v === genLifetime)) setGenLifetime('24h')
+                  } else {
+                    setGenHard(false) // "hard" session is Evomi-only
+                  }
                 }}
                 title="Chọn nhà cung cấp proxy"
               >
@@ -549,13 +570,20 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               <span style={lbl}>Phiên</span>
               <select
                 className="group-select"
-                value={genSticky ? 'sticky' : 'rotating'}
-                onChange={(e) => setGenSticky(e.target.value === 'sticky')}
+                value={genHard ? 'hard' : genSticky ? 'sticky' : 'rotating'}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setGenSticky(v !== 'rotating')
+                  setGenHard(v === 'hard')
+                }}
               >
-                <option value="sticky">Sticky (giữ IP)</option>
-                <option value="rotating">Xoay (đổi IP)</option>
+                <option value="rotating">Xoay (đổi IP mỗi lần)</option>
+                <option value="sticky">Sticky (giữ IP theo thời gian)</option>
+                {genProvider === 'evomi' && (
+                  <option value="hard">Giữ lâu nhất (đến khi IP rớt)</option>
+                )}
               </select>
-              {genSticky && (
+              {genSticky && !genHard && (
                 <>
                   <span style={lbl}>Giữ IP</span>
                   <select
@@ -563,13 +591,18 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                     value={genLifetime}
                     onChange={(e) => setGenLifetime(e.target.value)}
                   >
-                    {IP_LIFETIMES.map(([val, name]) => (
+                    {(genProvider === 'evomi' ? EVOMI_LIFETIMES : IP_LIFETIMES).map(([val, name]) => (
                       <option key={val} value={val}>
                         {name}
                       </option>
                     ))}
                   </select>
                 </>
+              )}
+              {genProvider === 'evomi' && genHard && (
+                <span style={{ ...lbl, color: 'var(--green)' }}>
+                  giữ IP đến khi rớt (lâu nhất)
+                </span>
               )}
               <span style={lbl}>Số lượng</span>
               <input

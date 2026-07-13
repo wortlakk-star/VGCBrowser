@@ -164,8 +164,11 @@ export interface GenerateProxiesOpts {
   // Which provider to generate from. Default 'iproyal' (back-compat with old callers).
   provider?: ProxyProviderId
   // Evomi product code: 'rpc' (Core Residential) | 'rp' (Premium Residential) |
-  // 'mp' (Mobile) | 'dcp' (Datacenter). Ignored by other providers.
+  // 'mp' (Mobile). Ignored by other providers.
   product?: string
+  // Evomi "hard" session: keep the same IP as long as it stays connected (longer than
+  // the 24h sticky cap). Overrides sticky/lifetime. Evomi only.
+  hard?: boolean
 }
 
 /** A reusable proxy saved in the Proxy Manager. */

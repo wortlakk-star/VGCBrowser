@@ -302,9 +302,12 @@ export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<S
   qs.set('format', '2') // host:port:user:pass
   qs.set('prepend_protocol', 'false')
   if (cc) qs.set('countries', cc)
-  // Sticky ⇒ keep the same IP for `lifetime` minutes. Rotating ⇒ omit `session` so
-  // Evomi hands out a new IP each request.
-  if (opts.sticky) {
+  // Hard ⇒ keep the IP as long as it stays connected (the longest Evomi can hold an IP;
+  // no lifetime, exceeds the 24h sticky cap). Sticky ⇒ same IP for `lifetime` minutes
+  // (max 1440 = 24h). Rotating ⇒ omit `session` so Evomi hands out a new IP each request.
+  if (opts.hard) {
+    qs.set('session', 'hard')
+  } else if (opts.sticky) {
     qs.set('session', 'sticky')
     const mins = evomiLifetimeMinutes(opts.lifetime)
     if (mins) qs.set('lifetime', String(mins))
