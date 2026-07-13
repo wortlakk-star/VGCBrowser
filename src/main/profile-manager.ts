@@ -29,17 +29,8 @@ import { getSettings } from './settings'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
 import { seedFromString } from './fingerprint-script'
-import {
-  downloadProfileData,
-  uploadProfileData,
-  downloadProfileCookies,
-  uploadProfileCookies,
-  downloadProfilePasswords,
-  uploadProfilePasswords,
-  downloadProfileCookiesDb,
-  uploadProfileCookiesDb
-} from './cloud-data'
-import { exportLogins, importLogins, exportCookies, importCookies } from './password-bridge'
+import { downloadProfileData, uploadProfileData, downloadProfileCookies } from './cloud-data'
+import { dbg } from './dbg'
 import { getCloudSession } from './session'
 import { getAccountSecret, isEncryptionActive } from './account-secret'
 
@@ -201,32 +192,10 @@ async function syncDataOnClose(id: string): Promise<void> {
       // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
       await new Promise((r) => setTimeout(r, 1200))
       broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
+      // Uploads Local Storage / IndexedDB / Preferences etc. — NOT Cookies/Login Data
+      // (excluded via SKIP_FILES; those stay per-machine so the session never churns).
       await uploadProfileData(id)
-      // Cross-machine login: upload the decrypted cookies separately (plaintext) so
-      // they survive the trip to a different-OS machine where the encrypted Cookies
-      // DB can't be read.
-      const cookies = lastCookieSnapshot.get(id)
-      if (cookies && cookies.length) {
-        try {
-          await uploadProfileCookies(id, cookies)
-        } catch (e) {
-          console.error('[vgc] upload cookies lỗi:', e)
-        }
-      }
-      // Saved passwords + session cookies: decrypt with THIS machine's key + upload so
-      // the other machine can re-seal them with ITS key (see password-bridge).
-      try {
-        const logins = await exportLogins(profileDataDir(id), id)
-        if (logins.length) await uploadProfilePasswords(id, logins)
-      } catch (e) {
-        console.error('[vgc] upload mật khẩu lỗi:', e)
-      }
-      try {
-        const cks = await exportCookies(profileDataDir(id), id)
-        if (cks.length) await uploadProfileCookiesDb(id, cks)
-      } catch (e) {
-        console.error('[vgc] upload cookie-db lỗi:', e)
-      }
+      dbg(`[close ${id}] uploaded zip (Cookies/Login Data kept LOCAL, bridge OFF)`)
     })
     broadcastData({ id, phase: 'done' })
   } catch (err) {
@@ -249,13 +218,7 @@ export async function stopAllAndSync(): Promise<void> {
     ids.map(async (id) => {
       try {
         broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud trước khi thoát…' })
-        await uploadProfileData(id)
-        const cookies = lastCookieSnapshot.get(id)
-        if (cookies && cookies.length) await uploadProfileCookies(id, cookies)
-        const logins = await exportLogins(profileDataDir(id), id)
-        if (logins.length) await uploadProfilePasswords(id, logins)
-        const cks = await exportCookies(profileDataDir(id), id)
-        if (cks.length) await uploadProfileCookiesDb(id, cks)
+        await uploadProfileData(id) // Cookies/Login Data excluded (kept local)
         broadcastData({ id, phase: 'done' })
       } catch {
         // best-effort — don't block quit on a single failure
@@ -406,38 +369,12 @@ export async function launchProfile(
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
       // Held under the per-profile data lock so a still-running close-upload of the
       // SAME profile finishes before we extract the cloud zip over its dir.
-      const got = await withDataLock(id, async () => {
-        const g = await downloadProfileData(id)
-        // Saved passwords: merge the cloud logins into the just-synced Login Data,
-        // RE-ENCRYPTING with THIS machine's key so the local engine can read them (the
-        // synced zip's blobs were sealed with the other machine's key). Held under the
-        // SAME data lock as the extract so a concurrent reopen can't race the atomic
-        // Login Data rename. Best-effort — never blocks the open.
-        try {
-          const cloudLogins = await downloadProfilePasswords(id)
-          if (cloudLogins.length) {
-            const n = await importLogins(profileDataDir(id), id, cloudLogins)
-            if (n > 0) console.error(`[vgc-pw] merged ${n} saved password(s) for ${id}`)
-          }
-        } catch (e) {
-          console.error('[vgc-pw] import passwords lỗi:', e)
-        }
-        // Login SESSION cookies: same cross-machine problem (native mode has no CDP
-        // cookie bridge). Merge cloud cookies into the Cookies DB as plaintext so the
-        // engine re-seals them with its own key → stays logged in across machines.
-        try {
-          const cloudCookies = await downloadProfileCookiesDb(id)
-          if (cloudCookies.length) {
-            const n = await importCookies(profileDataDir(id), id, cloudCookies)
-            if (n > 0) console.error(`[vgc-pw] merged ${n} cookie(s) for ${id}`)
-          }
-        } catch (e) {
-          console.error('[vgc-pw] import cookies lỗi:', e)
-        }
-        return g
-      })
-      // Plaintext cookies synced from any machine → seeded into the engine below so
-      // the profile is already logged in even across macOS ⇄ Windows.
+      // SESSION STORES (Cookies / Login Data / Local State) are kept PURELY LOCAL —
+      // they're sealed with a per-machine key, so the cross-machine bridge is disabled
+      // here (it churned the session). downloadProfileData preserves the local copies.
+      const got = await withDataLock(id, () => downloadProfileData(id))
+      dbg(`[open ${id}] downloaded=${got}; session stores kept LOCAL (bridge OFF)`)
+      // Legacy CDP cookie seed — only used in CDP mode; native mode ignores it.
       syncedCookies = await downloadProfileCookies(id).catch(() => [])
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
@@ -619,6 +556,7 @@ export async function launchProfile(
     args.push(`--vgc-crypt-secret=${cryptSecret}`)
     childEnv.VGC_CRYPT_SECRET = cryptSecret
   }
+  dbg(`[launch ${id}] switch=${cryptSecret ? 'SET' : 'EMPTY'} cloudSession=${!!getCloudSession()}`)
   // Kill Chromium's yellow "Google API keys are missing" infobar that shows on EVERY
   // page — it's clutter AND an antidetect tell (real Chrome never shows it). Chromium
   // reads these keys from the environment at runtime; any non-default value makes

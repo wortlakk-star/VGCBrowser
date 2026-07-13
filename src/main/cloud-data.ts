@@ -93,7 +93,21 @@ const SKIP_DIRS = new Set<string>([
 // Session-restore FILES are intentionally NOT skipped anymore (see the 'Sessions'
 // note above): native mode needs them synced to reopen tabs cross-machine, and CDP
 // mode deletes them post-download so there's no double-restore. Empty = skip nothing.
-const SKIP_FILES = new Set<string>([])
+// The os_crypt-encrypted stores (Cookies, Login Data) are sealed with a PER-MACHINE key
+// the other machine can't read — syncing them just churns the key and logs the user out.
+// Keep them PURELY LOCAL (each machine keeps its own stable session); Local State (the key
+// itself) was already dropped from buildZip. This is the reliable baseline; cross-machine
+// cookie/password transfer is handled separately.
+const SKIP_FILES = new Set<string>([
+  'Cookies',
+  'Cookies-journal',
+  'Cookies-wal',
+  'Cookies-shm',
+  'Login Data',
+  'Login Data-journal',
+  'Login Data-wal',
+  'Login Data For Account'
+])
 
 function shouldSkipDir(name: string): boolean {
   // any cache-like folder + the explicit list above
