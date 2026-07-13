@@ -16,6 +16,7 @@ import { app } from 'electron'
 import {
   promises as fs,
   existsSync,
+  statSync,
   readdirSync,
   readFileSync,
   writeFileSync,
@@ -350,15 +351,32 @@ export async function downloadProfileData(id: string): Promise<boolean> {
       .rm(join(root, 'Default', 'Session Storage'), { recursive: true, force: true })
       .catch(() => {})
   }
-  // Never let a synced zip overwrite this machine's `Local State` (machine-specific
-  // os_crypt key) — doing so churns the key and logs the profile out. New uploads no
-  // longer include it; this also strips it from any zip uploaded before this fix.
-  for (const e of zip.getEntries()) {
-    if (e.entryName.replace(/\\/g, '/') === 'Local State') {
+  // Never let a synced (foreign-machine) zip overwrite THIS machine's own os_crypt-bound
+  // session files — `Local State` (the machine's os_crypt key), the Cookies DB, and Login
+  // Data. Overwriting them with another machine's copy (sealed with a DIFFERENT key) makes
+  // the engine unable to decrypt them → logged out on every reopen. Each machine keeps its
+  // own; cross-machine transfer happens through the plaintext bridge (password-bridge.ts)
+  // which re-keys per machine. Only preserve when a non-empty local copy already exists (a
+  // fresh machine still bootstraps from the cloud).
+  const preserveBases = ['Local State', 'Default/Network/Cookies', 'Default/Cookies', 'Default/Login Data'].filter(
+    (b) => {
       try {
-        zip.deleteFile(e.entryName)
+        const lp = join(root, ...b.split('/'))
+        return existsSync(lp) && statSync(lp).size > 0
       } catch {
-        /* ignore */
+        return false
+      }
+    }
+  )
+  if (preserveBases.length) {
+    for (const e of zip.getEntries()) {
+      const rel = e.entryName.replace(/\\/g, '/')
+      if (preserveBases.some((b) => rel === b || rel.startsWith(b + '-') || rel.startsWith(b + ' '))) {
+        try {
+          zip.deleteFile(e.entryName)
+        } catch {
+          /* ignore */
+        }
       }
     }
   }

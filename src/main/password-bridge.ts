@@ -454,7 +454,7 @@ function windowsMachineKey(userDataDir: string): Buffer | null {
         const raw = Buffer.from(b64, 'base64')
         if (raw.subarray(0, 5).toString('latin1') === 'DPAPI') {
           const dpapiB64 = raw.subarray(5).toString('base64')
-          const ps = `[Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('${dpapiB64}'),$null,'CurrentUser'))`
+          const ps = `Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('${dpapiB64}'),$null,'CurrentUser'))`
           const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
             encoding: 'utf8',
             timeout: 10000
