@@ -35,9 +35,11 @@ import {
   downloadProfileCookies,
   uploadProfileCookies,
   downloadProfilePasswords,
-  uploadProfilePasswords
+  uploadProfilePasswords,
+  downloadProfileCookiesDb,
+  uploadProfileCookiesDb
 } from './cloud-data'
-import { exportLogins, importLogins } from './password-bridge'
+import { exportLogins, importLogins, exportCookies, importCookies } from './password-bridge'
 import { getCloudSession } from './session'
 import { getAccountSecret, isEncryptionActive } from './account-secret'
 
@@ -211,12 +213,19 @@ async function syncDataOnClose(id: string): Promise<void> {
           console.error('[vgc] upload cookies lỗi:', e)
         }
       }
-      // Saved passwords: decrypt with THIS machine's key + upload (see password-bridge).
+      // Saved passwords + session cookies: decrypt with THIS machine's key + upload so
+      // the other machine can re-seal them with ITS key (see password-bridge).
       try {
         const logins = await exportLogins(profileDataDir(id), id)
         if (logins.length) await uploadProfilePasswords(id, logins)
       } catch (e) {
         console.error('[vgc] upload mật khẩu lỗi:', e)
+      }
+      try {
+        const cks = await exportCookies(profileDataDir(id), id)
+        if (cks.length) await uploadProfileCookiesDb(id, cks)
+      } catch (e) {
+        console.error('[vgc] upload cookie-db lỗi:', e)
       }
     })
     broadcastData({ id, phase: 'done' })
@@ -245,6 +254,8 @@ export async function stopAllAndSync(): Promise<void> {
         if (cookies && cookies.length) await uploadProfileCookies(id, cookies)
         const logins = await exportLogins(profileDataDir(id), id)
         if (logins.length) await uploadProfilePasswords(id, logins)
+        const cks = await exportCookies(profileDataDir(id), id)
+        if (cks.length) await uploadProfileCookiesDb(id, cks)
         broadcastData({ id, phase: 'done' })
       } catch {
         // best-effort — don't block quit on a single failure
@@ -410,6 +421,18 @@ export async function launchProfile(
           }
         } catch (e) {
           console.error('[vgc-pw] import passwords lỗi:', e)
+        }
+        // Login SESSION cookies: same cross-machine problem (native mode has no CDP
+        // cookie bridge). Merge cloud cookies into the Cookies DB as plaintext so the
+        // engine re-seals them with its own key → stays logged in across machines.
+        try {
+          const cloudCookies = await downloadProfileCookiesDb(id)
+          if (cloudCookies.length) {
+            const n = await importCookies(profileDataDir(id), id, cloudCookies)
+            if (n > 0) console.error(`[vgc-pw] merged ${n} cookie(s) for ${id}`)
+          }
+        } catch (e) {
+          console.error('[vgc-pw] import cookies lỗi:', e)
         }
         return g
       })

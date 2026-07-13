@@ -24,7 +24,7 @@ import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync } from 'crypto
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'fs'
 import { join, dirname } from 'path'
-import type { SavedLogin } from '../shared/types'
+import type { SavedLogin, SavedCookie } from '../shared/types'
 import { getAccountSecret } from './account-secret'
 import { getSettings } from './settings'
 
@@ -114,15 +114,19 @@ async function localKey(id: string): Promise<Buffer | null> {
   }
 }
 
-function decryptV10(blob: Buffer, key: Buffer): string | null {
+function decryptV10Bytes(blob: Buffer, key: Buffer): Buffer | null {
   try {
     if (blob.length <= 3 || !blob.subarray(0, 3).equals(V10)) return null
     const d = createDecipheriv('aes-128-cbc', key, FIXED_IV) // PKCS7 auto-unpad
-    const out = Buffer.concat([d.update(blob.subarray(3)), d.final()])
-    return out.toString('utf8')
+    return Buffer.concat([d.update(blob.subarray(3)), d.final()])
   } catch {
     return null // wrong key / not our format → skip this row
   }
+}
+
+function decryptV10(blob: Buffer, key: Buffer): string | null {
+  const b = decryptV10Bytes(blob, key)
+  return b === null ? null : b.toString('utf8')
 }
 
 function encryptV10(plain: string, key: Buffer): Buffer {
@@ -387,6 +391,184 @@ export async function importLogins(
     return changed
   } catch (e) {
     console.error('[vgc-pw] importLogins failed (file left unchanged):', e)
+    try {
+      db?.close()
+    } catch {
+      /* ignore */
+    }
+    return 0
+  }
+}
+
+// ── Cookies (login SESSION) — decrypt-on-source, write-plaintext-on-target ────
+// The `cookies` table's `encrypted_value` is os_crypt v10 with, since DB version 24, a
+// SHA256(host_key) prefix on the decrypted plaintext (net/extras/sqlite/sqlite_persistent
+// _cookie_store.cc:213,992-999). We decrypt with the LOCAL key + strip that prefix on
+// export; on import we write the value into the plaintext `value` column with an EMPTY
+// `encrypted_value`, so the target Chrome loads it directly (line 980 there) and re-seals
+// it with ITS key on next save — no target-side re-encryption/hashing needed. All cookie
+// columns are NOT NULL, so we carry every column and default anything a target adds.
+
+function cookiesDbPath(userDataDir: string): string {
+  return join(userDataDir, 'Default', 'Network', 'Cookies')
+}
+
+/** Read + DECRYPT the profile's cookies with the LOCAL key. [] on any problem. */
+export async function exportCookies(userDataDir: string, id: string): Promise<SavedCookie[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Sql = (await getSQL()) as any
+  if (!Sql) return []
+  const ck = cookiesDbPath(userDataDir)
+  if (!existsSync(ck)) return []
+  const key = await localKey(id)
+  if (!key) return []
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null
+  try {
+    db = new Sql.Database(readFileSync(ck))
+    const ti = db.exec('PRAGMA table_info(cookies)')
+    if (!ti.length) {
+      db.close()
+      return []
+    }
+    const nIdx = (ti[0].columns as string[]).indexOf('name')
+    const allCols = (ti[0].values as unknown[][]).map((v) => String(v[nIdx]))
+    const res = db.exec(`SELECT ${allCols.map((c) => `"${c}"`).join(',')} FROM cookies`)
+    const out: SavedCookie[] = []
+    if (res.length) {
+      const cols: string[] = res[0].columns
+      const ix = (c: string): number => cols.indexOf(c)
+      const hostI = ix('host_key')
+      const evI = ix('encrypted_value')
+      const valI = ix('value')
+      for (const row of res[0].values as unknown[][]) {
+        const host = String(row[hostI] ?? '')
+        const ev = row[evI] as Uint8Array | null
+        let value: string
+        if (ev && ev.length) {
+          const pt = decryptV10Bytes(Buffer.from(ev), key)
+          if (!pt) continue // wrong key / not ours
+          // Strip the SHA256(host_key) domain prefix (cookies DB v24+). A mismatch also
+          // reliably filters wrong-key garbage that happened to unpad cleanly.
+          const sha = createHash('sha256').update(host).digest()
+          if (pt.length < 32 || !pt.subarray(0, 32).equals(sha)) continue
+          value = pt.subarray(32).toString('utf8')
+        } else {
+          value = String(row[valI] ?? '') // already-plaintext cookie
+        }
+        const c: Record<string, string | number> = {}
+        for (const col of cols) {
+          if (col === 'value' || col === 'encrypted_value') continue
+          const v = row[ix(col)]
+          c[col] = typeof v === 'number' ? v : v == null ? '' : String(v)
+        }
+        out.push({ value, cols: c })
+      }
+    }
+    return out
+  } catch (e) {
+    console.error('[vgc-pw] exportCookies failed:', e)
+    return []
+  } finally {
+    try {
+      db?.close()
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** MERGE cloud cookies into the local Cookies DB as PLAINTEXT (encrypted_value empty).
+ *  INSERT-OR-REPLACE by the cookie unique index. Fail-safe atomic write. Returns count. */
+export async function importCookies(
+  userDataDir: string,
+  id: string,
+  cookies: SavedCookie[]
+): Promise<number> {
+  if (!cookies?.length) return 0
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Sql = (await getSQL()) as any
+  if (!Sql) return 0
+  const ck = cookiesDbPath(userDataDir)
+  if (!existsSync(ck)) return 0 // engine creates it on first run
+
+  try {
+    const j = ck + '-journal'
+    if (existsSync(j) && statSync(j).size > 0) return 0
+  } catch {
+    /* ignore */
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null
+  try {
+    db = new Sql.Database(readFileSync(ck))
+    const ti = db.exec('PRAGMA table_info(cookies)')
+    if (!ti.length) {
+      db.close()
+      return 0
+    }
+    const pcols = ti[0].columns as string[]
+    const nIdx = pcols.indexOf('name')
+    const tIdx = pcols.indexOf('type')
+    const targetCols = (ti[0].values as unknown[][]).map((v) => String(v[nIdx]))
+    const colIsInt: Record<string, boolean> = {}
+    for (const v of ti[0].values as unknown[][]) {
+      colIsInt[String(v[nIdx])] = String(v[tIdx]).toUpperCase().includes('INT')
+    }
+    const insSql = `INSERT OR REPLACE INTO cookies (${targetCols
+      .map((c) => `"${c}"`)
+      .join(',')}) VALUES (${targetCols.map((c) => '$' + c).join(',')})`
+
+    let changed = 0
+    db.exec('BEGIN')
+    try {
+      for (const r of cookies) {
+        if (!r || !r.cols || !r.cols.host_key || !r.cols.name) continue
+        const params: Record<string, unknown> = {}
+        for (const c of targetCols) {
+          if (c === 'value') params['$' + c] = r.value ?? ''
+          else if (c === 'encrypted_value') params['$' + c] = new Uint8Array(0) // empty → plaintext
+          else if (c in r.cols) params['$' + c] = r.cols[c]
+          else params['$' + c] = colIsInt[c] ? 0 : '' // NOT NULL default for a target-only column
+        }
+        db.run(insSql, params)
+        if (db.getRowsModified() > 0) changed++
+      }
+      db.exec('COMMIT')
+    } catch (inner) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw inner
+    }
+
+    if (changed === 0) {
+      db.close()
+      return 0
+    }
+    const integ = db.exec('PRAGMA integrity_check')
+    const ok = integ.length && String(integ[0].values[0][0]) === 'ok'
+    if (!ok) {
+      db.close()
+      console.error('[vgc-pw] cookies integrity_check failed — file left unchanged')
+      return 0
+    }
+    const outBytes = Buffer.from(db.export() as Uint8Array)
+    db.close()
+    db = null
+    const tmp = ck + '.vgcnew'
+    writeFileSync(tmp, outBytes)
+    renameSync(tmp, ck)
+    safeRm(ck + '-wal')
+    safeRm(ck + '-shm')
+    safeRm(ck + '-journal')
+    return changed
+  } catch (e) {
+    console.error('[vgc-pw] importCookies failed (file left unchanged):', e)
     try {
       db?.close()
     } catch {

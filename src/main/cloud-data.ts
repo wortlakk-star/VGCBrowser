@@ -37,7 +37,7 @@ import {
   isEncryptionActive
 } from './account-secret'
 import { getProfileKey, ownerForProfile } from './profile-share'
-import type { Cookie, SavedLogin } from '../shared/types'
+import type { Cookie, SavedLogin, SavedCookie } from '../shared/types'
 
 /** Encryption key for a profile's cloud data: a SHARED key if the profile is shared
  *  (so members decrypt it), otherwise this account's own secret. null = no key yet
@@ -510,6 +510,80 @@ export async function downloadProfilePasswords(id: string): Promise<SavedLogin[]
     const json = decryptWithSecret(secret, 'passwords', data.enc)
     if (!json) return []
     const arr = JSON.parse(json) as SavedLogin[]
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+// ── Cross-machine SAVED COOKIES-DB (session, engine-agnostic) ─────────────────
+// The native-mode engine attaches no CDP, so the old cookie bridge (CDP getCookies)
+// can't run → login sessions were only in the encrypted zip, which doesn't decrypt on a
+// different-key machine. This syncs the cookies read straight from the SQLite DB
+// (decrypted with the source machine's key, re-written plaintext on the target — see
+// password-bridge.ts), account-secret-encrypted here. Separate object from the legacy
+// `.cookies.json` (CDP) bridge so the two never collide.
+
+function cookiesDbObjectPath(uid: string, id: string): string {
+  return `${uid}/${id}.cookiesdb.json`
+}
+
+/** Upload the profile's DECRYPTED cookies (account-secret-encrypted) to the cloud. */
+export async function uploadProfileCookiesDb(id: string, cookies: SavedCookie[]): Promise<void> {
+  if (!cookies.length) return
+  const session = getCloudSession()
+  if (!session) return
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesDbObjectPath(ownerUid, id)}`
+  const json = JSON.stringify(cookies)
+  const secret = await keyForProfile(id)
+  if (!secret && isEncryptionActive()) {
+    throw new Error('Bỏ qua lưu cookie: chưa lấy được khoá mã hoá (mạng chập chờn).')
+  }
+  if (!secret) return // never upload plaintext session cookies
+  const body = Buffer.from(
+    JSON.stringify({ enc: encryptWithSecret(secret, 'cookiesdb', json) }),
+    'utf-8'
+  )
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      apikey: s.supabaseAnonKey,
+      'Content-Type': 'application/json',
+      'x-upsert': 'true'
+    },
+    body: body as unknown as BodyInit
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Upload cookie-db lỗi HTTP ${res.status} ${detail}`)
+  }
+}
+
+/** Fetch + decrypt the profile's cloud cookies. [] if none / not decryptable. */
+export async function downloadProfileCookiesDb(id: string): Promise<SavedCookie[]> {
+  const session = getCloudSession()
+  if (!session) return []
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return []
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesDbObjectPath(ownerUid, id)}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+  })
+  if (res.status === 404 || res.status === 400) return []
+  if (!res.ok) return []
+  try {
+    const data = (await res.json()) as { enc?: string }
+    if (!data || typeof data.enc !== 'string') return []
+    const secret = await keyForProfile(id)
+    if (!secret) return []
+    const json = decryptWithSecret(secret, 'cookiesdb', data.enc)
+    if (!json) return []
+    const arr = JSON.parse(json) as SavedCookie[]
     return Array.isArray(arr) ? arr : []
   } catch {
     return []

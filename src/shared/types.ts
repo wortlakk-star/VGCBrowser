@@ -101,6 +101,17 @@ export interface SavedLogin {
   blacklisted_by_user?: number
 }
 
+/** One row of Chrome's `Network/Cookies` SQLite `cookies` table, with the value
+ *  DECRYPTED. Synced cross-machine (account-secret-encrypted in the cloud) so login
+ *  SESSIONS survive Win<->Mac where the engines use different os_crypt keys — same
+ *  reason as [[SavedLogin]]. Carries every column generically so it adapts to the
+ *  target's cookie-DB version; `value` is the decrypted plaintext, written back with an
+ *  EMPTY encrypted_value so the target Chrome accepts it (and re-seals with its key). */
+export interface SavedCookie {
+  value: string // DECRYPTED plaintext value (SHA256-domain prefix already stripped)
+  cols: Record<string, string | number> // all cookie columns EXCEPT value/encrypted_value
+}
+
 /** A browser cookie (import/export format, aligned with CDP Network.Cookie). */
 export interface Cookie {
   name: string
