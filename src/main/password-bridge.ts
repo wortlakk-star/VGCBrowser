@@ -256,7 +256,7 @@ export async function importLogins(
     ].filter((c) => cols.has(c))
 
     const findStmt = db.prepare(
-      `SELECT id, date_password_modified FROM logins
+      `SELECT id, date_password_modified, password_value FROM logins
        WHERE origin_url=$o AND username_element=$ue AND username_value=$uv
          AND password_element=$pe AND signon_realm=$sr`
     )
@@ -275,16 +275,30 @@ export async function importLogins(
         const pv = encryptV10(r.password, key)
 
         findStmt.bind({ $o: r.origin_url, $ue: ue, $uv: uv, $pe: pe, $sr: r.signon_realm })
-        type ExistingRow = { id: number; date_password_modified: number }
+        type ExistingRow = {
+          id: number
+          date_password_modified: number
+          password_value: Uint8Array | null
+        }
         let existing: ExistingRow | null = null
         if (findStmt.step()) existing = findStmt.getAsObject() as unknown as ExistingRow
         findStmt.reset()
 
         if (existing) {
-          if ((r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0)) {
+          // Overwrite the local row when EITHER the incoming copy is newer, OR the local
+          // blob is UNREADABLE with our key (i.e. it was written by the OTHER machine's
+          // engine and is currently useless here) — that recovers the cross-machine
+          // blobs the wholesale-overwrite left undecryptable. Never regress the timestamp.
+          const localReadable =
+            existing.password_value && existing.password_value.length
+              ? decryptV10(Buffer.from(existing.password_value), key) !== null
+              : false
+          const incomingNewer = (r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0)
+          if (!localReadable || incomingNewer) {
+            const newDate = Math.max(existing.date_password_modified ?? 0, r.date_password_modified ?? 0)
             db.run('UPDATE logins SET password_value=$pv, date_password_modified=$d WHERE id=$id', {
               $pv: pv,
-              $d: r.date_password_modified ?? 0,
+              $d: newDate,
               $id: existing.id
             })
             changed++
