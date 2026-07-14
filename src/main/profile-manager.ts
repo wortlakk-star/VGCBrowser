@@ -15,7 +15,6 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import type { Readable, Writable } from 'node:stream'
-import { createHash } from 'crypto'
 import { join } from 'path'
 import { existsSync, mkdirSync, promises as fs } from 'fs'
 import { app, BrowserWindow } from 'electron'
@@ -32,7 +31,6 @@ import { seedFromString } from './fingerprint-script'
 import { downloadProfileData, uploadProfileData, downloadProfileCookies } from './cloud-data'
 import { dbg } from './dbg'
 import { getCloudSession } from './session'
-import { getAccountSecret, isEncryptionActive } from './account-secret'
 
 interface RunningProfile {
   proc: ChildProcess
@@ -508,12 +506,20 @@ export async function launchProfile(
   // "thoát ra là mất cookie, phải đăng nhập lại" bug. WITHOUT the switch the same profile
   // kept all 217 cookies across a real close/reopen, every one still machine-key-decryptable.
   // So we NEVER pass the switch: the engine keeps its stable machine key, the on-disk
-  // session always decrypts, and same-machine login persists indefinitely. Cross-machine
-  // cookie/password transfer is a SEPARATE concern handled by the plaintext bridge
-  // (decrypt-local → cloud plaintext → re-encrypt with the target machine's key), never by
-  // forcing a shared engine key. Every earlier "fix" (2.1.11–2.1.14) failed because it kept
+  // session always decrypts, and same-machine login persists indefinitely. NOTE: cookies +
+  // saved passwords are now PURELY LOCAL — they do NOT cross machines. The old plaintext
+  // bridge (password-bridge.ts) is currently UNWIRED; a second machine shows sites logged
+  // out until you sign in there once. Re-wiring cross-machine transfer is a future task and
+  // must never re-introduce a shared engine key. Every earlier "fix" (2.1.11–2.1.14) failed because it kept
   // this switch on.
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
+  // HARDENING: childEnv inherits the whole host environment. If this machine ever has
+  // GOOGLE_DEFAULT_CLIENT_ID / _SECRET set globally (a stray setx, a dev shell, CI), they
+  // would reach the engine and re-trigger the DICE AccountReconcilor that deletes the
+  // .google.com session on reopen (the v2.1.16 regression). Not setting them is not enough
+  // — we must actively STRIP them so their absence is guaranteed regardless of host env.
+  delete childEnv.GOOGLE_DEFAULT_CLIENT_ID
+  delete childEnv.GOOGLE_DEFAULT_CLIENT_SECRET
   dbg(`[launch ${id}] NO crypt switch (engine keeps machine key) cloudSession=${!!getCloudSession()}`)
   // Kill Chromium's yellow "Google API keys are missing" infobar that shows on EVERY
   // page — it's clutter AND an antidetect tell (real Chrome never shows it). Chromium

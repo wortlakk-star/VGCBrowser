@@ -234,7 +234,8 @@ function zipHasCriticalSession(_zip: AdmZip, _id: string): boolean {
   // on every close — silently killing sync of tabs / Local Storage / IndexedDB /
   // Preferences (the only things the zip still carries). A partial one of THOSE is
   // acceptable, so always allow the upload. The session cookies themselves never travel
-  // in the zip; cross-machine cookie transfer goes through the plaintext bridge instead.
+  // in the zip and are NOT transferred cross-machine right now (the plaintext bridge is
+  // unwired — a second machine must sign in again).
   return true
 }
 
@@ -369,9 +370,9 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   // session files — `Local State` (the machine's os_crypt key), the Cookies DB, and Login
   // Data. Overwriting them with another machine's copy (sealed with a DIFFERENT key) makes
   // the engine unable to decrypt them → logged out on every reopen. Each machine keeps its
-  // own; cross-machine transfer happens through the plaintext bridge (password-bridge.ts)
-  // which re-keys per machine. Only preserve when a non-empty local copy already exists (a
-  // fresh machine still bootstraps from the cloud).
+  // own. (A cross-machine plaintext re-key bridge exists in password-bridge.ts but is
+  // currently UNWIRED, so these files do not transfer between machines yet.) Only preserve
+  // when a non-empty local copy already exists (a fresh machine still bootstraps from the cloud).
   const preserveBases = ['Local State', 'Default/Network/Cookies', 'Default/Cookies', 'Default/Login Data'].filter(
     (b) => {
       try {
