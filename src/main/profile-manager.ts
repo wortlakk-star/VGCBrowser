@@ -73,34 +73,11 @@ function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-/**
- * Stable per-profile secret for the VGC Core engine's PORTABLE os_crypt key
- * (--vgc-crypt-secret). Derived from the cloud account uid + profile id, so it is
- * IDENTICAL on every machine signed into the same account → cookies + saved
- * passwords encrypted on one machine decrypt on another (macOS ⇄ Windows, both
- * running a patched VGC Core engine). Empty when signed out — cross-machine sync is
- * off then anyway, so the engine keeps its normal machine-bound key.
- */
-async function cryptSecretFor(id: string): Promise<string> {
-  // The random per-account secret (not derivable from public ids) → the ONE stable
-  // portable key. Now persisted OS-encrypted on first fetch, so it survives blips.
-  const accSecret = await getAccountSecret()
-  if (accSecret) return createHash('sha256').update(`${accSecret}:${id}`).digest('hex')
-  // No account secret available. If this account has EVER encrypted a profile (a
-  // persisted marker proves it), the on-disk Cookies + Login Data are sealed with the
-  // account key. Handing the engine ANY other key — the old uid-derived fallback OR
-  // the engine's machine key — would make them undecryptable: silent logout of every
-  // site and PERMANENT loss of saved passwords. So we REFUSE to open with a wrong key
-  // (the launcher surfaces a "thử lại" message) instead of corrupting the session.
-  // (The previous `sha256('vgc-os-crypt:uid:id')` fallback was exactly this divergent
-  // key and is removed.)
-  if (getCloudSession() && isEncryptionActive()) {
-    throw new Error('VGC_CRYPT_KEY_UNAVAILABLE')
-  }
-  // Genuinely fresh / never-encrypted account (or signed out and never used the
-  // portable key) → let the engine keep its normal machine-bound key.
-  return ''
-}
+// NOTE: the old `cryptSecretFor()` (which derived a --vgc-crypt-secret value) was
+// DELETED on 2026-07-13. Passing that switch made the engine seal cookies with a
+// portable key and DROP every pre-existing machine-key cookie → logout on reopen
+// (see the launchProfile comment + memory password-bridge-mac-stock-chrome). The
+// engine now always uses its stable per-machine key; do NOT reintroduce the switch.
 
 function profileDataDir(id: string): string {
   const dir = join(app.getPath('userData'), 'profiles', id)

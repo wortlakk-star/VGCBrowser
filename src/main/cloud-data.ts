@@ -227,15 +227,15 @@ function buildZip(id: string): AdmZip {
  * yet (brand-new), or at least one cookie DB that DOES exist on disk made it into
  * the zip.
  */
-function zipHasCriticalSession(zip: AdmZip, id: string): boolean {
-  const root = profileDir(id)
-  const cookieDbs = [
-    join(root, 'Default', 'Network', 'Cookies'),
-    join(root, 'Default', 'Cookies')
-  ].filter((p) => existsSync(p))
-  if (cookieDbs.length === 0) return true // nothing to protect yet
-  const inZip = new Set(zip.getEntries().map((e) => e.entryName))
-  return cookieDbs.some((p) => inZip.has(relative(root, p).split(sep).join('/')))
+function zipHasCriticalSession(_zip: AdmZip, _id: string): boolean {
+  // Cookies + Login Data are now DELIBERATELY excluded from the zip and kept purely
+  // local (see SKIP_FILES + buildZip). The old guard required a Cookies DB to be
+  // present in the zip; with cookies excluded that would reject EVERY upload and throw
+  // on every close — silently killing sync of tabs / Local Storage / IndexedDB /
+  // Preferences (the only things the zip still carries). A partial one of THOSE is
+  // acceptable, so always allow the upload. The session cookies themselves never travel
+  // in the zip; cross-machine cookie transfer goes through the plaintext bridge instead.
+  return true
 }
 
 /** Zip the profile's user-data-dir and upload it to the user's cloud bucket. */
