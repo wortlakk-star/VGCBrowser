@@ -521,8 +521,22 @@ export async function launchProfile(
   // HasAPIKeyConfigured() true so the bar never appears. They're NOT used for login
   // (profiles sign in via the web) and are never exposed to web pages.
   childEnv.GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'no-key'
-  childEnv.GOOGLE_DEFAULT_CLIENT_ID = process.env.GOOGLE_DEFAULT_CLIENT_ID || 'no-id'
-  childEnv.GOOGLE_DEFAULT_CLIENT_SECRET = process.env.GOOGLE_DEFAULT_CLIENT_SECRET || 'no-secret'
+  // ⚠️ DO NOT set GOOGLE_DEFAULT_CLIENT_ID / GOOGLE_DEFAULT_CLIENT_SECRET here.
+  // The infobar is gated ONLY on the API key (engine infobar_utils.cc:188:
+  // `if (!google_apis::HasAPIKeyConfigured())`), so GOOGLE_API_KEY alone kills it.
+  // Configuring an OAuth *client* (id+secret) makes the engine's
+  // google_apis::HasOAuthClientConfigured() return true, which flips desktop Account
+  // Consistency from Disabled to DICE (account_consistency_mode_manager.cc:
+  // CanEnableDiceForBuild → IsDiceSignInAllowed → ComputeAccountConsistencyMethod → kDice).
+  // DICE turns on the AccountReconcilor, which on every cold start reconciles the
+  // content-area .google.com cookies against Chrome's token service. With these garbage
+  // creds the OAuth/multilogin exchange fails and the reconcilor DELETES the GAIA account
+  // cookie cluster (SID/HSID/SSID/APISID/SAPISID/__Secure-*PSID/__Secure-*PSIDTS/LSID) on
+  // reopen — YouTube is out of accounts.google.com reconcile scope so it survives. This is
+  // the "Google logs out on reopen" regression (2.x vs working 0.1.102, which never set
+  // these → HasOAuthClientConfigured()=false → account consistency Disabled → web session
+  // left untouched). Restoring the 0.1.102 input here is the fix; the crypt-secret
+  // switch-removal above is orthogonal and stays.
 
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local
   // relay because Chromium can't pass credentials via the flag; no-auth proxies
