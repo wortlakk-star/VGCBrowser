@@ -1,9 +1,18 @@
 // ── VGC Browser — proxy checker ──────────────────────────────────────────────
 // Probes a proxy by fetching a geo/IP endpoint THROUGH it over HTTPS (port 443).
-// HTTPS is used (not plain HTTP) because many residential/datacenter proxies
-// BLOCK port 80 — checking over 80 (old ip-api) timed out for those. We tunnel
-// to ipwho.is:443 (SOCKS5 → socks socket; HTTP proxy → CONNECT tunnel), wrap with
-// TLS, and parse the JSON (ip, country, countryCode, city, timezone, lat/lon).
+// HTTPS is used (not plain HTTP) because many residential/datacenter proxies BLOCK
+// port 80. We tunnel to the geo host:443 (SOCKS5 → socks socket; HTTP proxy → CONNECT
+// tunnel), wrap with TLS, and parse the JSON.
+//
+// RELIABILITY (why the check used to flap "alive/dead"):
+//   • It tried ONCE — a single transient hiccup on a residential/mobile proxy (which
+//     have ~1.5s+ latency and occasional resets) marked a live proxy dead.
+//   • It used ONE geo endpoint (ipwho.is) whose free tier RATE-LIMITS bursts — checking
+//     many proxies at once made ipwho.is throttle → live proxies looked dead.
+//   • It conflated "proxy tunnel failed" (really dead) with "geo lookup failed" (proxy
+//     fine, endpoint hiccup) → false negatives.
+// Fixes here: retry a few times, ROTATE across two independent geo providers, and — most
+// importantly — treat a SUCCESSFUL TUNNEL as alive even when the geo body can't be read.
 
 import http from 'http'
 import net from 'net'
@@ -11,8 +20,61 @@ import tls from 'tls'
 import { SocksClient } from 'socks'
 import type { ProxyConfig, ProxyCheckResult } from '../shared/types'
 
-const GEO_HOST = 'ipwho.is'
-const GEO_PATH = '/'
+interface GeoProvider {
+  host: string
+  path: string
+  parse: (j: Record<string, unknown>) => Partial<ProxyCheckResult> | null
+}
+
+// Two independent providers → if one rate-limits, the other still answers. Both serve
+// JSON over 443. We normalize their different shapes to the same result fields.
+const GEO_PROVIDERS: GeoProvider[] = [
+  {
+    host: 'ipwho.is',
+    path: '/',
+    parse: (j) => {
+      if (j.success === false || !j.ip) return null
+      const tzRaw = j.timezone
+      const tz =
+        tzRaw && typeof tzRaw === 'object'
+          ? String((tzRaw as Record<string, unknown>).id ?? '')
+          : String(tzRaw ?? '')
+      return {
+        ip: String(j.ip),
+        country: String(j.country ?? ''),
+        countryCode: String(j.country_code ?? ''),
+        city: String(j.city ?? ''),
+        timezone: tz,
+        latitude: typeof j.latitude === 'number' ? j.latitude : undefined,
+        longitude: typeof j.longitude === 'number' ? j.longitude : undefined
+      }
+    }
+  },
+  {
+    host: 'ipinfo.io',
+    path: '/json',
+    parse: (j) => {
+      if (!j.ip) return null
+      const loc = typeof j.loc === 'string' ? j.loc.split(',') : []
+      const cc = String(j.country ?? '') // ipinfo returns a 2-letter code
+      return {
+        ip: String(j.ip),
+        country: cc,
+        countryCode: cc,
+        city: String(j.city ?? ''),
+        timezone: String(j.timezone ?? ''),
+        latitude: loc[0] ? Number(loc[0]) : undefined,
+        longitude: loc[1] ? Number(loc[1]) : undefined
+      }
+    }
+  }
+]
+
+const CONNECT_TIMEOUT = 12000
+const READ_TIMEOUT = 12000
+const ATTEMPTS = 3
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** Hard overall cap so a half-open proxy socket can't hang the check forever. */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -33,21 +95,27 @@ function extractJson(raw: string): Record<string, unknown> | null {
   }
 }
 
-/** SOCKS5: open a tunnel to GEO_HOST:443 and return the raw socket. */
-async function socksSocket(proxy: ProxyConfig): Promise<net.Socket> {
+/** SOCKS5: open a tunnel to host:port and return the raw socket. */
+async function socksTunnel(proxy: ProxyConfig, host: string, port: number): Promise<net.Socket> {
   const { socket } = await SocksClient.createConnection({
-    proxy: { host: proxy.host!, port: proxy.port!, type: 5, userId: proxy.username, password: proxy.password },
+    proxy: {
+      host: proxy.host!,
+      port: proxy.port!,
+      type: 5,
+      userId: proxy.username,
+      password: proxy.password
+    },
     command: 'connect',
-    destination: { host: GEO_HOST, port: 443 },
-    timeout: 9000
+    destination: { host, port },
+    timeout: CONNECT_TIMEOUT
   })
   return socket
 }
 
-/** HTTP/HTTPS proxy: CONNECT-tunnel to GEO_HOST:443 and return the tunneled socket. */
-function connectSocket(proxy: ProxyConfig): Promise<net.Socket> {
+/** HTTP/HTTPS proxy: CONNECT-tunnel to host:port and return the tunneled socket. */
+function connectTunnel(proxy: ProxyConfig, host: string, port: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = { Host: `${GEO_HOST}:443` }
+    const headers: Record<string, string> = { Host: `${host}:${port}` }
     if (proxy.username) {
       const token = Buffer.from(`${proxy.username}:${proxy.password ?? ''}`).toString('base64')
       headers['Proxy-Authorization'] = `Basic ${token}`
@@ -56,9 +124,9 @@ function connectSocket(proxy: ProxyConfig): Promise<net.Socket> {
       host: proxy.host,
       port: proxy.port,
       method: 'CONNECT',
-      path: `${GEO_HOST}:443`,
+      path: `${host}:${port}`,
       headers,
-      timeout: 9000
+      timeout: CONNECT_TIMEOUT
     })
     req.on('connect', (res, socket) => {
       if (res.statusCode !== 200) {
@@ -74,17 +142,21 @@ function connectSocket(proxy: ProxyConfig): Promise<net.Socket> {
   })
 }
 
+function tunnelTo(proxy: ProxyConfig, host: string, port: number): Promise<net.Socket> {
+  return proxy.type === 'socks5' ? socksTunnel(proxy, host, port) : connectTunnel(proxy, host, port)
+}
+
 /** TLS over the tunneled socket, send an HTTPS GET, return the raw response. */
-function httpsOver(socket: net.Socket): Promise<string> {
+function httpsOver(socket: net.Socket, host: string, path: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const t = tls.connect({ socket, servername: GEO_HOST, rejectUnauthorized: false }, () => {
+    const t = tls.connect({ socket, servername: host, rejectUnauthorized: false }, () => {
       t.write(
-        `GET ${GEO_PATH} HTTP/1.1\r\nHost: ${GEO_HOST}\r\nUser-Agent: Mozilla/5.0\r\nAccept: application/json\r\nConnection: close\r\n\r\n`
+        `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: application/json\r\nConnection: close\r\n\r\n`
       )
     })
     let data = ''
     t.setEncoding('utf8')
-    t.setTimeout(9000, () => t.destroy(new Error('Proxy timeout')))
+    t.setTimeout(READ_TIMEOUT, () => t.destroy(new Error('Proxy timeout')))
     t.on('data', (d) => (data += d))
     t.on('end', () => resolve(data))
     t.on('close', () => resolve(data))
@@ -95,41 +167,27 @@ function httpsOver(socket: net.Socket): Promise<string> {
 
 /**
  * Geo of the DIRECT (no-proxy) connection = the machine's real public IP. Used to keep a
- * NO-PROXY profile's timezone/locale/geolocation coherent with the real IP: a profile
- * opened without a proxy but carrying a random stored timezone (e.g. Europe/Paris) while
- * the real IP is in Vietnam is a classic incoherence that makes Cloudflare Turnstile fail
- * to load (error 600010). Aligning to the real IP removes that contradiction.
+ * NO-PROXY profile's timezone/locale/geolocation coherent with the real IP. Tries the geo
+ * providers in order so a single endpoint's rate-limit doesn't fail the whole thing.
  */
 export async function directGeo(): Promise<ProxyCheckResult> {
   const t0 = Date.now()
-  try {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 8000)
-    const res = await fetch(`https://${GEO_HOST}/`, { signal: ctrl.signal }).finally(() =>
-      clearTimeout(timer)
-    )
-    const latencyMs = Date.now() - t0
-    const j = (await res.json()) as Record<string, unknown>
-    if (!j || j.success === false) return { ok: false, error: 'geo lỗi', latencyMs }
-    const tzRaw = j.timezone
-    const tz =
-      tzRaw && typeof tzRaw === 'object'
-        ? String((tzRaw as Record<string, unknown>).id ?? '')
-        : String(tzRaw ?? '')
-    return {
-      ok: true,
-      ip: String(j.ip ?? ''),
-      country: String(j.country ?? ''),
-      countryCode: String(j.country_code ?? ''),
-      city: String(j.city ?? ''),
-      timezone: tz,
-      latitude: typeof j.latitude === 'number' ? j.latitude : undefined,
-      longitude: typeof j.longitude === 'number' ? j.longitude : undefined,
-      latencyMs
+  for (const gp of GEO_PROVIDERS) {
+    try {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 8000)
+      const res = await fetch(`https://${gp.host}${gp.path}`, {
+        signal: ctrl.signal,
+        headers: { Accept: 'application/json' }
+      }).finally(() => clearTimeout(timer))
+      const j = (await res.json()) as Record<string, unknown>
+      const parsed = gp.parse(j)
+      if (parsed?.ip) return { ok: true, ...parsed, latencyMs: Date.now() - t0 }
+    } catch {
+      // try the next provider
     }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - t0 }
   }
+  return { ok: false, error: 'geo lỗi', latencyMs: Date.now() - t0 }
 }
 
 export async function checkProxy(proxy: ProxyConfig): Promise<ProxyCheckResult> {
@@ -137,31 +195,41 @@ export async function checkProxy(proxy: ProxyConfig): Promise<ProxyCheckResult> 
     return { ok: false, error: 'Chưa cấu hình proxy' }
   }
   const t0 = Date.now()
-  try {
-    const socket = proxy.type === 'socks5' ? await socksSocket(proxy) : await connectSocket(proxy)
-    const raw = await withTimeout(httpsOver(socket), 12000)
-    const latencyMs = Date.now() - t0
-    const j = extractJson(raw)
-    if (!j) return { ok: false, error: 'Không đọc được phản hồi geo', latencyMs }
-    if (j.success === false) {
-      return { ok: false, error: String(j.message ?? 'Proxy/Geo lỗi'), latencyMs }
+  let tunnelConnected = false
+  let lastErr = 'Không kết nối được proxy'
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    // Rotate providers across attempts so a rate-limited endpoint gets a different one
+    // on the retry (attempt 0 → ipwho.is, 1 → ipinfo.io, 2 → ipwho.is).
+    const gp = GEO_PROVIDERS[attempt % GEO_PROVIDERS.length]
+    let socket: net.Socket
+    try {
+      socket = await tunnelTo(proxy, gp.host, 443)
+      tunnelConnected = true // the proxy accepted a tunnel → it is ALIVE
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e)
+      await sleep(300)
+      continue
     }
-    const tz =
-      j.timezone && typeof j.timezone === 'object'
-        ? String((j.timezone as Record<string, unknown>).id ?? '')
-        : String(j.timezone ?? '')
-    return {
-      ok: true,
-      ip: String(j.ip ?? ''),
-      country: String(j.country ?? ''),
-      countryCode: String(j.country_code ?? ''),
-      city: String(j.city ?? ''),
-      timezone: tz,
-      latitude: typeof j.latitude === 'number' ? j.latitude : undefined,
-      longitude: typeof j.longitude === 'number' ? j.longitude : undefined,
-      latencyMs
+    try {
+      const raw = await withTimeout(httpsOver(socket, gp.host, gp.path), READ_TIMEOUT)
+      const j = extractJson(raw)
+      const parsed = j ? gp.parse(j) : null
+      if (parsed?.ip) return { ok: true, ...parsed, latencyMs: Date.now() - t0 }
+      lastErr = 'Không đọc được phản hồi geo'
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e)
+      try {
+        socket.destroy()
+      } catch {
+        /* already gone */
+      }
     }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - t0 }
+    await sleep(300)
   }
+
+  // A tunnel succeeded at least once → the proxy WORKS; only the geo lookup failed
+  // (rate-limit / provider hiccup). Report alive so a working proxy is never flagged dead.
+  if (tunnelConnected) return { ok: true, latencyMs: Date.now() - t0 }
+  return { ok: false, error: lastErr, latencyMs: Date.now() - t0 }
 }

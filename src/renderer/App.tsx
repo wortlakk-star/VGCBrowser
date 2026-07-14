@@ -330,24 +330,37 @@ export default function App(): JSX.Element {
         .map((id) => profiles.find((x) => x.id === id))
         .filter((p): p is Profile => !!p && p.proxy.type !== 'none' && !!p.proxy.host)
       if (targets.length === 0) return
-      const results = await Promise.all(
-        targets.map(async (p): Promise<{ id: string; check: NonNullable<Profile['proxyCheck']> }> => {
-          const at = new Date().toISOString()
-          try {
-            const res = await window.vgc.checkProxy(p.proxy)
-            return {
-              id: p.id,
-              check: {
-                status: res.ok ? 'ok' : 'error',
-                ip: res.ip,
-                country: res.country,
-                countryCode: res.countryCode,
-                latencyMs: res.latencyMs,
-                at
-              }
+      const checkOne = async (
+        p: Profile
+      ): Promise<{ id: string; check: NonNullable<Profile['proxyCheck']> }> => {
+        const at = new Date().toISOString()
+        try {
+          const res = await window.vgc.checkProxy(p.proxy)
+          return {
+            id: p.id,
+            check: {
+              status: res.ok ? 'ok' : 'error',
+              ip: res.ip,
+              country: res.country,
+              countryCode: res.countryCode,
+              latencyMs: res.latencyMs,
+              at
             }
-          } catch {
-            return { id: p.id, check: { status: 'error', at } }
+          }
+        } catch {
+          return { id: p.id, check: { status: 'error', at } }
+        }
+      }
+      // Cap concurrency: checking every proxy at once hammered the geo endpoint, which
+      // rate-limited and flagged live proxies "dead". A small pool keeps checks reliable.
+      const CONCURRENCY = 4
+      const results: { id: string; check: NonNullable<Profile['proxyCheck']> }[] = []
+      let next = 0
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, targets.length) }, async () => {
+          while (next < targets.length) {
+            const p = targets[next++]
+            results.push(await checkOne(p))
           }
         })
       )
