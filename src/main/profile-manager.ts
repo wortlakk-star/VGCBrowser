@@ -522,41 +522,22 @@ export async function launchProfile(
     `--vgc-profile-name=${profile.name}`
   ]
 
-  // Portable os_crypt key (VGC Core engine): same secret on every machine of this
-  // account → saved passwords + cookies encrypted on one machine decrypt on another.
-  // Passed via the ENVIRONMENT (VGC_CRYPT_SECRET), NOT argv — argv is readable via
-  // `ps` by any other local user, and this secret decrypts the profile's cookies +
-  // saved passwords. The engine reads env first, falling back to the old switch.
-  let cryptSecret: string
-  try {
-    cryptSecret = await cryptSecretFor(id)
-  } catch (e) {
-    // Encryption key momentarily unavailable (network blip fetching account_secrets on
-    // a machine with no persisted copy yet). Opening now would use a wrong os_crypt key
-    // and log the profile out of everything → abort with a clear, retryable message.
-    const msg =
-      e instanceof Error && e.message === 'VGC_CRYPT_KEY_UNAVAILABLE'
-        ? 'Chưa lấy được khoá mã hoá tài khoản (mạng chập chờn). Hãy kiểm tra mạng và mở lại — KHÔNG mở bằng khoá sai để tránh mất đăng nhập.'
-        : e instanceof Error
-          ? e.message
-          : String(e)
-    broadcast({ id, status: 'error', error: msg })
-    throw new Error(msg)
-  }
+  // ── os_crypt key: ALWAYS let the engine use its OWN per-machine key ──────────
+  // ⚠️ PROVEN by a live engine test (2026-07-13, see memory password-bridge-mac-stock-
+  // chrome): passing --vgc-crypt-secret makes the VGC Core engine seal cookies with a
+  // PORTABLE key and DROP every pre-existing machine-key cookie it can no longer decrypt.
+  // Measured: a profile with 216 healthy machine-key cookies collapsed to 82 (Google +
+  // PayPal among the 134 destroyed) after ONE open with the switch — this is exactly the
+  // "thoát ra là mất cookie, phải đăng nhập lại" bug. WITHOUT the switch the same profile
+  // kept all 217 cookies across a real close/reopen, every one still machine-key-decryptable.
+  // So we NEVER pass the switch: the engine keeps its stable machine key, the on-disk
+  // session always decrypts, and same-machine login persists indefinitely. Cross-machine
+  // cookie/password transfer is a SEPARATE concern handled by the plaintext bridge
+  // (decrypt-local → cloud plaintext → re-encrypt with the target machine's key), never by
+  // forcing a shared engine key. Every earlier "fix" (2.1.11–2.1.14) failed because it kept
+  // this switch on.
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
-  // CRITICAL: the VGC Core engine reads the portable os_crypt key ONLY from the
-  // --vgc-crypt-secret COMMAND-LINE switch (components/os_crypt/.../dpapi_key_provider.cc
-  // + keychain_password_mac.mm both use GetSwitchValueASCII). It does NOT read any env
-  // var. Passing it via the environment alone was a silent NO-OP: the engine fell back to
-  // its per-machine DPAPI/Keychain key, so every cookie + saved password was machine-
-  // bound → after a "Local State" sync or on another machine the key didn't match →
-  // undecryptable → logged out on every reopen. So pass it as the switch. (Keep the env
-  // too for any future engine that reads it.)
-  if (cryptSecret) {
-    args.push(`--vgc-crypt-secret=${cryptSecret}`)
-    childEnv.VGC_CRYPT_SECRET = cryptSecret
-  }
-  dbg(`[launch ${id}] switch=${cryptSecret ? 'SET' : 'EMPTY'} cloudSession=${!!getCloudSession()}`)
+  dbg(`[launch ${id}] NO crypt switch (engine keeps machine key) cloudSession=${!!getCloudSession()}`)
   // Kill Chromium's yellow "Google API keys are missing" infobar that shows on EVERY
   // page — it's clutter AND an antidetect tell (real Chrome never shows it). Chromium
   // reads these keys from the environment at runtime; any non-default value makes
