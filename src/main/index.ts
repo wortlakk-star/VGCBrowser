@@ -78,7 +78,30 @@ function createWindow(): void {
   }
 }
 
+// Single-instance lock: if VGC Browser is launched again (the user double-clicking the
+// icon, or the auto-start task) while it is already running, DON'T spawn a second
+// process — two instances fight over the same profiles dir + debug ports and one ends
+// up a hung, windowless zombie ("I click the icon and nothing opens"). Instead the
+// second launch hands off to the running instance, which surfaces + focuses its window.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    } else {
+      createWindow()
+    }
+  })
+}
+
 app.whenReady().then(() => {
+  // A duplicate launch already called app.quit() above — don't build a second UI.
+  if (!gotSingleInstanceLock) return
   // Each piece is isolated so one failing service (IPC, API server, updater) can't
   // stop the WINDOW from opening — the app must always at least launch its UI.
   try {
