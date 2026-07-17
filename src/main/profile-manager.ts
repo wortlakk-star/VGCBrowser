@@ -30,6 +30,7 @@ import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
 import { seedFromString } from './fingerprint-script'
 import { downloadProfileData, uploadProfileData, downloadProfileCookies } from './cloud-data'
 import { dbg } from './dbg'
+import { ensureWebRtcGuardExtension } from './webrtc-guard'
 import { getCloudSession } from './session'
 
 interface RunningProfile {
@@ -567,9 +568,16 @@ export async function launchProfile(
     `--force-webrtc-ip-handling-policy=${hasProxy ? 'disable_non_proxied_udp' : 'default_public_interface_only'}`
   )
 
-  // Load unpacked extensions into the profile.
-  if (profile.extensions && profile.extensions.length > 0) {
-    const list = profile.extensions.join(',')
+  // Load unpacked extensions: the profile's own + (native mode only) the WebRTC leak
+  // guard. In CDP mode the injector already applies the WebRTC filter, so we only need the
+  // guard extension in native mode, where nothing else stops WebRTC from leaking the real
+  // IPv4/IPv6. 'real' webrtc mode → no guard.
+  const guardExt = skipCdp
+    ? ensureWebRtcGuardExtension(userDataDir, fp.webrtc, fp.webrtcPublicIp ?? '')
+    : null
+  const extList = [...(guardExt ? [guardExt] : []), ...(profile.extensions ?? [])]
+  if (extList.length > 0) {
+    const list = extList.join(',')
     args.push(`--load-extension=${list}`, `--disable-extensions-except=${list}`)
   }
 
