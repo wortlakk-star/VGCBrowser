@@ -194,15 +194,19 @@ try {
     } else if (CFG.webrtc === 'proxy') {
       var RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
       if (RTC) {
-        var ip4 = /(\\d{1,3}\\.){3}\\d{1,3}/;
+        // Match an IPv4 OR IPv6 address in the candidate line. The old regex only caught
+        // IPv4, so an IPv6 HOST candidate (typ host, e.g. 2405:4802:…) fell through to
+        // "return true" and leaked the machine's real IPv6 — the proxy is IPv4-only, so
+        // WebRTC over IPv6 bypassed it entirely. Catch both families.
+        var ipRe = /((\\d{1,3}\\.){3}\\d{1,3})|(([a-f0-9]{1,4}:){2,}[a-f0-9:]+)/i;
         // A candidate is safe to expose only if it leaks NO real IP: mDNS-anonymized
-        // (.local) host candidates are fine; an IPv4 candidate is allowed only when it
-        // equals the proxy's known public IP; any other srflx/relay (incl. IPv6) is
+        // (.local) host candidates are fine; a candidate carrying a real IP (v4 OR v6) is
+        // allowed only when it equals the proxy's known public IP; everything else is
         // dropped so the machine's REAL public/local IP never escapes via WebRTC.
         var safeCand = function(cand){
           if (!cand) return true;
           if (cand.indexOf('.local') !== -1) return true;
-          var m = cand.match(ip4);
+          var m = cand.match(ipRe);
           if (m) { return CFG.webrtcPublicIp ? (m[0] === CFG.webrtcPublicIp) : false; }
           if (/typ srflx|typ relay|typ prflx/.test(cand)) return false;
           return true;
