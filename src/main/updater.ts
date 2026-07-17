@@ -114,6 +114,28 @@ export function installUpdate(): void {
   autoUpdater.quitAndInstall()
 }
 
+/** True when a newer version has finished downloading and is ready to install. */
+export function hasDownloadedUpdate(): boolean {
+  return app.isPackaged && lastStatus.phase === 'downloaded'
+}
+
+/**
+ * Install the downloaded update WITHOUT relaunching (used on the graceful-quit path so
+ * fully quitting the app applies a pending update). electron-updater's auto-install-on-
+ * quit hooks the 'quit' event, but our gracefulQuit uses app.exit(0) which never emits
+ * it — so the download sat "pending" forever on an always-on VPS. Spawn the installer
+ * explicitly instead. `isForceRunAfter=false` → install on exit, don't relaunch.
+ */
+export function installOnQuit(): void {
+  try {
+    // isSilent=true (per-user oneClick NSIS → no elevation, runs quietly),
+    // isForceRunAfter=false (user quit the app — apply the update, don't relaunch).
+    autoUpdater.quitAndInstall(true, false)
+  } catch {
+    /* fall through to the caller's app.exit */
+  }
+}
+
 /** Open the download page in the default browser (macOS manual-update path). */
 export function openDownloadPage(): void {
   void shell.openExternal(lastStatus.manualDownloadUrl || MAC_DOWNLOAD_PAGE)
