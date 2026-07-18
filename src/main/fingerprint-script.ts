@@ -211,20 +211,31 @@ try {
           if (/typ srflx|typ relay|typ prflx/.test(cand)) return false;
           return true;
         };
+        // Inject one srflx candidate carrying the proxy's public IP so a WebRTC leak test
+        // reports the PROXY IP (matching the visible IP), not an empty result — the real IP
+        // is still dropped by safeCand above.
+        var PUB = CFG.webrtcPublicIp || '';
+        var synth = function(){ if (!PUB || PUB.indexOf(':') !== -1) return ''; var p = PUB.split('.'); var port = 50000 + (((+p[3]||0)*13 + (+p[2]||0)*7) % 15000); return 'candidate:1853896148 1 udp 1677729535 ' + PUB + ' ' + port + ' typ srflx raddr 0.0.0.0 rport 0 generation 0 network-cost 999'; };
+        var mkIce = function(){ var s = synth(); if (!s) return null; try { return new RTCIceCandidate({ candidate: s, sdpMid: '0', sdpMLineIndex: 0 }); } catch(e){ return { candidate: s, sdpMid: '0', sdpMLineIndex: 0, address: PUB, type: 'srflx', protocol: 'udp' }; } };
         var scrubSdp = function(sdp){
           if (!sdp) return sdp;
-          var lines = String(sdp).split('\\r\\n'), out = [];
+          var lines = String(sdp).split('\\r\\n'), out = [], at = -1;
           for (var i = 0; i < lines.length; i++) {
             if (lines[i].indexOf('a=candidate:') === 0 && !safeCand(lines[i])) continue;
             out.push(lines[i]);
+            if (lines[i].indexOf('a=ice-pwd:') === 0 || lines[i].indexOf('a=rtcp-mux') === 0) at = out.length;
           }
+          var sc = synth(); if (sc && at >= 0) out.splice(at, 0, 'a=' + sc);
           return out.join('\\r\\n');
         };
         var wrapPc = function(pc){
           var origAdd = pc.addEventListener.bind(pc);
+          var injected = false;
+          // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
+          var fwd = function(cb, ev){ try { if (ev && ev.candidate) { if (!safeCand(ev.candidate.candidate)) return; return cb.call(pc, ev); } if (PUB && !injected) { injected = true; var ic = mkIce(); if (ic) { try { cb.call(pc, { candidate: ic, target: pc, currentTarget: pc, type: 'icecandidate' }); } catch(e){} } } return cb.call(pc, ev); } catch(e){ try { return cb.call(pc, ev); } catch(e2){} } };
           pc.addEventListener = mask(function(type, cb, opts){
             if (type === 'icecandidate' && typeof cb === 'function') {
-              return origAdd(type, function(ev){ try { if (ev && ev.candidate && !safeCand(ev.candidate.candidate)) return; } catch(e){} return cb.call(pc, ev); }, opts);
+              return origAdd(type, function(ev){ return fwd(cb, ev); }, opts);
             }
             return origAdd(type, cb, opts);
           }, 'addEventListener');
@@ -234,7 +245,7 @@ try {
               get: function(){ return this.__vgcOic || null; },
               set: function(cb){
                 this.__vgcOic = cb;
-                origAdd('icecandidate', function(ev){ try { if (ev && ev.candidate && !safeCand(ev.candidate.candidate)) return; } catch(e){} if (typeof cb === 'function') return cb.call(pc, ev); });
+                origAdd('icecandidate', function(ev){ if (typeof cb === 'function') return fwd(cb, ev); });
               }
             });
           } catch(e){}

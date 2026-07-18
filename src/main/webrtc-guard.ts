@@ -68,8 +68,11 @@ function screenScript(fp: Fingerprint): string {
 }
 
 function webrtcScript(webrtc: string, publicIp: string): string {
-  // 'proxy'    → filter ICE candidates to the proxy's public IP (drop every other real IP,
-  //              incl. IPv6 host candidates); '.local' mDNS host candidates stay (no leak).
+  // 'proxy'    → make WebRTC behave like a real user behind this proxy: DROP every real IP
+  //              (host v4/v6, srflx/relay) so the machine's IP never leaks, KEEP '.local'
+  //              mDNS host candidates, and INJECT one srflx candidate carrying the proxy's
+  //              public IP — so a leak test (browserleaks/ipleak/whoer) reports the PROXY IP,
+  //              exactly matching the visible IP, instead of an empty result.
   // 'disabled' → remove RTCPeerConnection entirely.
   return `
   try {
@@ -82,11 +85,17 @@ function webrtcScript(webrtc: string, publicIp: string): string {
       if(RTC){
         var ipRe=/((\\d{1,3}\\.){3}\\d{1,3})|(([a-f0-9]{1,4}:){2,}[a-f0-9:]+)/i;
         var safe=function(c){ if(!c) return true; if(c.indexOf('.local')!==-1) return true; var m=c.match(ipRe); if(m){return PUB?(m[0]===PUB):false;} if(/typ srflx|typ relay|typ prflx/.test(c)) return false; return true; };
-        var scrub=function(s){ if(!s) return s; var L=String(s).split('\\r\\n'),o=[]; for(var i=0;i<L.length;i++){ if(L[i].indexOf('a=candidate:')===0&&!safe(L[i])) continue; o.push(L[i]); } return o.join('\\r\\n'); };
+        // Synthetic srflx candidate carrying the proxy IP (stable port derived from the IP).
+        var synth=function(){ if(!PUB||PUB.indexOf(':')!==-1) return ''; var p=PUB.split('.'); var port=50000+(((+p[3]||0)*13+(+p[2]||0)*7)%15000); return 'candidate:1853896148 1 udp 1677729535 '+PUB+' '+port+' typ srflx raddr 0.0.0.0 rport 0 generation 0 network-cost 999'; };
+        var mkIce=function(){ var s=synth(); if(!s) return null; try{ return new RTCIceCandidate({candidate:s,sdpMid:'0',sdpMLineIndex:0}); }catch(e){ return {candidate:s,sdpMid:'0',sdpMLineIndex:0,address:PUB,type:'srflx',protocol:'udp'}; } };
+        var scrub=function(s){ if(!s) return s; var L=String(s).split('\\r\\n'),o=[],at=-1; for(var i=0;i<L.length;i++){ if(L[i].indexOf('a=candidate:')===0&&!safe(L[i])) continue; o.push(L[i]); if(L[i].indexOf('a=ice-pwd:')===0||L[i].indexOf('a=rtcp-mux')===0) at=o.length; } var sc=synth(); if(sc&&at>=0){ o.splice(at,0,'a='+sc); } return o.join('\\r\\n'); };
         var wrap=function(pc){
           var add=pc.addEventListener.bind(pc);
-          pc.addEventListener=mask(function(t,cb,o){ if(t==='icecandidate'&&typeof cb==='function'){ return add(t,function(ev){try{if(ev&&ev.candidate&&!safe(ev.candidate.candidate))return;}catch(e){}return cb.call(pc,ev);},o);} return add(t,cb,o); },'addEventListener');
-          try{Object.defineProperty(pc,'onicecandidate',{configurable:true,get:function(){return this.__o||null;},set:function(cb){this.__o=cb;add('icecandidate',function(ev){try{if(ev&&ev.candidate&&!safe(ev.candidate.candidate))return;}catch(e){}if(typeof cb==='function')return cb.call(pc,ev);});}});}catch(e){}
+          var injected=false;
+          // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
+          var fwd=function(cb,ev){ try{ if(ev&&ev.candidate){ if(!safe(ev.candidate.candidate)) return; return cb.call(pc,ev); } if(PUB&&!injected){ injected=true; var ic=mkIce(); if(ic){ try{ cb.call(pc,{candidate:ic,target:pc,currentTarget:pc,type:'icecandidate'}); }catch(e){} } } return cb.call(pc,ev); }catch(e){ try{return cb.call(pc,ev);}catch(e2){} } };
+          pc.addEventListener=mask(function(t,cb,o){ if(t==='icecandidate'&&typeof cb==='function'){ return add(t,function(ev){return fwd(cb,ev);},o);} return add(t,cb,o); },'addEventListener');
+          try{Object.defineProperty(pc,'onicecandidate',{configurable:true,get:function(){return this.__o||null;},set:function(cb){this.__o=cb;add('icecandidate',function(ev){if(typeof cb==='function')return fwd(cb,ev);});}});}catch(e){}
           try{var ld=Object.getOwnPropertyDescriptor(RTC.prototype,'localDescription');if(ld&&ld.get){Object.defineProperty(pc,'localDescription',{configurable:true,get:function(){var d=ld.get.call(this);if(d&&d.sdp){try{return {type:d.type,sdp:scrub(d.sdp)};}catch(e){}}return d;}});}}catch(e){}
           return pc;
         };
