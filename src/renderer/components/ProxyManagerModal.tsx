@@ -175,6 +175,9 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   const [importType, setImportType] = useState<ProxyType>('socks5')
   const [importName, setImportName] = useState('')
   const [msg, setMsg] = useState('')
+  // Dead proxies found by "Check proxy tất cả profile" — drives the "Thay mới đồng loạt" button.
+  const [deadProxies, setDeadProxies] = useState<SavedProxy[]>([])
+  const [scanning, setScanning] = useState(false)
 
   // Provider API — generate options (credentials live in Settings → Nhà cung cấp Proxy)
   const [genProvider, setGenProvider] = useState<ProxyProviderId>('iproyal')
@@ -405,6 +408,109 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
       setMsg(`Lỗi gán proxy: ${(e as Error).message}`)
     }
     await refresh()
+  }
+
+  // STEP 1 — check EVERY profile's assigned proxy and list which ones are DEAD. Fills
+  // `deadProxies`, which reveals the "Thay mới đồng loạt" button. Non-destructive.
+  const scanDeadProfiles = async (): Promise<void> => {
+    const profById = new Map(profiles.map((p) => [p.id, p]))
+    const assigned = proxies.filter((p) => p.assignedTo && profById.has(p.assignedTo))
+    if (!assigned.length) {
+      setDeadProxies([])
+      setMsg('Không có profile nào đang gán proxy.')
+      return
+    }
+    setScanning(true)
+    setMsg(`Đang kiểm tra proxy của ${assigned.length} profile…`)
+    try {
+      const checkedList: SavedProxy[] = []
+      let i = 0
+      const worker = async (): Promise<void> => {
+        while (i < assigned.length) checkedList.push(await probe(assigned[i++]))
+      }
+      await Promise.all(Array.from({ length: Math.min(8, assigned.length) }, () => worker()))
+      await window.vgc.saveManyProxies(checkedList)
+      await refresh()
+      const dead = checkedList.filter((p) => p.lastStatus === 'error')
+      setDeadProxies(dead)
+      if (!dead.length) {
+        setMsg(`✓ Đã check ${assigned.length} profile — TẤT CẢ proxy còn SỐNG.`)
+      } else {
+        const lines = dead.map(
+          (d) => `• ${profById.get(d.assignedTo as string)?.name || '?'} — ${d.lastIp || d.host} ❌ CHẾT`
+        )
+        setMsg(
+          `⚠️ ${dead.length}/${assigned.length} profile có proxy CHẾT:\n${lines.join('\n')}\n\n` +
+            `→ Bấm "🔧 Thay mới đồng loạt (${dead.length})" để đổi hết sang IP tĩnh cùng nước còn sống.`
+        )
+      }
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  // STEP 2 — replace every DEAD proxy (found in step 1) with a free, same-country, working
+  // STATIC proxy, all at once. Residential (domain-host, e.g. rp.evomi.com) is NEVER used —
+  // a PayPal/Stripe account needs a stable dedicated IP. Same country is enforced (confirmed
+  // by a live check). Reuses assign() so profile.proxy + pool assignedTo update exactly like a
+  // manual assign (and the dead proxy is freed automatically).
+  const replaceDeadAll = async (): Promise<void> => {
+    if (!deadProxies.length) {
+      setMsg('Chưa có proxy chết — bấm "🔎 Check proxy tất cả profile" trước.')
+      return
+    }
+    if (
+      !window.confirm(
+        `Đổi IP mới cho ${deadProxies.length} profile có proxy CHẾT (chỉ dùng proxy tĩnh cùng nước ` +
+          `còn sống)? Tài khoản PayPal/Stripe sẽ đổi IP.`
+      )
+    )
+      return
+
+    const profById = new Map(profiles.map((p) => [p.id, p]))
+    // free STATIC candidates: unassigned + raw-IPv4 host (residential = domain host → excluded)
+    const isStaticIp = (h?: string): boolean => !!h && /^\d{1,3}(\.\d{1,3}){3}$/.test(h)
+    const free = proxies.filter(
+      (p) => (!p.assignedTo || !profById.has(p.assignedTo)) && isStaticIp(p.host)
+    )
+    const usedIds = new Set<string>()
+    const replaced: string[] = []
+    const unresolved: string[] = []
+
+    setMsg(`Đang thay ${deadProxies.length} proxy chết…`)
+    for (const d of deadProxies) {
+      const prof = profById.get(d.assignedTo as string)
+      if (!prof) continue
+      const cc = d.lastCountryCode || ''
+      // drop candidates KNOWN to be a different country; same-country first
+      const ordered = free
+        .filter((f) => !usedIds.has(f.id) && (!cc || !f.lastCountryCode || f.lastCountryCode === cc))
+        .sort((a, b) => (a.lastCountryCode === cc ? 0 : 1) - (b.lastCountryCode === cc ? 0 : 1))
+      let picked: SavedProxy | null = null
+      for (const cand of ordered) {
+        const probed = await probe(cand)
+        await window.vgc.saveProxy(probed)
+        if (probed.lastStatus !== 'ok') continue
+        if (cc && probed.lastCountryCode && probed.lastCountryCode !== cc) continue // confirmed diff country
+        picked = probed
+        break
+      }
+      if (!picked) {
+        unresolved.push(`${prof.name} (${d.lastCountry || cc || '?'})`)
+        continue
+      }
+      usedIds.add(picked.id)
+      await assign(picked, prof.id) // updateProfile + saveProxy + frees the dead proxy
+      replaced.push(`${prof.name}: ${d.lastIp || d.host} → ${picked.lastIp || picked.host}`)
+    }
+
+    setDeadProxies([])
+    await refresh()
+    let m = `✓ Đã thay ${replaced.length}/${replaced.length + unresolved.length} proxy chết.`
+    if (replaced.length) m += '\n• ' + replaced.join('\n• ')
+    if (unresolved.length)
+      m += `\n⚠️ ${unresolved.length} profile chưa thay được (hết proxy tĩnh rảnh cùng nước): ${unresolved.join(', ')}`
+    setMsg(m)
   }
 
   // Delete a proxy both locally AND in the cloud (tombstone) so it doesn't come
@@ -724,6 +830,23 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               >
                 🔄 Đồng bộ profile
               </button>
+              <button
+                className="btn"
+                title="Kiểm tra proxy của TẤT CẢ profile, liệt kê profile nào proxy chết"
+                onClick={() => void scanDeadProfiles()}
+                disabled={scanning}
+              >
+                {scanning ? '⏳ Đang check…' : '🔎 Check proxy tất cả profile'}
+              </button>
+              {deadProxies.length > 0 && (
+                <button
+                  className="btn primary"
+                  title="Đổi hết proxy chết sang proxy tĩnh cùng nước còn sống"
+                  onClick={() => void replaceDeadAll()}
+                >
+                  🔧 Thay mới đồng loạt ({deadProxies.length})
+                </button>
+              )}
               <button className="btn" onClick={delErrors}>🧹 Xoá proxy lỗi</button>
               <button className="btn" onClick={dedupe}>⎘ Xoá trùng lặp</button>
               <button className="btn danger" onClick={delSelected}>🗑 Xoá đã chọn</button>
@@ -836,7 +959,13 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               </div>
             )}
             {msg && (
-              <p className="hint" style={{ color: msg.startsWith('Lỗi') ? 'var(--red)' : 'var(--green)' }}>
+              <p
+                className="hint"
+                style={{
+                  color: msg.startsWith('Lỗi') ? 'var(--red)' : 'var(--green)',
+                  whiteSpace: 'pre-line'
+                }}
+              >
                 {msg}
               </p>
             )}
