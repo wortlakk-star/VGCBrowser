@@ -158,7 +158,7 @@ export interface Profile {
 }
 
 /** Supported proxy providers with an API/gateway connector. */
-export type ProxyProviderId = 'iproyal' | 'oxylabs' | 'brightdata' | 'evomi'
+export type ProxyProviderId = 'iproyal' | 'oxylabs' | 'brightdata' | 'evomi' | 'cliproxy'
 
 /** Stored account credentials for proxy providers (per cloud account). */
 export interface ProviderCreds {
@@ -171,6 +171,10 @@ export interface ProviderCreds {
   // API returns the per-product username/password/balance and formats ready-to-use
   // proxies, so no separate gateway login is stored.
   evomi?: { apiKey: string }
+  // Cliproxy: a gateway provider (no REST API) — the session/country/sticky are encoded
+  // in the username, so we store the gateway host+port and the account username/password
+  // (all shown in dash.cliproxy.com). state is an optional default region/state.
+  cliproxy?: { host?: string; port?: number; username: string; password: string; state?: string }
 }
 
 /** Options for building a provider proxy connection string. */
@@ -249,6 +253,15 @@ export interface AppSettings {
    *  native antidetect. Turning it OFF restores CDP injection (extra UA/timezone/JS
    *  spoofing + tab-sync + the automation API) but Google sign-in will be blocked. */
   nativeMode?: boolean
+  /** Keep residential (Evomi hardsession) proxy IPs from rotating on inactivity: a
+   *  background service opens a lightweight connection through each saved proxy every
+   *  couple of minutes so the sticky session stays "connected" and the IP is held as long
+   *  as the underlying peer is online. Connect-only (≈no payload) so it barely uses GB.
+   *  Default ON. It can't beat a peer physically going offline — only ISP Static can. */
+  proxyKeepAlive?: boolean
+  /** CapSolver API key (capsolver.com) — when set, the bulk Gmail password tool
+   *  auto-solves image captchas (and best-effort reCAPTCHA) it hits during the flow. */
+  capsolverApiKey?: string
 }
 
 /** State of the app auto-update flow (check → download → install). */
@@ -320,3 +333,38 @@ export interface ProfileRuntimeState {
 export type CreateProfileInput = Partial<
   Pick<Profile, 'name' | 'notes' | 'tags' | 'group' | 'os' | 'fingerprint' | 'proxy' | 'startUrls'>
 >
+
+// ── Gmail bulk password-change tool ──────────────────────────────────────────
+/** One account to process: change `oldPassword` → `newPassword` for `email`.
+ *  `totpSecret` (optional) is the base32 2FA KEY (not a 6-digit code) — when present
+ *  the tool auto-generates the current Authenticator code for Google's 2-step prompt. */
+export interface GmailPasswordTask {
+  email: string
+  oldPassword: string
+  newPassword: string
+  totpSecret?: string
+}
+
+export type GmailChangeStatus =
+  | 'done' // password changed + confirmed
+  | 'wrong_password' // Google rejected the old/current password
+  | 'weak_password' // Google rejected the NEW password (too weak / reused)
+  | 'captcha' // stuck on a captcha / reCAPTCHA (no solver configured)
+  | 'needs_manual' // a 2FA / identity challenge we can't clear automatically
+  | 'not_found' // no profile matched this email
+  | 'error' // launch / CDP / unexpected failure
+
+export interface GmailChangeResult {
+  email: string
+  profileId?: string
+  status: GmailChangeStatus
+  message: string
+}
+
+/** Live progress pushed to the renderer while a single account is processed. */
+export interface GmailProgress {
+  profileId: string
+  email: string
+  phase: string // machine state: 'launch' | 'signin' | 'reauth' | 'newpass' | 'challenge' | 'done' | ...
+  message: string // human-readable Vietnamese status
+}

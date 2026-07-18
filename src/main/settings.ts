@@ -34,7 +34,9 @@ function defaults(): AppSettings {
     // or a MITM can't swap in a malicious engine (the zip is executed as the browser).
     engineHashMac: 'dcf605201b8e168a6ba4df8b88f2339c1d7a6fd67528e617470e686e4cf476aa',
     // GoLogin-style: native engine spoofing, NO CDP debugger → Google sign-in works.
-    nativeMode: true
+    nativeMode: true,
+    // Hold residential (Evomi hardsession) IPs against idle rotation — background poke.
+    proxyKeepAlive: true
   }
 }
 

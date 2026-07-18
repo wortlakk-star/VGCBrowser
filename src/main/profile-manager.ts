@@ -26,11 +26,12 @@ import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, patchProfile, listProfiles } from './store'
 import { getSettings } from './settings'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
+import { CdpConnection } from './cdp'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
 import { seedFromString } from './fingerprint-script'
 import { downloadProfileData, uploadProfileData, downloadProfileCookies } from './cloud-data'
 import { dbg } from './dbg'
-import { ensureWebRtcGuardExtension } from './webrtc-guard'
+import { ensureNativeGuardExtension } from './webrtc-guard'
 import { getCloudSession, getCloudEmail } from './session'
 import { refreshLicense, isLicensed, licenseState } from './license'
 
@@ -39,6 +40,8 @@ interface RunningProfile {
   state: ProfileRuntimeState
   injector?: InjectorHandle
   relay?: RelayHandle
+  /** Control CDP connection for automation mode (bulk Gmail tool) — over the pipe. */
+  automationConn?: CdpConnection
   /** Interval that polls + persists open tabs for cross-machine tab sync. */
   tabPoll?: ReturnType<typeof setInterval>
 }
@@ -47,6 +50,14 @@ interface RunningProfile {
 const DEFAULT_TEST_URL = 'https://abrahamjuliot.github.io/creepjs/'
 
 const running = new Map<string, RunningProfile>()
+
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** The automation control connection for a running profile (bulk Gmail tool). */
+export function getAutomationConn(id: string): CdpConnection | null {
+  return running.get(id)?.automationConn ?? null
+}
+
 // Latest decrypted-cookie snapshot per running profile (refreshed by a poll), so
 // the close handler can upload it even when the browser is already gone (the user
 // closed the window directly → CDP is dead by the time 'exit' fires).
@@ -308,10 +319,34 @@ function spawnAndWait(
 
 export async function launchProfile(
   id: string,
-  opts: { headless?: boolean; cleanLogin?: boolean } = {}
+  opts: { headless?: boolean; cleanLogin?: boolean; automation?: boolean } = {}
 ): Promise<ProfileRuntimeState> {
   const existing = running.get(id)
-  if (existing) return existing.state
+  if (existing) {
+    // Automation mode needs a control pipe. If this profile is already open but WITHOUT
+    // one (a normal user launch), force it closed and relaunch so we get the pipe —
+    // otherwise return the live state as usual.
+    if (opts.automation && !existing.automationConn) {
+      try {
+        existing.proc.kill()
+      } catch {
+        // ignore
+      }
+      const until = Date.now() + 10000
+      while (running.has(id) && Date.now() < until) await sleepMs(200)
+      if (running.has(id)) {
+        try {
+          existing.proc.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        while (running.has(id) && Date.now() < until + 3000) await sleepMs(200)
+      }
+      if (running.has(id)) throw new Error('Không đóng được profile đang mở để chạy tự động')
+    } else {
+      return existing.state
+    }
+  }
 
   const profile = await getProfile(id)
   if (!profile) throw new Error(`Không tìm thấy profile: ${id}`)
@@ -342,8 +377,18 @@ export async function launchProfile(
   // the "Đăng nhập Google" button (opts.cleanLogin) always skips CDP too. The headless
   // automation API path keeps CDP (it has no human signing into Google).
   const settings = await getSettings()
-  const skipCdp = !opts.headless && (opts.cleanLogin === true || settings.nativeMode !== false)
+  // Automation mode (bulk tools like "đổi mật khẩu Gmail"): keep the NATIVE engine
+  // fingerprint but expose a real CDP debug PORT we drive from our own minimal control
+  // connection (Runtime.evaluate + Input only, NO Runtime.enable → low automation
+  // footprint, navigator.webdriver stays false). We do NOT attach the fingerprint
+  // injector here (skipCdp = true) — the native engine already spoofs everything in
+  // C++, and a second CDP client would be redundant. The session is preserved so a
+  // profile that's already signed into Google stays signed in.
+  const automation = opts.automation === true
+  const skipCdp = automation || (!opts.headless && (opts.cleanLogin === true || settings.nativeMode !== false))
   const cleanLogin = opts.cleanLogin === true
+  // A CDP pipe is spawned when the injector attaches (CDP mode) OR for automation control.
+  const usePipe = !skipCdp || automation
 
   let enginePath: string
   try {
@@ -589,13 +634,11 @@ export async function launchProfile(
     `--force-webrtc-ip-handling-policy=${hasProxy ? 'disable_non_proxied_udp' : 'default_public_interface_only'}`
   )
 
-  // Load unpacked extensions: the profile's own + (native mode only) the WebRTC leak
-  // guard. In CDP mode the injector already applies the WebRTC filter, so we only need the
-  // guard extension in native mode, where nothing else stops WebRTC from leaking the real
-  // IPv4/IPv6. 'real' webrtc mode → no guard.
-  const guardExt = skipCdp
-    ? ensureWebRtcGuardExtension(userDataDir, fp.webrtc, fp.webrtcPublicIp ?? '')
-    : null
+  // Load unpacked extensions: the profile's own + (native mode only) the fingerprint guard.
+  // In CDP mode the injector already applies the WebRTC filter + screen spoof, so we only
+  // need the guard extension in native mode, where nothing else stops WebRTC from leaking the
+  // real IPv4/IPv6 or stops screen.* from reporting this machine's real display.
+  const guardExt = skipCdp ? ensureNativeGuardExtension(userDataDir, fp) : null
   const extList = [...(guardExt ? [guardExt] : []), ...(profile.extensions ?? [])]
   if (extList.length > 0) {
     const list = extList.join(',')
@@ -605,13 +648,19 @@ export async function launchProfile(
   // Headless (used by the automation API).
   if (opts.headless) args.push('--headless=new')
 
-  // CDP over a PIPE only when we actually attach the injector. Native mode / clean
-  // login skip it → NO automation session attached → Google sign-in works.
-  if (!skipCdp) args.push('--remote-debugging-pipe')
+  // CDP over a PIPE — for the fingerprint injector (CDP mode) OR the automation control
+  // connection (bulk Gmail tool). A PIPE (fds 3/4), NOT a TCP debug port: a port would
+  // expose an unauthenticated DevTools endpoint any local process could attach to and
+  // drive the browser while it holds a live Google session. Native user launches skip it.
+  if (!skipCdp || automation) args.push('--remote-debugging-pipe')
 
   // Where to land. CDP mode opens about:blank (injector then reopens tabs). Native mode
   // has no injector, so open the profile's start URLs directly. Clean-login → Google.
-  if (cleanLogin) {
+  if (automation) {
+    // Land straight on Google's change-password page. If the profile isn't signed in,
+    // Google redirects to the sign-in flow — the driver's brain handles both.
+    args.push('https://myaccount.google.com/signinoptions/password')
+  } else if (cleanLogin) {
     args.push('https://accounts.google.com/')
   } else if (skipCdp) {
     // Native mode: let Chrome restore the user's own tabs from last time. If there's a
@@ -647,7 +696,7 @@ export async function launchProfile(
   // WebGL in C++, so only then do we skip the JS getParameter override.
   let actualEngine = enginePath
   try {
-    proc = await spawnAndWait(enginePath, args, !skipCdp, childEnv)
+    proc = await spawnAndWait(enginePath, args, usePipe, childEnv)
   } catch (err) {
     const fallback = resolveSystemBrowser(enginePath)
     if (!fallback) {
@@ -665,7 +714,7 @@ export async function launchProfile(
       message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
     })
     try {
-      proc = await spawnAndWait(fallback, args, !skipCdp, childEnv)
+      proc = await spawnAndWait(fallback, args, usePipe, childEnv)
       actualEngine = fallback
     } catch (err2) {
       relay?.close()
@@ -687,14 +736,12 @@ export async function launchProfile(
   running.set(id, entry)
   broadcast(state)
 
-  // Touch lastUsedAt via an atomic patch (re-reads fresh inside the store lock) so a
-  // profile edit made while this profile was opening — the cloud download can take
-  // several seconds — isn't clobbered by writing back the pre-launch snapshot.
-  await patchProfile(id, { lastUsedAt: new Date().toISOString() })
-
+  // Attach exit/error listeners IMMEDIATELY (before any await) so a process that dies
+  // during the patchProfile await below is still cleaned up (never left in `running`).
   proc.on('exit', () => {
     if (entry.tabPoll) clearInterval(entry.tabPoll)
     entry.injector?.dispose()
+    entry.automationConn?.close()
     entry.relay?.close()
     running.delete(id)
     broadcast({ id, status: 'stopped' })
@@ -703,10 +750,31 @@ export async function launchProfile(
   })
   proc.on('error', (err) => {
     entry.injector?.dispose()
+    entry.automationConn?.close()
     entry.relay?.close()
     running.delete(id)
     broadcast({ id, status: 'error', error: String(err) })
   })
+
+  // Touch lastUsedAt via an atomic patch (re-reads fresh inside the store lock) so a
+  // profile edit made while this profile was opening — the cloud download can take
+  // several seconds — isn't clobbered by writing back the pre-launch snapshot.
+  await patchProfile(id, { lastUsedAt: new Date().toISOString() })
+
+  // Automation mode: open our OWN control connection over the CDP pipe (the injector is
+  // NOT attached — the native engine already spoofs the fingerprint). gmail-password.ts
+  // drives it via getAutomationConn(id). Then return (no injector, no tab sync).
+  if (automation) {
+    try {
+      entry.automationConn = CdpConnection.connectPipe(
+        proc.stdio[3] as Writable,
+        proc.stdio[4] as Readable
+      )
+    } catch (err) {
+      broadcast({ id, status: 'error', error: `Không mở được kênh điều khiển: ${String(err)}` })
+    }
+    return state
+  }
 
   // Native mode / clean login: NO CDP injector (that's the whole point — Google must
   // see an ordinary browser). The engine still spoofs the fingerprint natively (C++).

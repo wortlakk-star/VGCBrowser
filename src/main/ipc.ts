@@ -6,6 +6,7 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron'
 import { randomUUID } from 'crypto'
 import { promises as fs } from 'fs'
+import { join } from 'path'
 import type {
   CloudSession,
   Cookie,
@@ -47,6 +48,7 @@ import {
   removeManyProxies
 } from './proxy-store'
 import { uploadProfileData, downloadProfileData } from './cloud-data'
+import { changeGmailPassword } from './gmail-password'
 import { setCloudSession } from './session'
 import {
   getAccountSecret,
@@ -69,13 +71,16 @@ import {
   generateIproyalProxies,
   iproyalBalance,
   generateEvomiProxies,
-  evomiBalance
+  evomiBalance,
+  generateCliproxyProxies
 } from './proxy-providers'
 import type {
   ProviderCreds,
   ProxyBuildOpts,
   ProxyProviderId,
-  GenerateProxiesOpts
+  GenerateProxiesOpts,
+  GmailPasswordTask,
+  GmailProgress
 } from '../shared/types'
 
 function focusedWindow(): BrowserWindow | null {
@@ -232,6 +237,24 @@ export function registerIpc(): void {
     cookieRobot(id, urls)
   )
 
+  // ── Bulk Gmail password change (drives Google's flow inside the profile) ──
+  ipcMain.handle(
+    'gmail:changePassword',
+    (_e, profileId: string, task: GmailPasswordTask) =>
+      changeGmailPassword(profileId, task, (p: GmailProgress) => {
+        for (const w of BrowserWindow.getAllWindows()) w.webContents.send('gmail:progress', p)
+      })
+  )
+
+  // Durably append one account's result (email|new password|status) the moment it's
+  // known, so a crash / close mid-run can NEVER lose a freshly-set random password.
+  ipcMain.handle('gmail:logResult', async (_e, line: string): Promise<string> => {
+    const file = join(app.getPath('userData'), 'gmail-password-log.txt')
+    const stamp = new Date().toISOString()
+    await fs.appendFile(file, `${stamp}\t${line}\n`, 'utf-8').catch(() => {})
+    return file
+  })
+
   // ── Cloud profile DATA sync (GoLogin-style session sync) ──
   ipcMain.handle('cloud:setSession', (_e, sess: CloudSession | null) => {
     setCloudSession(sess)
@@ -290,7 +313,11 @@ export function registerIpc(): void {
   // Generate proxies on demand via the chosen provider's API (returns SavedProxy[] —
   // the renderer adds them to the pool with saveManyProxies). Defaults to iProyal.
   ipcMain.handle('providers:generate', (_e, opts: GenerateProxiesOpts) =>
-    opts.provider === 'evomi' ? generateEvomiProxies(opts) : generateIproyalProxies(opts)
+    opts.provider === 'cliproxy'
+      ? generateCliproxyProxies(opts)
+      : opts.provider === 'evomi'
+        ? generateEvomiProxies(opts)
+        : generateIproyalProxies(opts)
   )
   // Remaining balance (GB) on the provider account.
   ipcMain.handle('providers:balance', (_e, provider?: ProxyProviderId, product?: string) =>

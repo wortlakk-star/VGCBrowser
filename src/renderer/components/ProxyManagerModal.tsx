@@ -5,7 +5,17 @@ import { deleteCloudProxy } from '../cloud'
 // Providers that support "Tạo proxy qua API" in this screen.
 const PROVIDERS: Array<[ProxyProviderId, string]> = [
   ['iproyal', 'iProyal'],
-  ['evomi', 'Evomi']
+  ['evomi', 'Evomi'],
+  ['cliproxy', 'Cliproxy']
+]
+
+// Cliproxy sticky lifetimes (value in s/m/h → nhãn). Cliproxy caps sticky at 120 phút.
+const CLIPROXY_LIFETIMES: Array<[string, string]> = [
+  ['', 'Mặc định (tối đa 120 phút)'],
+  ['15m', '15 phút'],
+  ['30m', '30 phút'],
+  ['1h', '1 giờ'],
+  ['2h', '2 giờ (tối đa)']
 ]
 
 // Evomi products (code → tên hiển thị) — the API param `product`. Only the products
@@ -263,6 +273,12 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         setMsg('Lỗi: chưa có API key Evomi. Vào Cài đặt → Nhà cung cấp Proxy để nhập API key.')
         return
       }
+    } else if (genProvider === 'cliproxy') {
+      const cp = creds.cliproxy
+      if (!cp?.username || !cp?.password || !cp?.port) {
+        setMsg('Lỗi: chưa có tài khoản Cliproxy. Vào Cài đặt → Nhà cung cấp Proxy để nhập host/port + user/pass.')
+        return
+      }
     } else {
       const ip = creds.iproyal
       if (!ip?.apiToken || !ip?.username || !ip?.password) {
@@ -490,6 +506,10 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                   if (prov === 'evomi') {
                     // Evomi caps sticky at 24h — clamp an iProyal-only value (e.g. 7 ngày).
                     if (!EVOMI_LIFETIMES.some(([v]) => v === genLifetime)) setGenLifetime('24h')
+                  } else if (prov === 'cliproxy') {
+                    setGenHard(false) // "hard" session is Evomi-only
+                    // Cliproxy caps sticky at 120 phút — clamp any longer value.
+                    if (!CLIPROXY_LIFETIMES.some(([v]) => v === genLifetime)) setGenLifetime('')
                   } else {
                     setGenHard(false) // "hard" session is Evomi-only
                   }
@@ -502,14 +522,18 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                   </option>
                 ))}
               </select>
-              <button className="btn" onClick={() => void checkBalance()} disabled={loadingBal}>
-                {loadingBal ? '⏳ Đang kiểm tra…' : '📊 Xem GB còn lại'}
-              </button>
-              {balance && (
-                <span style={{ color: 'var(--green)', fontWeight: 600 }}>
-                  Còn <b>{balance.availableGb.toFixed(2)} GB</b>
-                  {genProvider === 'iproyal' ? ` · ${balance.subusers} sub-user` : ''}
-                </span>
+              {genProvider !== 'cliproxy' && (
+                <>
+                  <button className="btn" onClick={() => void checkBalance()} disabled={loadingBal}>
+                    {loadingBal ? '⏳ Đang kiểm tra…' : '📊 Xem GB còn lại'}
+                  </button>
+                  {balance && (
+                    <span style={{ color: 'var(--green)', fontWeight: 600 }}>
+                      Còn <b>{balance.availableGb.toFixed(2)} GB</b>
+                      {genProvider === 'iproyal' ? ` · ${balance.subusers} sub-user` : ''}
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <p className="hint" style={{ marginTop: 8 }}>
@@ -517,6 +541,12 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                 <>
                   API key Evomi nhập ở <b>Cài đặt → Nhà cung cấp Proxy</b>. Chọn sản phẩm + thông số
                   rồi bấm <b>Tạo proxy</b>.
+                </>
+              ) : genProvider === 'cliproxy' ? (
+                <>
+                  Tài khoản Cliproxy (host + port + username/password) nhập ở{' '}
+                  <b>Cài đặt → Nhà cung cấp Proxy</b>. Mỗi proxy tạo ra là 1 IP sticky riêng (tối đa
+                  120 phút). Chọn thông số rồi bấm <b>Tạo proxy</b>.
                 </>
               ) : (
                 <>
@@ -591,7 +621,12 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                     value={genLifetime}
                     onChange={(e) => setGenLifetime(e.target.value)}
                   >
-                    {(genProvider === 'evomi' ? EVOMI_LIFETIMES : IP_LIFETIMES).map(([val, name]) => (
+                    {(genProvider === 'evomi'
+                      ? EVOMI_LIFETIMES
+                      : genProvider === 'cliproxy'
+                        ? CLIPROXY_LIFETIMES
+                        : IP_LIFETIMES
+                    ).map(([val, name]) => (
                       <option key={val} value={val}>
                         {name}
                       </option>

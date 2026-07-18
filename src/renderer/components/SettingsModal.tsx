@@ -62,6 +62,16 @@ export function SettingsModal({
   // Evomi proxy provider — a single API key is enough.
   const [evoKey, setEvoKey] = useState('')
   const [evoMsg, setEvoMsg] = useState('')
+  // Cliproxy proxy provider — gateway host/port + account username/password (dashboard).
+  const [cpHost, setCpHost] = useState('us.cliproxy.io')
+  const [cpPort, setCpPort] = useState('')
+  const [cpUser, setCpUser] = useState('')
+  const [cpPass, setCpPass] = useState('')
+  const [cpState, setCpState] = useState('')
+  const [cpMsg, setCpMsg] = useState('')
+
+  const [capKey, setCapKey] = useState('')
+  const [capMsg, setCapMsg] = useState('')
 
   const saveIproyal = async (): Promise<void> => {
     await window.vgc.saveProviderCreds({
@@ -75,6 +85,29 @@ export function SettingsModal({
     setEvoMsg('✓ Đã lưu API key Evomi.')
   }
 
+  const saveCapsolver = async (): Promise<void> => {
+    await window.vgc.saveSettings({ capsolverApiKey: capKey.trim() })
+    setCapMsg(capKey.trim() ? '✓ Đã lưu API key CapSolver.' : '✓ Đã xoá API key CapSolver.')
+  }
+
+  const saveCliproxy = async (): Promise<void> => {
+    const port = parseInt(cpPort.trim(), 10)
+    if (!cpUser.trim() || !cpPass.trim() || !port) {
+      setCpMsg('⚠ Cần nhập host, port, username, password (xem ở dash.cliproxy.com).')
+      return
+    }
+    await window.vgc.saveProviderCreds({
+      cliproxy: {
+        host: cpHost.trim() || 'us.cliproxy.io',
+        port,
+        username: cpUser.trim(),
+        password: cpPass.trim(),
+        state: cpState.trim() || undefined
+      }
+    })
+    setCpMsg('✓ Đã lưu tài khoản Cliproxy.')
+  }
+
   useEffect(() => {
     void window.vgc.getProviderCreds().then((c) => {
       if (c.iproyal) {
@@ -83,6 +116,13 @@ export function SettingsModal({
         setIpToken(c.iproyal.apiToken || '')
       }
       if (c.evomi) setEvoKey(c.evomi.apiKey || '')
+      if (c.cliproxy) {
+        setCpHost(c.cliproxy.host || 'us.cliproxy.io')
+        setCpPort(c.cliproxy.port ? String(c.cliproxy.port) : '')
+        setCpUser(c.cliproxy.username || '')
+        setCpPass(c.cliproxy.password || '')
+        setCpState(c.cliproxy.state || '')
+      }
     })
     void window.vgc.getVersion().then(setVersion)
     // The engine always runs in Native (VGC Core) mode — the antidetect-correct
@@ -93,6 +133,7 @@ export function SettingsModal({
       if (s.nativeMode === false || s.useSystemBrowser) {
         void window.vgc.saveSettings({ nativeMode: true, useSystemBrowser: false })
       }
+      setCapKey(s.capsolverApiKey || '')
     })
     void window.vgc.getUpdateStatus().then((s) => {
       if (s.phase !== 'idle') setUpdate(s)
@@ -229,6 +270,94 @@ export function SettingsModal({
                 {evoMsg && (
                   <span style={{ color: 'var(--green)', fontSize: 12 }}>{evoMsg}</span>
                 )}
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <h3>🌐 Nhà cung cấp Proxy — Cliproxy</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Nhập <b>host</b>, <b>port</b>, <b>username</b>, <b>password</b> — lấy tại{' '}
+              <a
+                href="https://dash.cliproxy.com"
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                dash.cliproxy.com
+              </a>
+              . Sau đó vào <b>Proxy</b>, chọn nhà cung cấp <b>Cliproxy</b> rồi bấm <b>Tạo proxy</b>{' '}
+              (mỗi proxy = 1 IP sticky riêng, tối đa 120 phút).
+            </p>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  placeholder="Host (vd: us.cliproxy.io)"
+                  value={cpHost}
+                  onChange={(e) => setCpHost(e.target.value)}
+                  style={{ ...inp, flex: 2 }}
+                />
+                <input
+                  placeholder="Port"
+                  value={cpPort}
+                  onChange={(e) => setCpPort(e.target.value.replace(/[^0-9]/g, ''))}
+                  style={{ ...inp, flex: 1 }}
+                />
+              </div>
+              <input
+                placeholder="Username Cliproxy"
+                value={cpUser}
+                onChange={(e) => setCpUser(e.target.value)}
+                style={inp}
+              />
+              <input
+                placeholder="Password Cliproxy"
+                value={cpPass}
+                onChange={(e) => setCpPass(e.target.value)}
+                style={inp}
+              />
+              <input
+                placeholder="State/bang mặc định (tùy chọn, vd: Louisiana)"
+                value={cpState}
+                onChange={(e) => setCpState(e.target.value)}
+                style={inp}
+              />
+              <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
+                <button className="btn primary" onClick={() => void saveCliproxy()}>
+                  💾 Lưu tài khoản Cliproxy
+                </button>
+                {cpMsg && <span style={{ color: 'var(--green)', fontSize: 12 }}>{cpMsg}</span>}
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <h3>🧩 Giải Captcha tự động — CapSolver</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Dán API key từ{' '}
+              <a
+                href="https://dashboard.capsolver.com"
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                dashboard.capsolver.com
+              </a>
+              . Khi có key, tool <b>Đổi mật khẩu Gmail</b> sẽ tự giải captcha ảnh (và thử reCAPTCHA)
+              gặp trong lúc đăng nhập/đổi mật khẩu. Bỏ trống = tự giải tay trên cửa sổ.
+            </p>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <input
+                placeholder="API key CapSolver (CAP-xxxxxxxx…)"
+                value={capKey}
+                onChange={(e) => setCapKey(e.target.value)}
+                style={inp}
+              />
+              <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
+                <button className="btn primary" onClick={() => void saveCapsolver()}>
+                  💾 Lưu API key CapSolver
+                </button>
+                {capMsg && <span style={{ color: 'var(--green)', fontSize: 12 }}>{capMsg}</span>}
               </div>
             </div>
           </section>

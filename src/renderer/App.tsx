@@ -14,6 +14,7 @@ import { SettingsModal } from './components/SettingsModal'
 import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { ShareModal } from './components/ShareModal'
+import { GmailPasswordModal } from './components/GmailPasswordModal'
 import { Sidebar } from './components/Sidebar'
 import { applyTheme, getTheme, type Theme } from './theme'
 import logo from './assets/logo.png'
@@ -42,6 +43,7 @@ export default function App(): JSX.Element {
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [showGmail, setShowGmail] = useState(false)
   const [theme, setTheme] = useState<Theme>(getTheme())
   const [engineProg, setEngineProg] = useState<EngineProgress | null>(null)
   const [dataSync, setDataSync] = useState<DataSyncState | null>(null)
@@ -660,6 +662,7 @@ export default function App(): JSX.Element {
           >
             {tzSyncing ? '🕐 Đang khớp…' : '🕐 Khớp múi giờ'}
           </button>
+          {/* Nút "Đổi MK Gmail" tạm ẩn theo yêu cầu — code backend giữ nguyên để thêm lại sau. */}
           <button className="btn primary" onClick={() => setShowCreate(true)}>
             + Tạo profile
           </button>
@@ -749,6 +752,14 @@ export default function App(): JSX.Element {
         />
       )}
       {showCloud && <CloudModal onClose={() => setShowCloud(false)} onSynced={refresh} />}
+      {showGmail && (
+        <GmailPasswordModal
+          profiles={profiles}
+          proxies={proxyPool}
+          onChanged={refresh}
+          onClose={() => setShowGmail(false)}
+        />
+      )}
       {showProxyMgr && (
         <ProxyManagerModal
           onClose={() => {

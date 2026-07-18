@@ -6,6 +6,7 @@ import { registerIpc } from './ipc'
 import { stopAllAndSync } from './profile-manager'
 import { restartApiServer, stopApiServer } from './api-manager'
 import { initUpdater, hasDownloadedUpdate, installOnQuit } from './updater'
+import { startProxyKeepAlive, stopProxyKeepAlive } from './proxy-keepalive'
 
 // Network races — a browser tab or upstream proxy closing mid-write — surface as
 // socket errors with these codes. The proxy relay attaches its own handlers, but
@@ -126,6 +127,12 @@ app.whenReady().then(() => {
   } catch (e) {
     console.error('[startup] updater failed:', e)
   }
+  try {
+    // Keep residential (Evomi hardsession) IPs from rotating on inactivity.
+    startProxyKeepAlive()
+  } catch (e) {
+    console.error('[startup] proxy keep-alive failed:', e)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -148,6 +155,7 @@ async function gracefulQuit(): Promise<void> {
     // ignore — exit regardless
   }
   stopApiServer()
+  stopProxyKeepAlive()
   // If a newer version finished downloading, APPLY it now (the app is fully quitting).
   // electron-updater's own auto-install-on-quit hooks the 'quit' event, which app.exit(0)
   // below never emits — so on an always-on VPS the download sat pending forever and the

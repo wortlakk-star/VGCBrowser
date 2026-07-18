@@ -146,6 +146,29 @@ function tunnelTo(proxy: ProxyConfig, host: string, port: number): Promise<net.S
   return proxy.type === 'socks5' ? socksTunnel(proxy, host, port) : connectTunnel(proxy, host, port)
 }
 
+/**
+ * Keep-alive poke: open a tunnel THROUGH the proxy to a stable host, then close it
+ * immediately. The upstream connect routes through the residential peer, so the sticky
+ * (Evomi hardsession) session registers activity and isn't recycled for inactivity —
+ * while transferring ≈no payload (residential proxies are GB-metered, so we deliberately
+ * send nothing beyond the tunnel setup). Returns whether the tunnel opened. Never throws.
+ */
+export async function pokeProxy(proxy: ProxyConfig): Promise<boolean> {
+  let socket: net.Socket | null = null
+  try {
+    socket = await withTimeout(tunnelTo(proxy, 'www.google.com', 443), CONNECT_TIMEOUT)
+    return true
+  } catch {
+    return false
+  } finally {
+    try {
+      socket?.destroy()
+    } catch {
+      // ignore — best effort
+    }
+  }
+}
+
 /** TLS over the tunneled socket, send an HTTPS GET, return the raw response. */
 function httpsOver(socket: net.Socket, host: string, path: string): Promise<string> {
   return new Promise((resolve, reject) => {

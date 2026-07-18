@@ -12,6 +12,9 @@ import type {
   EngineProgress,
   Fingerprint,
   GenerateProxiesOpts,
+  GmailChangeResult,
+  GmailPasswordTask,
+  GmailProgress,
   OsType,
   Profile,
   ProfileRuntimeState,
@@ -111,6 +114,20 @@ const api = {
     const listener = (_e: unknown, state: ProfileRuntimeState): void => cb(state)
     ipcRenderer.on('profile:status', listener)
     return () => ipcRenderer.removeListener('profile:status', listener)
+  },
+
+  // ── Bulk Gmail password change ──
+  changeGmailPassword: (profileId: string, task: GmailPasswordTask): Promise<GmailChangeResult> =>
+    ipcRenderer.invoke('gmail:changePassword', profileId, task),
+
+  /** Durably append "email|newPassword|status" to the on-disk log; returns its path. */
+  logGmailResult: (line: string): Promise<string> => ipcRenderer.invoke('gmail:logResult', line),
+
+  /** Live per-account progress while a batch runs. Returns an unsubscribe fn. */
+  onGmailProgress: (cb: (p: GmailProgress) => void): (() => void) => {
+    const listener = (_e: unknown, p: GmailProgress): void => cb(p)
+    ipcRenderer.on('gmail:progress', listener)
+    return () => ipcRenderer.removeListener('gmail:progress', listener)
   },
 
   // ── App version + auto-update (check → download → install) ──

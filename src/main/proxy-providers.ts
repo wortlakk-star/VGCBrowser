@@ -100,7 +100,70 @@ export async function buildProviderProxy(
     return { type: p.type, host: p.host, port: p.port, username: p.username, password: p.password, provider: 'Evomi' }
   }
 
+  if (provider === 'cliproxy') {
+    // Cliproxy is a gateway provider (no REST API): country/state/session/lifetime are
+    // encoded in the username. Sticky ⇒ append `-sid-<id>-t-<minutes>` (max 120 min);
+    // each distinct sid = a distinct sticky IP. Rotating ⇒ omit sid.
+    const c = creds.cliproxy
+    if (!c?.username || !c?.password) throw new Error('Chưa nhập tài khoản Cliproxy.')
+    if (!c.port || c.port <= 0) throw new Error('Chưa nhập cổng (port) Cliproxy — xem ở dashboard.')
+    const region = (cc || 'us').toUpperCase()
+    let user = `${c.username}-region-${region}`
+    if (c.state?.trim()) user += `-st-${c.state.trim()}`
+    if (opts.sticky) user += `-sid-${sid}-t-${Math.min(120, mins)}`
+    return {
+      type: 'socks5',
+      host: (c.host || 'us.cliproxy.io').trim(),
+      port: c.port,
+      username: user,
+      password: c.password,
+      provider: 'Cliproxy'
+    }
+  }
+
   throw new Error('Nhà cung cấp không hỗ trợ.')
+}
+
+/**
+ * Generate N ready-to-use Cliproxy proxies as SavedProxy records (NOT persisted). Cliproxy
+ * has NO REST API — the whole "generate" is client-side: build N usernames, each with a
+ * fresh session id (`sid`), so each is a DISTINCT sticky IP. Country/state/lifetime are
+ * baked into the username. Sticky lifetime is capped at 120 min (Cliproxy's sticky max).
+ * Docs: help.cliproxy.com — username `user-region-{CC}-st-{STATE}-sid-{ID}-t-{MINUTES}`.
+ */
+export async function generateCliproxyProxies(opts: GenerateProxiesOpts): Promise<SavedProxy[]> {
+  const creds = await getProviderCreds()
+  const c = creds.cliproxy
+  if (!c?.username || !c?.password) {
+    throw new Error('Chưa nhập tài khoản Cliproxy (username/password) — Cài đặt → Nhà cung cấp Proxy.')
+  }
+  if (!c.port || c.port <= 0) throw new Error('Chưa nhập cổng (port) Cliproxy — xem ở dashboard.')
+
+  const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
+  const type: SavedProxy['type'] = opts.protocol === 'socks5' ? 'socks5' : 'http'
+  const host = (c.host || 'us.cliproxy.io').trim()
+  const region = (opts.country ?? '').trim().toUpperCase() || 'US'
+  const state = (c.state ?? '').trim()
+  // Cliproxy sticky max is 120 min; default to the max when sticky + no explicit lifetime.
+  const mins = Math.min(120, evomiLifetimeMinutes(opts.lifetime) ?? 120)
+  const prefix = (opts.label ?? '').trim() || `Cliproxy-${region}`
+
+  const out: SavedProxy[] = []
+  for (let i = 0; i < count; i++) {
+    let user = `${c.username}-region-${region}`
+    if (state) user += `-st-${state}`
+    if (opts.sticky) user += `-sid-${sessionId()}-t-${mins}`
+    out.push({
+      id: genProxyId(),
+      label: `${prefix} ${i + 1}`,
+      type,
+      host,
+      port: c.port,
+      username: user,
+      password: c.password
+    })
+  }
+  return out
 }
 
 const genProxyId = (): string =>
