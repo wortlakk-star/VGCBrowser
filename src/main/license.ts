@@ -9,8 +9,10 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
+import { getMachineId, getMachineName } from './machine-id'
 
 const API = 'https://vgcbrowser.com/quanly/check.php'
+const REGISTER_API = 'https://vgcbrowser.com/quanly/register.php'
 
 // Owner emails that are ALWAYS licensed — a hard safety net so the admin can never be
 // locked out of their own app, even if the allowlist server is unreachable.
@@ -65,6 +67,34 @@ export async function refreshLicense(email: string | null): Promise<boolean> {
     const cached = cache[e] === true
     state = { email: e, approved: cached, reason: cached ? 'cache' : 'unverified' }
     return cached
+  }
+}
+
+/**
+ * Fire-and-forget: tell the admin panel (/quanly) this email just signed in — from which
+ * machine (a stable per-machine id + hostname) and, resolved server-side from the request
+ * IP, which country. Lets the admin SEE new sign-ups (with country + machine) and approve
+ * them there. Never blocks or throws: registration reporting must not affect login.
+ */
+export async function reportRegistration(email: string | null): Promise<void> {
+  const e = (email || '').toLowerCase().trim()
+  if (!e) return
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 8000)
+    await fetch(REGISTER_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: e,
+        machineId: getMachineId(),
+        machineName: getMachineName(),
+        os: process.platform
+      }),
+      signal: ctrl.signal
+    }).finally(() => clearTimeout(timer))
+  } catch {
+    /* best-effort */
   }
 }
 

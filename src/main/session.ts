@@ -4,15 +4,18 @@
 // cloud-data.ts (per-account Storage sync) can read it without a circular import.
 
 import type { CloudSession } from '../shared/types'
-import { refreshLicense } from './license'
+import { refreshLicense, reportRegistration } from './license'
 
 let session: CloudSession | null = null
 
 /** Renderer (Gate) hands us its live access token + uid, refreshed on change. */
 export function setCloudSession(s: CloudSession | null): void {
   session = s
-  // Re-check the admin allowlist whenever the login changes (approved emails only).
+  // Re-check the admin allowlist whenever the login changes (approved emails only)...
   void refreshLicense(getCloudEmail())
+  // ...and report the sign-in (email + machine + country) to the admin panel so new
+  // registrations show up there to be approved.
+  void reportRegistration(getCloudEmail())
 }
 
 export function getCloudSession(): CloudSession | null {
