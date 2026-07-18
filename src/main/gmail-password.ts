@@ -38,6 +38,7 @@ type BrainState =
   | 'captcha' // image captcha / reCAPTCHA — needs a solver or manual input
   | 'newpass_form'
   | 'wrong_password'
+  | 'no_account' // Google says the email itself doesn't exist (not a password problem)
   | 'weak_password'
   | 'challenge'
   | 'done'
@@ -174,10 +175,15 @@ const BRAIN = /* js */ `
     body.indexOf('type the characters you see') !== -1;
 
   // Hard error signals first (so we don't mistake them for a normal step).
+  // Email-not-found is a DIFFERENT problem from a wrong password — report it separately so the
+  // operator fixes the address, not the password.
+  if (body.indexOf("couldn't find your google account") !== -1 ||
+      body.indexOf('không tìm thấy tài khoản google') !== -1) {
+    return { state: 'no_account', url: url };
+  }
   if (body.indexOf('wrong password') !== -1 ||
       body.indexOf('mật khẩu không chính xác') !== -1 ||
-      body.indexOf('sai mật khẩu') !== -1 ||
-      body.indexOf("couldn't find your google account") !== -1) {
+      body.indexOf('sai mật khẩu') !== -1) {
     return { state: 'wrong_password', url: url };
   }
   if (body.indexOf('choose a stronger password') !== -1 ||
@@ -245,8 +251,11 @@ const BRAIN = /* js */ `
     }
     if (vis(codeInput)) {
       var cur = (codeInput.value || '').replace(/\\D/g, '');
-      if (cur !== cfg.totp) setVal(codeInput, cfg.totp);
-      clickNext();
+      // Submit ONLY when a new code was actually typed. clickNext() previously fired on every
+      // ~1.5s poll even though the code is constant within a 30s window — ~200 resubmissions of a
+      // failed 2FA code across the budget, which gets the account rate-limited / locked. Now it
+      // fires ~once per 30s window (when the rotating code changes).
+      if (cur !== cfg.totp) { setVal(codeInput, cfg.totp); clickNext(); }
       return { state: 'totp', url: url };
     }
     // Google defaulted to the phone-tap prompt: steer toward the Authenticator option.
@@ -484,6 +493,14 @@ export async function changeGmailPassword(
             lastNavAt = Date.now()
           }
           break
+        case 'no_account':
+          stopProfile(profileId)
+          return {
+            email: task.email,
+            profileId,
+            status: 'needs_manual',
+            message: 'Không tìm thấy tài khoản Google — kiểm tra lại email'
+          }
         case 'wrong_password':
           stopProfile(profileId)
           return {

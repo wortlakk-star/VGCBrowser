@@ -172,8 +172,9 @@ export function GmailPasswordModal({ profiles, proxies, onClose, onChanged }: Pr
       const prof = matchProfile(p.email, profiles)
       const willCreate = !prof && autoCreate
 
+      const totpIssue = totpSecretIssue(p.totpSecret)
       let status: RowStatus = 'pending'
-      let message = totpSecretIssue(p.totpSecret) ?? ''
+      let message = totpIssue ?? ''
       let profileName: string | null = prof?.name ?? null
 
       if (seen.has(key)) {
@@ -182,6 +183,12 @@ export function GmailPasswordModal({ profiles, proxies, onClose, onChanged }: Pr
       } else if (p.tooMany) {
         status = 'error'
         message = 'Dòng có hơn 4 cột — mật khẩu chứa ký tự phân cách (| , tab)? Sửa lại.'
+      } else if (totpIssue) {
+        // An invalid 2FA key (e.g. a pasted 6-digit code) must BLOCK the row, not just annotate it
+        // — otherwise a bogus TOTP would be auto-typed at Google's 2-step prompt and rejected,
+        // feeding the resubmission flood the run loop otherwise produces.
+        status = 'error'
+        message = totpIssue
       } else if (pwMode === 'manual' && !p.newPassword) {
         status = 'error'
         message = 'Thiếu mật khẩu mới (hoặc chọn chế độ Ngẫu nhiên)'

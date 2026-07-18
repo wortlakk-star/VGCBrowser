@@ -256,8 +256,8 @@ try {
               get: function(){ return this.__vgcOic || null; },
               set: function(cb){
                 // Replace, don't stack: remove the previous wrapper listener before adding a new
-                // one (and add none when cb isn't a function), so onicecandidate behaves as a
-                // single assignable handler and `pc.onicecandidate = null` actually detaches it.
+                // one (and add none when cb isn't a function), so onicecandidate is a single
+                // assignable handler and setting it to null actually detaches the listener.
                 if (this.__vgcOicL) { try { origRm('icecandidate', this.__vgcOicL); } catch(e){} this.__vgcOicL = null; }
                 this.__vgcOic = (typeof cb === 'function') ? cb : null;
                 if (this.__vgcOic) {

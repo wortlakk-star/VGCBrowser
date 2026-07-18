@@ -744,22 +744,27 @@ export async function launchProfile(
     entry.automationConn?.close()
     entry.relay?.close()
     running.delete(id)
+    lastCookieSnapshot.delete(id) // don't retain the profile's cookie snapshot after it closes
     broadcast({ id, status: 'stopped' })
     // GoLogin-style sync-on-close: push the freshest session back to the cloud.
     void syncDataOnClose(id)
   })
   proc.on('error', (err) => {
+    // Mirror the 'exit' cleanup: the tabPoll interval would otherwise keep firing every 5s
+    // forever against a dead CDP connection once the entry is removed from `running`.
+    if (entry.tabPoll) clearInterval(entry.tabPoll)
     entry.injector?.dispose()
     entry.automationConn?.close()
     entry.relay?.close()
     running.delete(id)
+    lastCookieSnapshot.delete(id)
     broadcast({ id, status: 'error', error: String(err) })
   })
 
   // Touch lastUsedAt via an atomic patch (re-reads fresh inside the store lock) so a
   // profile edit made while this profile was opening — the cloud download can take
   // several seconds — isn't clobbered by writing back the pre-launch snapshot.
-  await patchProfile(id, { lastUsedAt: new Date().toISOString() })
+  await patchProfile(id, { lastUsedAt: new Date().toISOString() }).catch(() => {})
 
   // Automation mode: open our OWN control connection over the CDP pipe (the injector is
   // NOT attached — the native engine already spoofs the fingerprint). gmail-password.ts

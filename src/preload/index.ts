@@ -48,7 +48,7 @@ const api = {
   exportProfiles: (ids?: string[]): Promise<{ count: number; filePath?: string }> =>
     ipcRenderer.invoke('profiles:export', ids),
 
-  importProfiles: (): Promise<{ count: number }> =>
+  importProfiles: (): Promise<{ count: number; error?: string }> =>
     ipcRenderer.invoke('profiles:import'),
 
   bulkUpsertProfiles: (profiles: Profile[]): Promise<void> =>

@@ -177,7 +177,12 @@ export function registerIpc(): void {
     const now = new Date().toISOString()
     // Defensive defaults: a hand-edited / foreign export may miss proxy/fingerprint/
     // startUrls, which would otherwise crash launchProfile later. Fill them in.
-    const incoming: Profile[] = parsed.map((p: Partial<Profile>) => {
+    const incoming: Profile[] = parsed
+      // Drop null/primitive/array entries first — a null element in a hand-edited/foreign export
+      // would otherwise throw on `p.os` and reject the whole import (an unhandled rejection in the
+      // renderer, which shows the user nothing).
+      .filter((p): p is Partial<Profile> => !!p && typeof p === 'object' && !Array.isArray(p))
+      .map((p: Partial<Profile>) => {
       const os: OsType = p.os ?? hostOs()
       return {
         ...p,

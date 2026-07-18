@@ -510,6 +510,9 @@ export default function App(): JSX.Element {
     if (res.count) {
       window.alert(`Đã nhập ${res.count} profile.`)
       await refresh()
+    } else if (res.error) {
+      // Surface the reason (bad JSON / not an array) instead of failing silently.
+      window.alert(res.error)
     }
   }, [refresh])
 
