@@ -486,14 +486,26 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
       setMsg(`Đang thay… (${done}/${deadList.length})`)
       const wantCls = proxyClass(prof.proxy.host)
       const wantCC = prof.proxyCheck?.countryCode || ''
+      // A STATIC profile (dedicated IP — PayPal/Stripe) MUST stay on a static IP: never hand it
+      // a rotating residential. A RESIDENTIAL profile (e.g. Gmail) prefers residential but will
+      // accept a static too (a dedicated IP is even more stable for it) — so a batch of new
+      // proxies of the "wrong" class still gets used instead of leaving the profile unfixed.
+      const classOk = (fCls: 'static' | 'res'): boolean =>
+        wantCls === 'static' ? fCls === 'static' : true
       const cands = free
         .filter(
           (f) =>
             !usedIds.has(f.id) &&
-            proxyClass(f.host) === wantCls &&
+            classOk(proxyClass(f.host)) &&
             (!wantCC || !f.lastCountryCode || f.lastCountryCode === wantCC)
         )
-        .sort((a, b) => (a.lastCountryCode === wantCC ? 0 : 1) - (b.lastCountryCode === wantCC ? 0 : 1))
+        .sort((a, b) => {
+          // prefer SAME class first, then SAME country
+          const ac = proxyClass(a.host) === wantCls ? 0 : 1
+          const bc = proxyClass(b.host) === wantCls ? 0 : 1
+          if (ac !== bc) return ac - bc
+          return (a.lastCountryCode === wantCC ? 0 : 1) - (b.lastCountryCode === wantCC ? 0 : 1)
+        })
       let picked: SavedProxy | null = null
       for (const cand of cands) {
         const probed = await probe(cand)
