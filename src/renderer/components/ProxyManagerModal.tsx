@@ -468,19 +468,11 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   // first (skip any that recovered). Reuses assign() so profile.proxy + pool assignedTo update
   // exactly like a manual assign. A candidate is committed only after a live check confirms it
   // is alive AND (when we know the dead one's country) the same country.
-  const replaceDeadAll = async (): Promise<void> => {
-    if (!deadProfiles.length) {
-      setMsg('Chưa có profile chết — bấm "🔎 Check proxy tất cả profile" trước.')
-      return
-    }
-    if (
-      !window.confirm(
-        `Đổi proxy mới cho ${deadProfiles.length} profile có proxy CHẾT (dùng proxy rảnh trong kho, ` +
-          `cùng nước + cùng loại)? Tài khoản PayPal/Stripe sẽ đổi IP.`
-      )
-    )
-      return
-
+  // Core replace: give each profile in `deadList` a free, same-CLASS, same-country, alive
+  // proxy from the pool. Reuses assign() (updateProfile + pool assignedTo). Does NOT re-check
+  // the dead proxy — the caller already decided the list (a live scan, or the "proxy lỗi"
+  // badge); it only live-verifies the NEW proxy so a dead replacement is never assigned.
+  const doReplaceProfiles = async (deadList: Profile[]): Promise<void> => {
     const profById = new Map(profiles.map((p) => [p.id, p]))
     // free candidates = pool proxies not currently assigned to an existing profile
     const free = proxies.filter((p) => !p.assignedTo || !profById.has(p.assignedTo))
@@ -489,18 +481,9 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     const unresolved: string[] = []
     let done = 0
 
-    for (const prof of deadProfiles) {
+    for (const prof of deadList) {
       done++
-      setMsg(`Đang thay… (${done}/${deadProfiles.length})`)
-      // re-verify still dead — never change the IP of a profile whose proxy recovered
-      let stillDead = true
-      try {
-        stillDead = !(await window.vgc.checkProxy(prof.proxy)).ok
-      } catch {
-        stillDead = true
-      }
-      if (!stillDead) continue
-
+      setMsg(`Đang thay… (${done}/${deadList.length})`)
       const wantCls = proxyClass(prof.proxy.host)
       const wantCC = prof.proxyCheck?.countryCode || ''
       const cands = free
@@ -531,7 +514,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
 
     setDeadProfiles([])
     await refresh()
-    let m = `✓ Đã thay ${replaced.length}/${deadProfiles.length} profile.`
+    let m = `✓ Đã thay ${replaced.length}/${deadList.length} profile.`
     if (replaced.length)
       m +=
         '\n• ' +
@@ -542,6 +525,43 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         .slice(0, 15)
         .join(', ')}${unresolved.length > 15 ? '…' : ''}`
     setMsg(m)
+  }
+
+  // Replace the proxies found DEAD by the live scan (deadProfiles).
+  const replaceDeadAll = async (): Promise<void> => {
+    if (!deadProfiles.length) {
+      setMsg('Chưa có profile chết — bấm "🔎 Check proxy tất cả profile" trước.')
+      return
+    }
+    if (
+      !window.confirm(
+        `Đổi proxy mới cho ${deadProfiles.length} profile có proxy CHẾT (proxy rảnh cùng nước + cùng loại)? ` +
+          `Tài khoản PayPal/Stripe sẽ đổi IP.`
+      )
+    )
+      return
+    await doReplaceProfiles(deadProfiles)
+  }
+
+  // ONE-CLICK: replace the proxy on EVERY profile currently flagged "proxy lỗi" (the list's
+  // badge = profile.proxyCheck.status==='error'), no separate scan needed. Use this after you've
+  // deleted the dead proxies + added new ones and just want to reassign the whole batch fast.
+  const replaceAllErrorProfiles = async (): Promise<void> => {
+    const errored = profiles.filter(
+      (p) => p.proxyCheck?.status === 'error' && p.proxy && p.proxy.type !== 'none' && p.proxy.host
+    )
+    if (!errored.length) {
+      setMsg('Không có profile nào đang báo "proxy lỗi".')
+      return
+    }
+    if (
+      !window.confirm(
+        `Thay proxy MỚI cho ${errored.length} profile đang báo proxy lỗi (dùng proxy rảnh trong kho, ` +
+          `cùng loại + cùng nước)? Tài khoản PayPal/Stripe sẽ đổi IP.`
+      )
+    )
+      return
+    await doReplaceProfiles(errored)
   }
 
   // Delete a proxy both locally AND in the cloud (tombstone) so it doesn't come
@@ -607,6 +627,8 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   }
 
   const used = proxies.filter((p) => p.assignedTo).length
+  // Profiles the list currently flags "proxy lỗi" (badge = proxyCheck.status==='error').
+  const erroredCount = profiles.filter((p) => p.proxyCheck?.status === 'error').length
 
   const inp = (w: number): CSSProperties => ({
     width: w,
@@ -861,13 +883,22 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               >
                 🔄 Đồng bộ profile
               </button>
+              {erroredCount > 0 && (
+                <button
+                  className="btn primary"
+                  title="Thay proxy mới cho MỌI profile đang báo 'proxy lỗi' — không cần check lại"
+                  onClick={() => void replaceAllErrorProfiles()}
+                >
+                  🔧 Thay proxy {erroredCount} profile lỗi
+                </button>
+              )}
               <button
                 className="btn"
-                title="Kiểm tra proxy của TẤT CẢ profile, liệt kê profile nào proxy chết"
+                title="Kiểm tra LẠI proxy của TẤT CẢ profile (chậm hơn), liệt kê profile nào proxy chết"
                 onClick={() => void scanDeadProfiles()}
                 disabled={scanning}
               >
-                {scanning ? '⏳ Đang check…' : '🔎 Check proxy tất cả profile'}
+                {scanning ? '⏳ Đang check…' : '🔎 Check lại proxy tất cả'}
               </button>
               {deadProfiles.length > 0 && (
                 <button
