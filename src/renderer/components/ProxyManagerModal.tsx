@@ -521,6 +521,19 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
       }
       usedIds.add(picked.id)
       await assign(picked, prof.id) // updateProfile(proxy) + saveProxy(assignedTo)
+      // Clear the profile's "proxy lỗi" badge right away by writing a fresh proxyCheck from the
+      // new proxy (which we already live-verified). Otherwise the badge — set only when a profile
+      // is opened — would keep showing red after a successful replace and look like it failed.
+      await window.vgc.updateProfile(prof.id, {
+        proxyCheck: {
+          status: 'ok',
+          ip: picked.lastIp,
+          country: picked.lastCountry,
+          countryCode: picked.lastCountryCode,
+          latencyMs: picked.latencyMs,
+          at: new Date().toISOString()
+        }
+      })
       replaced.push(`${prof.name} → ${picked.lastIp || picked.host}`)
     }
 
