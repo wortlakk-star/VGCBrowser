@@ -21,6 +21,11 @@ const MAC_DOWNLOAD_PAGE = 'https://vgcbrowser.com/'
 
 let lastStatus: UpdateStatus = { phase: 'idle', currentVersion: app.getVersion() }
 
+// Set true when the user explicitly clicks "restart & install" so the on-quit installer
+// RELAUNCHES the app afterward. A plain window-close just installs quietly without
+// reopening (the user closed the app — don't force it back open).
+let relaunchAfterInstall = false
+
 function broadcast(s: UpdateStatus): void {
   lastStatus = s
   for (const w of BrowserWindow.getAllWindows()) {
@@ -109,9 +114,14 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
  */
 export function installUpdate(): void {
   if (!app.isPackaged || lastStatus.phase !== 'downloaded') return
-  // The installer is spawned first and waits for this process to exit, so the
-  // existing before-quit handler (stop + cloud sync) still runs cleanly.
-  autoUpdater.quitAndInstall()
+  // DON'T call quitAndInstall() here. It races the app's before-quit handler, which
+  // preventDefault()s the quit and runs gracefulQuit → installOnQuit → quitAndInstall
+  // AGAIN; electron-updater rejects that second call ("quitAndInstall called twice") so
+  // the app ends up closing WITHOUT relaunching — the button looked broken. Instead just
+  // flag a relaunch and ask the app to quit; gracefulQuit's installOnQuit() does the one,
+  // authoritative install (after stopping profiles + cloud-syncing sessions).
+  relaunchAfterInstall = true
+  app.quit()
 }
 
 /** True when a newer version has finished downloading and is ready to install. */
@@ -128,9 +138,9 @@ export function hasDownloadedUpdate(): boolean {
  */
 export function installOnQuit(): void {
   try {
-    // isSilent=true (per-user oneClick NSIS → no elevation, runs quietly),
-    // isForceRunAfter=false (user quit the app — apply the update, don't relaunch).
-    autoUpdater.quitAndInstall(true, false)
+    // isSilent=true (per-user oneClick NSIS → no elevation, runs quietly). Relaunch only
+    // when the user clicked "restart & install"; a plain quit installs without reopening.
+    autoUpdater.quitAndInstall(true, relaunchAfterInstall)
   } catch {
     /* fall through to the caller's app.exit */
   }
