@@ -31,7 +31,8 @@ import { seedFromString } from './fingerprint-script'
 import { downloadProfileData, uploadProfileData, downloadProfileCookies } from './cloud-data'
 import { dbg } from './dbg'
 import { ensureWebRtcGuardExtension } from './webrtc-guard'
-import { getCloudSession } from './session'
+import { getCloudSession, getCloudEmail } from './session'
+import { refreshLicense, isLicensed, licenseState } from './license'
 
 interface RunningProfile {
   proc: ChildProcess
@@ -314,6 +315,26 @@ export async function launchProfile(
 
   const profile = await getProfile(id)
   if (!profile) throw new Error(`Không tìm thấy profile: ${id}`)
+
+  // ── Access gate: only emails the admin approved (vgcbrowser.com/quanly) may open a
+  // profile. Re-checked here so a revoke takes effect on the next open. Network blip →
+  // falls back to the last-known cached decision (see license.ts), so it never locks out
+  // an already-approved user; a never-approved / signed-out email stays blocked.
+  // OWNER_UID bypass: the app owner's own cloud account is ALWAYS allowed (belt-and-
+  // suspenders with the ALWAYS_ALLOWED email in license.ts) so the owner can never be
+  // locked out of their own app, whatever the allowlist server says.
+  const OWNER_UID = 'ce0943d5-da08-4219-97fc-00b829789867'
+  if (getCloudSession()?.uid !== OWNER_UID) {
+    await refreshLicense(getCloudEmail())
+    if (!isLicensed()) {
+      const st = licenseState()
+      const msg = st.email
+        ? `Tài khoản "${st.email}" chưa được cấp phép dùng VGC Browser. Liên hệ admin để kích hoạt.`
+        : 'Vui lòng ĐĂNG NHẬP bằng tài khoản đã được admin cấp phép để mở profile.'
+      broadcast({ id, status: 'error', error: msg })
+      throw new Error(msg)
+    }
+  }
 
   // GoLogin model: open with the engine's NATIVE C++ fingerprint spoofing and DO NOT
   // attach a CDP debugger — Google blocks browsers with an active CDP session at
