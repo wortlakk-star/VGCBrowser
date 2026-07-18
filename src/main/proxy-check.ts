@@ -76,12 +76,15 @@ const ATTEMPTS = 3
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** Hard overall cap so a half-open proxy socket can't hang the check forever. */
+/** Hard overall cap so a half-open proxy socket can't hang the check forever. Clears the
+ *  timer once the race settles so a fast-resolving check doesn't leave a live 12s timer per
+ *  call (batch checks would otherwise pile up dozens of dangling timers). */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Proxy timeout')), ms))
-  ])
+  let id: ReturnType<typeof setTimeout>
+  const timer = new Promise<T>((_, reject) => {
+    id = setTimeout(() => reject(new Error('Proxy timeout')), ms)
+  })
+  return Promise.race([p, timer]).finally(() => clearTimeout(id))
 }
 
 function extractJson(raw: string): Record<string, unknown> | null {
@@ -154,11 +157,29 @@ function tunnelTo(proxy: ProxyConfig, host: string, port: number): Promise<net.S
  * send nothing beyond the tunnel setup). Returns whether the tunnel opened. Never throws.
  */
 export async function pokeProxy(proxy: ProxyConfig): Promise<boolean> {
+  const tunnel = tunnelTo(proxy, 'www.google.com', 443)
+  let timedOut = false
+  // If withTimeout's timer wins the race, tunnelTo can still resolve a live socket a moment
+  // later that nobody awaits — destroy that orphan so periodic keep-alive pokes don't leak
+  // sockets. (Also swallow a late rejection so it isn't an unhandled rejection.)
+  tunnel.then(
+    (s) => {
+      if (timedOut) {
+        try {
+          s.destroy()
+        } catch {
+          /* best effort */
+        }
+      }
+    },
+    () => {}
+  )
   let socket: net.Socket | null = null
   try {
-    socket = await withTimeout(tunnelTo(proxy, 'www.google.com', 443), CONNECT_TIMEOUT)
+    socket = await withTimeout(tunnel, CONNECT_TIMEOUT)
     return true
   } catch {
+    timedOut = true
     return false
   } finally {
     try {

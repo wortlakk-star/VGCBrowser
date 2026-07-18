@@ -429,7 +429,11 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         const probed = await probe(cand)
         await window.vgc.saveProxy(probed)
         if (probed.lastStatus !== 'ok') continue
-        if (wantCC && probed.lastCountryCode && probed.lastCountryCode !== wantCC) continue
+        // When the dead profile is country-locked (e.g. a US PayPal account), the replacement's
+        // country must be KNOWN and equal — an empty/unresolved countryCode is NOT a pass (a
+        // geo-failed candidate could be DE/NL). Only when we don't know the profile's country
+        // (wantCC empty) do we accept any country.
+        if (wantCC && probed.lastCountryCode !== wantCC) continue
         picked = probed
         break
       }

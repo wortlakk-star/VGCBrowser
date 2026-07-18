@@ -8,33 +8,8 @@ export function isPort(x?: string): boolean {
   return Number.isInteger(n) && n > 0 && n <= 65535
 }
 
-/**
- * Parse one pasted proxy line. Handles, in any order:
- *   user:pass@host:port   ·   host:port@user:pass
- *   host:port:user:pass   ·   host:port   ·   scheme://…   ·   trailing :SOCKS5
- * defaultType applies when the line has no scheme/marker.
- */
-export function parseLine(
-  line: string,
-  defaultType: ProxyType
-): Omit<SavedProxy, 'id' | 'label'> | null {
-  let s = line.trim()
-  if (!s) return null
-  let type: ProxyType = defaultType
-  const scheme = s.match(/^(https?|socks5):\/\//i)
-  if (scheme) {
-    const k = scheme[1].toLowerCase()
-    type = k === 'socks5' ? 'socks5' : k === 'https' ? 'https' : 'http'
-    s = s.slice(scheme[0].length)
-  }
-  // trailing type marker: ...:SOCKS5 / :HTTP / :HTTPS
-  const tail = s.match(/:(socks5|https?)$/i)
-  if (tail) {
-    const k = tail[1].toLowerCase()
-    type = k === 'socks5' ? 'socks5' : k === 'https' ? 'https' : 'http'
-    s = s.slice(0, s.length - tail[0].length)
-  }
-
+// Extract host/port/user/pass from a line that has already had any scheme/marker removed.
+function parseCore(s: string, type: ProxyType): Omit<SavedProxy, 'id' | 'label'> | null {
   let host = ''
   let port = 0
   let username: string | undefined
@@ -87,4 +62,37 @@ export function parseLine(
   }
   if (!host || !isPort(String(port))) return null
   return { type, host, port, username, password }
+}
+
+/**
+ * Parse one pasted proxy line. Handles, in any order:
+ *   user:pass@host:port   ·   host:port@user:pass
+ *   host:port:user:pass   ·   host:port   ·   scheme://…   ·   trailing :SOCKS5
+ * defaultType applies when the line has no scheme/marker.
+ */
+export function parseLine(
+  line: string,
+  defaultType: ProxyType
+): Omit<SavedProxy, 'id' | 'label'> | null {
+  let s = line.trim()
+  if (!s) return null
+  let type: ProxyType = defaultType
+  const scheme = s.match(/^(https?|socks5):\/\//i)
+  if (scheme) {
+    const k = scheme[1].toLowerCase()
+    type = k === 'socks5' ? 'socks5' : k === 'https' ? 'https' : 'http'
+    s = s.slice(scheme[0].length)
+  }
+  // A trailing ...:SOCKS5 / :HTTP / :HTTPS is usually a type marker — BUT it could also be a
+  // literal password of exactly 'http'/'https'/'socks5' in a host:port:user:pass line. Try it
+  // as a marker first; only if the stripped remainder fails to parse do we fall back to treating
+  // the ':http' etc. as part of the credentials.
+  const tail = s.match(/:(socks5|https?)$/i)
+  if (tail) {
+    const k = tail[1].toLowerCase()
+    const markerType: ProxyType = k === 'socks5' ? 'socks5' : k === 'https' ? 'https' : 'http'
+    const asMarker = parseCore(s.slice(0, s.length - tail[0].length), markerType)
+    if (asMarker) return asMarker
+  }
+  return parseCore(s, type)
 }

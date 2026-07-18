@@ -49,7 +49,6 @@ export async function refreshLicense(email: string | null): Promise<boolean> {
     state = { email: e, approved: true, reason: 'owner' }
     return true
   }
-  const cache = loadCache()
   try {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 8000)
@@ -59,12 +58,18 @@ export async function refreshLicense(email: string | null): Promise<boolean> {
     const j = (await r.json()) as { approved?: boolean; reason?: string }
     const approved = j.approved === true
     state = { email: e, approved, reason: j.reason ?? (approved ? 'ok' : 'not-approved') }
-    cache[e] = approved
-    saveCache(cache)
+    // Re-read + merge ONLY this key right before writing. refreshLicense runs fire-and-forget on
+    // every login, so two calls for different emails can race; writing back the stale whole-file
+    // snapshot loaded at the top would clobber the other email's cached=true and later wrongly
+    // block that already-approved user during a network blip.
+    const fresh = loadCache()
+    fresh[e] = approved
+    saveCache(fresh)
     return approved
   } catch {
-    // Network error → trust the last-known cached decision (don't lock out on a blip).
-    const cached = cache[e] === true
+    // Network error → trust the last-known cached decision (don't lock out on a blip). Re-read so
+    // a decision another concurrent call just wrote is seen.
+    const cached = loadCache()[e] === true
     state = { email: e, approved: cached, reason: cached ? 'cache' : 'unverified' }
     return cached
   }

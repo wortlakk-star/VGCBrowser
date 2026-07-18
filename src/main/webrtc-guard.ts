@@ -91,11 +91,12 @@ function webrtcScript(webrtc: string, publicIp: string): string {
         var scrub=function(s){ if(!s) return s; var L=String(s).split('\\r\\n'),o=[],at=-1; for(var i=0;i<L.length;i++){ if(L[i].indexOf('a=candidate:')===0&&!safe(L[i])) continue; o.push(L[i]); if(L[i].indexOf('a=ice-pwd:')===0||L[i].indexOf('a=rtcp-mux')===0) at=o.length; } var sc=synth(); if(sc&&at>=0){ o.splice(at,0,'a='+sc); } return o.join('\\r\\n'); };
         var wrap=function(pc){
           var add=pc.addEventListener.bind(pc);
+          var rm=pc.removeEventListener.bind(pc);
           var injected=false;
           // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
           var fwd=function(cb,ev){ try{ if(ev&&ev.candidate){ if(!safe(ev.candidate.candidate)) return; return cb.call(pc,ev); } if(PUB&&!injected){ injected=true; var ic=mkIce(); if(ic){ try{ cb.call(pc,{candidate:ic,target:pc,currentTarget:pc,type:'icecandidate'}); }catch(e){} } } return cb.call(pc,ev); }catch(e){ try{return cb.call(pc,ev);}catch(e2){} } };
           pc.addEventListener=mask(function(t,cb,o){ if(t==='icecandidate'&&typeof cb==='function'){ return add(t,function(ev){return fwd(cb,ev);},o);} return add(t,cb,o); },'addEventListener');
-          try{Object.defineProperty(pc,'onicecandidate',{configurable:true,get:function(){return this.__o||null;},set:function(cb){this.__o=cb;add('icecandidate',function(ev){if(typeof cb==='function')return fwd(cb,ev);});}});}catch(e){}
+          try{Object.defineProperty(pc,'onicecandidate',{configurable:true,get:function(){return this.__o||null;},set:function(cb){if(this.__ol){try{rm('icecandidate',this.__ol);}catch(e){}this.__ol=null;}this.__o=(typeof cb==='function')?cb:null;if(this.__o){this.__ol=function(ev){return fwd(cb,ev);};add('icecandidate',this.__ol);}}});}catch(e){}
           try{var ld=Object.getOwnPropertyDescriptor(RTC.prototype,'localDescription');if(ld&&ld.get){Object.defineProperty(pc,'localDescription',{configurable:true,get:function(){var d=ld.get.call(this);if(d&&d.sdp){try{return {type:d.type,sdp:scrub(d.sdp)};}catch(e){}}return d;}});}}catch(e){}
           return pc;
         };

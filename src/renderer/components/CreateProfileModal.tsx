@@ -90,19 +90,35 @@ export function CreateProfileModal({
       // One proxy (config) per profile + the pool row to mark assigned (pool/generate modes).
       const configs: Array<ProxyConfig | null> = Array(n).fill(null)
       const poolRows: Array<SavedProxy | null> = Array(n).fill(null)
+      let warning = '' // non-fatal shortfall (some profiles got no proxy) — shown, modal stays open
 
       if (proxyMode === 'manual') {
-        const parsed = manualText
+        const lines = manualText
           .split('\n')
           .map((l) => l.trim())
           .filter(Boolean)
-          .map((l) => parseLine(l, 'socks5'))
-          .filter((x): x is NonNullable<typeof x> => !!x)
-        if (!parsed.length) {
-          setErr('Không đọc được proxy nào. Định dạng: host:port:user:pass (mỗi dòng 1 proxy).')
-          return
+        // Parse each line IN PLACE (no compacting) so line i maps to profile i — a bad line must
+        // not shift every later line onto the wrong profile (which would duplicate an IP).
+        const parsedLines = lines.map((l) => parseLine(l, 'socks5'))
+        if (n === 1) {
+          const first = parsedLines.find(Boolean)
+          if (!first) {
+            setErr('Không đọc được proxy. Định dạng: host:port:user:pass (hoặc user:pass@host:port).')
+            return
+          }
+          configs[0] = cfgOf(first)
+        } else {
+          const badLines = parsedLines.map((p, i) => (!p ? i + 1 : 0)).filter((x) => x > 0)
+          if (badLines.length) {
+            setErr(`Dòng không đọc được: ${badLines.join(', ')} — sửa lại (mỗi dòng 1 proxy đúng định dạng).`)
+            return
+          }
+          if (parsedLines.length < n) {
+            setErr(`Cần ${n} dòng proxy (mỗi profile 1 proxy), mới có ${parsedLines.length}.`)
+            return
+          }
+          for (let i = 0; i < n; i++) configs[i] = cfgOf(parsedLines[i] as NonNullable<(typeof parsedLines)[number]>)
         }
-        for (let i = 0; i < n; i++) configs[i] = cfgOf(parsed[i] ?? parsed[0])
       } else if (proxyMode === 'pool') {
         const chosen =
           n === 1 && poolId
@@ -119,7 +135,7 @@ export function CreateProfileModal({
           }
         }
         if (chosen.length < n)
-          setErr(`Chỉ còn ${chosen.length} proxy rảnh — ${n - chosen.length} profile sẽ không có proxy.`)
+          warning = `Chỉ còn ${chosen.length} proxy rảnh — ${n - chosen.length} profile sẽ không có proxy.`
       } else if (proxyMode === 'generate') {
         const created = await window.vgc.generateProviderProxies({
           provider: genProvider,
@@ -141,6 +157,8 @@ export function CreateProfileModal({
             poolRows[i] = created[i]
           }
         }
+        if (created.length < n)
+          warning = `Nhà cung cấp chỉ tạo được ${created.length}/${n} proxy — ${n - created.length} profile sẽ không có proxy.`
       }
 
       // Create the profiles (with their proxy) + mark the pool row assigned to each.
@@ -162,7 +180,11 @@ export function CreateProfileModal({
         }
       }
       onCreated()
-      onClose()
+      // A shortfall (fewer proxies than profiles) is non-fatal — the profiles are created, but
+      // keep the modal open showing the warning so the user isn't left thinking every profile
+      // got a proxy. Otherwise close as normal.
+      if (warning) setErr(warning)
+      else onClose()
     } catch (e) {
       setErr(`Lỗi: ${(e as Error).message}`)
     } finally {

@@ -79,6 +79,10 @@ function createWindow(): void {
   }
 }
 
+// Quit state — declared here because the single-instance handler below reads it.
+let quitHandled = false
+let reopenRequested = false
+
 // Single-instance lock: if VGC Browser is launched again (the user double-clicking the
 // icon, or the auto-start task) while it is already running, DON'T spawn a second
 // process — two instances fight over the same profiles dir + debug ports and one ends
@@ -94,8 +98,14 @@ if (!gotSingleInstanceLock) {
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
-    } else {
+    } else if (!quitHandled) {
+      // No window yet and we're NOT shutting down → the app is still starting; build the UI.
       createWindow()
+    } else {
+      // A reopen click landed DURING graceful-quit's (up-to-15s) cloud-sync window. Building a
+      // window now would just be destroyed by the pending app.exit(0), silently losing the click.
+      // Remember it and relaunch a fresh instance after we exit instead.
+      reopenRequested = true
     }
   })
 }
@@ -142,7 +152,6 @@ app.whenReady().then(() => {
 // Graceful quit: stop every profile and UPLOAD each session to cloud BEFORE the
 // app exits, so the latest cookies/logins are always saved (GoLogin-style). A 15s
 // cap guarantees the app still exits even if an upload stalls on the network.
-let quitHandled = false
 async function gracefulQuit(): Promise<void> {
   if (quitHandled) return
   quitHandled = true
@@ -166,6 +175,8 @@ async function gracefulQuit(): Promise<void> {
     setTimeout(() => app.exit(0), 4000)
     return
   }
+  // Honor a reopen click that arrived mid-shutdown: relaunch a fresh instance after we exit.
+  if (reopenRequested) app.relaunch()
   app.exit(0)
 }
 

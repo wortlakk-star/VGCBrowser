@@ -136,36 +136,46 @@ try {
   // ── Canvas noise (deterministic) ──
   if (CFG.canvasNoise) {
     try {
+      // Return an OFFSCREEN copy of the canvas with the noise applied — NEVER write the noise
+      // back to the source. Mutating the source made repeated toDataURL/toBlob reads accumulate
+      // noise (O→O+n→O+2n→…), so the hash DRIFTED between reads of the same canvas — exactly the
+      // "unstable = spoofed" tell the seeded noise exists to avoid. With the source untouched, the
+      // same source pixels + the re-seeded RNG always yield the same output → a stable hash.
+      function noiseInto(d){
+        var cRng = mulberry32(CFG.seed);
+        var step = Math.max(1, Math.floor(d.length / 4 / 64)) * 4;
+        for (var i = 0; i < d.length; i += step) {
+          var n = (cRng() * 3 | 0) - 1;
+          d[i] = Math.min(255, Math.max(0, d[i] + n));
+          d[i+1] = Math.min(255, Math.max(0, d[i+1] + n));
+          d[i+2] = Math.min(255, Math.max(0, d[i+2] + n));
+        }
+      }
       function noisify(canvas){
         try {
           var ctx = canvas.getContext('2d');
-          if(!ctx) return;
+          if(!ctx) return canvas;
           var w = canvas.width, h = canvas.height;
-          if(!w || !h) return;
+          if(!w || !h) return canvas;
           var img = ctx.getImageData(0, 0, w, h);
-          var d = img.data;
-          // Re-seed per call so the SAME canvas always yields the SAME noise → a
-          // STABLE hash (real canvases are stable; a drifting hash flags as a lie).
-          var cRng = mulberry32(CFG.seed);
-          // perturb a sparse, seeded set of pixels by +-1 — visually invisible.
-          var step = Math.max(1, Math.floor(d.length / 4 / 64)) * 4;
-          for (var i = 0; i < d.length; i += step) {
-            var n = (cRng() * 3 | 0) - 1;
-            d[i] = Math.min(255, Math.max(0, d[i] + n));
-            d[i+1] = Math.min(255, Math.max(0, d[i+1] + n));
-            d[i+2] = Math.min(255, Math.max(0, d[i+2] + n));
-          }
-          ctx.putImageData(img, 0, 0);
-        } catch(e){}
+          noiseInto(img.data);
+          var off = document.createElement('canvas'); off.width = w; off.height = h;
+          var octx = off.getContext('2d'); if(!octx) return canvas;
+          octx.putImageData(img, 0, 0);
+          return off;
+        } catch(e){ return canvas; }
       }
       var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-      HTMLCanvasElement.prototype.toDataURL = mask(function(){ noisify(this); return origToDataURL.apply(this, arguments); }, 'toDataURL');
+      HTMLCanvasElement.prototype.toDataURL = mask(function(){ return origToDataURL.apply(noisify(this), arguments); }, 'toDataURL');
       var origToBlob = HTMLCanvasElement.prototype.toBlob;
-      if (origToBlob) HTMLCanvasElement.prototype.toBlob = mask(function(){ noisify(this); return origToBlob.apply(this, arguments); }, 'toBlob');
+      if (origToBlob) HTMLCanvasElement.prototype.toBlob = mask(function(){ return origToBlob.apply(noisify(this), arguments); }, 'toBlob');
       var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
       CanvasRenderingContext2D.prototype.getImageData = mask(function(){
         var r = origGetImageData.apply(this, arguments);
-        try { var dd = r.data; var gRng = mulberry32(CFG.seed); var st = Math.max(4, Math.floor(dd.length / 4 / 64) * 4); for (var k=0;k<dd.length;k+=st){ var nn=(gRng()*3|0)-1; dd[k]=Math.min(255,Math.max(0,dd[k]+nn)); } } catch(e){}
+        // Same noise routine as toDataURL/toBlob so the two read paths agree (they mutate only the
+        // returned COPY, never the canvas). Previously getImageData noised the R channel only with
+        // a different step, so its hash disagreed with toDataURL's.
+        try { noiseInto(r.data); } catch(e){}
         return r;
       }, 'getImageData');
     } catch(e){}
@@ -230,6 +240,7 @@ try {
         };
         var wrapPc = function(pc){
           var origAdd = pc.addEventListener.bind(pc);
+          var origRm = pc.removeEventListener.bind(pc);
           var injected = false;
           // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
           var fwd = function(cb, ev){ try { if (ev && ev.candidate) { if (!safeCand(ev.candidate.candidate)) return; return cb.call(pc, ev); } if (PUB && !injected) { injected = true; var ic = mkIce(); if (ic) { try { cb.call(pc, { candidate: ic, target: pc, currentTarget: pc, type: 'icecandidate' }); } catch(e){} } } return cb.call(pc, ev); } catch(e){ try { return cb.call(pc, ev); } catch(e2){} } };
@@ -244,8 +255,15 @@ try {
               configurable: true,
               get: function(){ return this.__vgcOic || null; },
               set: function(cb){
-                this.__vgcOic = cb;
-                origAdd('icecandidate', function(ev){ if (typeof cb === 'function') return fwd(cb, ev); });
+                // Replace, don't stack: remove the previous wrapper listener before adding a new
+                // one (and add none when cb isn't a function), so onicecandidate behaves as a
+                // single assignable handler and `pc.onicecandidate = null` actually detaches it.
+                if (this.__vgcOicL) { try { origRm('icecandidate', this.__vgcOicL); } catch(e){} this.__vgcOicL = null; }
+                this.__vgcOic = (typeof cb === 'function') ? cb : null;
+                if (this.__vgcOic) {
+                  this.__vgcOicL = function(ev){ return fwd(cb, ev); };
+                  origAdd('icecandidate', this.__vgcOicL);
+                }
               }
             });
           } catch(e){}
