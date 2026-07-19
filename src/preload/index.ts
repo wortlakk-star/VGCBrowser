@@ -84,6 +84,9 @@ const api = {
   checkProxy: (proxy: ProxyConfig): Promise<ProxyCheckResult> =>
     ipcRenderer.invoke('proxy:check', proxy),
 
+  /** Current 6-digit 2FA code for a base32 secret ('' if invalid). */
+  totpNow: (secret: string): Promise<string> => ipcRenderer.invoke('totp:now', secret),
+
   listProxies: (): Promise<SavedProxy[]> => ipcRenderer.invoke('proxies:list'),
   saveProxy: (p: SavedProxy): Promise<SavedProxy> => ipcRenderer.invoke('proxies:save', p),
   saveManyProxies: (items: SavedProxy[]): Promise<number> =>

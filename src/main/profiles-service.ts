@@ -36,6 +36,7 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
     fingerprint: input.fingerprint ?? generateFingerprint(os),
     proxy: input.proxy ?? { type: 'none' },
     startUrls: input.startUrls ?? [],
+    account: input.account,
     createdAt: now,
     updatedAt: now
   }

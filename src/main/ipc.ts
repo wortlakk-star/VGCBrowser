@@ -17,6 +17,7 @@ import type {
   SavedProxy
 } from '../shared/types'
 import { generateFingerprint } from '../shared/fingerprint'
+import { generateTotp, looksLikeTotpSecret } from './totp'
 import { checkProxy } from './proxy-check'
 import { createProfile, updateProfile, hostOs } from './profiles-service'
 import { getSettings, saveSettings, regenerateToken, type AppSettings } from './settings'
@@ -228,6 +229,11 @@ export function registerIpc(): void {
 
   ipcMain.handle('fingerprint:generate', (_e, os?: OsType) =>
     generateFingerprint(os ?? hostOs())
+  )
+
+  // Current 6-digit 2FA code for a stored base32 secret (empty if the secret is invalid).
+  ipcMain.handle('totp:now', (_e, secret: string) =>
+    looksLikeTotpSecret(secret) ? generateTotp(secret) : ''
   )
 
   ipcMain.handle('proxy:check', (_e, proxy: ProxyConfig) => checkProxy(proxy))

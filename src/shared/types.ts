@@ -124,6 +124,9 @@ export interface Cookie {
   sameSite?: 'Strict' | 'Lax' | 'None'
 }
 
+/** Health/state of the account a profile farms. '' / undefined = chưa đặt. */
+export type AccountStatus = 'live' | 'die' | 'banned' | 'ready'
+
 export interface Profile {
   id: string
   name: string
@@ -151,6 +154,13 @@ export interface Profile {
     countryCode?: string
     latencyMs?: number
     at: string // ISO
+  }
+  /** Account this profile logs into — for farming/tracking (login creds + 2FA + health). */
+  account?: {
+    user?: string // email / username
+    pass?: string
+    totp?: string // 2FA secret (base32) — the app shows the current 6-digit code
+    status?: AccountStatus
   }
   createdAt: string // ISO
   updatedAt: string // ISO
@@ -331,7 +341,10 @@ export interface ProfileRuntimeState {
 
 /** Shape accepted by the create-profile IPC; everything optional, sensible defaults applied. */
 export type CreateProfileInput = Partial<
-  Pick<Profile, 'name' | 'notes' | 'tags' | 'group' | 'os' | 'fingerprint' | 'proxy' | 'startUrls'>
+  Pick<
+    Profile,
+    'name' | 'notes' | 'tags' | 'group' | 'os' | 'fingerprint' | 'proxy' | 'startUrls' | 'account'
+  >
 >
 
 // ── Gmail bulk password-change tool ──────────────────────────────────────────
