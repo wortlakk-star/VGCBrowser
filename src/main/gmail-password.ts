@@ -182,8 +182,14 @@ export const BRAIN = /* js */ `
     return { state: 'no_account', url: url };
   }
   if (body.indexOf('wrong password') !== -1 ||
+      body.indexOf('incorrect password') !== -1 ||
       body.indexOf('mật khẩu không chính xác') !== -1 ||
-      body.indexOf('sai mật khẩu') !== -1) {
+      body.indexOf('sai mật khẩu') !== -1 ||
+      body.indexOf('senha incorreta') !== -1 ||          // pt
+      body.indexOf('contraseña incorrecta') !== -1 ||    // es
+      body.indexOf('mot de passe incorrect') !== -1 ||   // fr
+      body.indexOf('falsches passwort') !== -1 ||        // de
+      body.indexOf('password errata') !== -1) {          // it
     return { state: 'wrong_password', url: url };
   }
   if (body.indexOf('choose a stronger password') !== -1 ||
@@ -208,6 +214,9 @@ export const BRAIN = /* js */ `
 
   // Change-password form: TWO password inputs (new + confirm).
   if (pf.length >= 2) {
+    // login-only mode NEVER changes the password — just REPORT the forced change/create-password
+    // page (no typing, no submit) so the caller can flag it for manual handling.
+    if (cfg.loginOnly) { return { state: 'newpass_form', url: url, submitted: false }; }
     if (pf[0].value !== cfg.newPassword) setVal(pf[0], cfg.newPassword);
     if (pf[1].value !== cfg.newPassword) setVal(pf[1], cfg.newPassword);
     var ok = clickText(['change password', 'đổi mật khẩu', 'save password', 'lưu mật khẩu',
@@ -217,8 +226,10 @@ export const BRAIN = /* js */ `
 
   // Single password field: current-password prompt (sign-in Passwd OR re-auth "xác minh").
   if (pf.length === 1) {
-    if (pf[0].value.length === 0) setVal(pf[0], cfg.oldPassword);
-    clickNext();
+    // Fill + submit ONLY when the field is empty (i.e. once). clickNext() previously fired on
+    // EVERY 1.5s poll, re-submitting the same password over and over — which locks the account
+    // whenever the wrong-password text isn't matched (foreign locale). Mirrors the TOTP throttle.
+    if (pf[0].value.length === 0) { setVal(pf[0], cfg.oldPassword); clickNext(); }
     if (hasCaptcha) { var ci2 = captchaInfo(); return { state: 'captcha', url: url, captchaKind: ci2.captchaKind, imageB64: ci2.imageB64, sitekey: ci2.sitekey }; }
     return { state: 'reauth', url: url };
   }

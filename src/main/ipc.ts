@@ -293,8 +293,13 @@ export function registerIpc(): void {
       const r = await gmailLogin(id, { email: acc.user, password: acc.pass, totpSecret: acc.totp }, emit)
       results.push(r)
       // Reflect a definitive live/die on the profile (leave status alone for needs_manual/error).
+      // Re-read the account right before writing so a concurrent edit made during the (up to
+      // 120s) login isn't clobbered by the pre-run snapshot — only the status changes.
       if (r.status === 'live' || r.status === 'die') {
-        await updateProfile(id, { account: { ...acc, status: r.status } }).catch(() => {})
+        const cur = await getProfile(id)
+        await updateProfile(id, {
+          account: { ...(cur?.account ?? acc), status: r.status }
+        }).catch(() => {})
       }
     }
     return results

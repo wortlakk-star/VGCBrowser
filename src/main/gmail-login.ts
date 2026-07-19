@@ -46,8 +46,13 @@ export async function gmailLogin(
     }
     return { profileId, email: task.email, status, message }
   }
-  const emit = (phase: string, message: string): void =>
-    onProgress({ profileId, email: task.email, phase, message })
+  const emit = (phase: string, message: string): void => {
+    try {
+      onProgress({ profileId, email: task.email, phase, message })
+    } catch {
+      /* a throwing progress callback must never break the login */
+    }
+  }
 
   emit('launch', PHASE_MSG.launch)
   try {
@@ -69,7 +74,8 @@ export async function gmailLogin(
         email: task.email,
         oldPassword: task.password,
         newPassword: '',
-        totp: secret ? generateTotp(secret) : ''
+        totp: secret ? generateTotp(secret) : '',
+        loginOnly: true // the brain must NEVER type/submit a password in login mode
       })
       const expr = BRAIN.split('__CFG__').join(cfg)
       let res: { state: string; detail?: string }
@@ -86,9 +92,13 @@ export async function gmailLogin(
 
       switch (res.state) {
         case 'done':
-        case 'newpass_form': // landed past the login on a settings page ⇒ already signed in
-        case 'weak_password':
           return done('live', 'Đăng nhập thành công')
+        case 'newpass_form':
+        case 'weak_password':
+          // Google is FORCING a change/create-password page — NOT a normal signed-in home. In
+          // login-only mode the brain neither types nor submits here (cfg.loginOnly); we surface
+          // it for manual handling instead of falsely reporting a successful login.
+          return done('needs_manual', 'Tài khoản bị buộc đổi/tạo mật khẩu — xử lý tay')
         case 'no_account':
           return done('die', 'Không tìm thấy tài khoản Google')
         case 'wrong_password':
