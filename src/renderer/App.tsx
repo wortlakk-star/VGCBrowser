@@ -892,6 +892,7 @@ export default function App(): JSX.Element {
           defaultGroup={groupFilter && groupFilter !== '#ungrouped' ? groupFilter : undefined}
           onClose={() => setShowBulkImport(false)}
           onImported={refresh}
+          onLogin={(ids) => void runGmailLogin(ids)}
         />
       )}
       {editing && (

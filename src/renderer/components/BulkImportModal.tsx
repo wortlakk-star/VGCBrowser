@@ -7,6 +7,8 @@ interface Props {
   defaultGroup?: string
   onClose: () => void
   onImported: () => void
+  /** Auto-login the freshly created profiles into Gmail (if the checkbox is on). */
+  onLogin?: (ids: string[]) => void
 }
 
 const OS_OPTIONS: Array<{ v: OsType; label: string; icon: string }> = [
@@ -25,11 +27,18 @@ const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
 
 /** Bulk-create profiles from a pasted account list. One line per account, columns separated by
  *  `|` or a tab:  email | password | proxy | 2FA-secret. Password/proxy/2FA are optional. */
-export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: Props): JSX.Element {
+export function BulkImportModal({
+  groups,
+  defaultGroup,
+  onClose,
+  onImported,
+  onLogin
+}: Props): JSX.Element {
   const [text, setText] = useState('')
   const [os, setOs] = useState<OsType>(HOST_OS)
   const [group, setGroup] = useState(defaultGroup ?? '')
   const [proxyType, setProxyType] = useState<ProxyType>('socks5')
+  const [autoLogin, setAutoLogin] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [importedText, setImportedText] = useState('') // the text already imported — blocks a duplicate re-click
@@ -48,6 +57,7 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
     setMsg(`Đang tạo ${lines.length} profile…`)
     let created = 0
     let badProxy = 0
+    const createdIds: string[] = []
     for (let i = 0; i < lines.length; i++) {
       const cols = lines[i].split(/[|\t]/).map((c) => c.trim())
       const email = cols[0] || ''
@@ -57,7 +67,7 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
       const pp = proxyStr ? parseLine(proxyStr, proxyType) : null
       if (proxyStr && !pp) badProxy++
       try {
-        await window.vgc.createProfile({
+        const p = await window.vgc.createProfile({
           name: email || `Acc ${i + 1}`,
           os,
           group: group || undefined,
@@ -78,12 +88,20 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
           }
         })
         created++
+        createdIds.push(p.id)
       } catch {
         /* skip a bad line, keep importing the rest */
       }
     }
     onImported()
     setBusy(false)
+    // Auto-login the new profiles into Gmail (checkbox) — the login batch runs in App (progress
+    // shows in its banner), so just hand off the ids and close.
+    if (created > 0 && autoLogin && onLogin) {
+      onLogin(createdIds)
+      onClose()
+      return
+    }
     // Remember what was imported so an immediate second click (the modal stays open on a
     // shortfall) can't create the same accounts again — there is no dedup in createProfile.
     if (created > 0) setImportedText(text)
@@ -169,6 +187,17 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
                 </button>
               ))}
             </div>
+            <label
+              style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+            >
+              <input
+                type="checkbox"
+                checked={autoLogin}
+                onChange={(e) => setAutoLogin(e.target.checked)}
+                style={{ width: 'auto' }}
+              />
+              <span>🔑 Tự đăng nhập Gmail sau khi tạo (mở lần lượt, điền email/mật khẩu/2FA, đánh dấu Live/Die)</span>
+            </label>
             <p className="hint">
               Mỗi profile: tên = email, có vân tay riêng, lưu mật khẩu + khóa 2FA + gán proxy. Trạng
               thái mặc định "Sẵn sàng".
