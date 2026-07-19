@@ -20,8 +20,8 @@ interface Props {
   onShare: (p: Profile) => void
   onDelete: (id: string) => void
   onMoveGroup: (id: string, group: string) => void
-  /** Change this profile's proxy inline. proxyId = a pool proxy id, or '' to remove. */
-  onSetProxy: (id: string, proxyId: string) => void
+  /** Open the proxy picker (choose existing / paste new / generate) for this profile. */
+  onOpenProxyPicker: (profile: Profile) => void
 }
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
@@ -121,12 +121,11 @@ export function ProfileTable({
   onShare,
   onDelete,
   onMoveGroup,
-  onSetProxy
+  onOpenProxyPicker
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
   const [checkingProxy, setCheckingProxy] = useState<Set<string>>(new Set())
-  const [proxyEditFor, setProxyEditFor] = useState<string | null>(null) // row whose proxy picker is open
 
   // Position the ⋯ menu relative to the button's on-screen rect (position: fixed, so
   // it escapes the table's overflow) and FLIP IT UP when there isn't enough room below
@@ -213,67 +212,24 @@ export function ProfileTable({
                 </td>
                 <td className="col-proxy">
                   <div className="proxy-cell">
-                    {proxyEditFor === p.id ? (
-                      (() => {
-                        const matched = matchedPoolProxy(p, proxyPool)
-                        const hasProxy = !!(p.proxy && p.proxy.type !== 'none' && p.proxy.host)
-                        const val = matched ? matched.id : hasProxy ? '__cur__' : ''
-                        return (
-                          <select
-                            className="proxy-inline-select"
-                            autoFocus
-                            value={val}
-                            onChange={(e) => {
-                              const v = e.target.value
-                              if (v !== '__cur__') onSetProxy(p.id, v)
-                              setProxyEditFor(null)
-                            }}
-                            onBlur={() => setProxyEditFor(null)}
-                          >
-                            {hasProxy && !matched && (
-                              <option value="__cur__">Hiện tại: {p.proxy.host} (ngoài kho)</option>
-                            )}
-                            <option value="">🚫 Bỏ proxy</option>
-                            {matched && (
-                              <option value={matched.id}>
-                                ✓ {matched.label} ({(matched.lastCountryCode || '').toUpperCase()}{' '}
-                                {matched.lastIp || matched.host})
-                              </option>
-                            )}
-                            <optgroup label="Proxy rảnh trong kho">
-                              {proxyPool
-                                .filter((x) => !x.assignedTo)
-                                .map((x) => (
-                                  <option key={x.id} value={x.id}>
-                                    {x.label} ({x.type} {x.host}:{x.port})
-                                  </option>
-                                ))}
-                            </optgroup>
-                          </select>
-                        )
-                      })()
-                    ) : (
-                      <>
-                        <span className="mono">{proxyInfo(p, proxyPool)}</span>
-                        {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
-                          <button
-                            className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
-                            title="Kiểm tra proxy (IP + vị trí)"
-                            disabled={checkingProxy.has(p.id)}
-                            onClick={() => void runProxyCheck(p.id)}
-                          >
-                            ↻
-                          </button>
-                        )}
-                        <button
-                          className="proxy-check-btn"
-                          title="Chọn / đổi proxy"
-                          onClick={() => setProxyEditFor(p.id)}
-                        >
-                          +
-                        </button>
-                      </>
+                    <span className="mono">{proxyInfo(p, proxyPool)}</span>
+                    {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
+                      <button
+                        className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
+                        title="Kiểm tra proxy (IP + vị trí)"
+                        disabled={checkingProxy.has(p.id)}
+                        onClick={() => void runProxyCheck(p.id)}
+                      >
+                        ↻
+                      </button>
                     )}
+                    <button
+                      className="proxy-check-btn"
+                      title="Chọn / đổi / thêm proxy (có sẵn · nhập tay · mua mới)"
+                      onClick={() => onOpenProxyPicker(p)}
+                    >
+                      +
+                    </button>
                   </div>
                 </td>
                 <td className="col-act">

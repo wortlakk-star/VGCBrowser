@@ -10,6 +10,7 @@ import type {
 import { ProfileTable } from './components/ProfileTable'
 import { EditProfileModal } from './components/EditProfileModal'
 import { CreateProfileModal } from './components/CreateProfileModal'
+import { ProxyPickerModal } from './components/ProxyPickerModal'
 import { SettingsModal } from './components/SettingsModal'
 import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
@@ -39,6 +40,7 @@ export default function App(): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<Profile | null>(null)
   const [sharing, setSharing] = useState<Profile | null>(null)
+  const [proxyPickFor, setProxyPickFor] = useState<Profile | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
@@ -374,13 +376,12 @@ export default function App(): JSX.Element {
     [profiles, refresh]
   )
 
-  // Change a single profile's proxy straight from the list row. `proxyId` = a pool proxy id, or
-  // '' to remove the proxy. Mirrors the Proxy Manager's assign: keeps the pool's assignedTo in
-  // sync (1 proxy ↔ 1 profile) and, when assigning, live-checks the new proxy so the row's
-  // IP/country badge refreshes immediately instead of showing "chưa check".
-  const setProfileProxy = useCallback(
-    async (id: string, proxyId: string) => {
-      const sp = proxyId ? proxyPool.find((x) => x.id === proxyId) : null
+  // Apply a proxy to one profile: `sp` = a pool proxy object (existing, freshly pasted, or just
+  // generated), or null to remove. Mirrors the Proxy Manager's assign — keeps the pool's
+  // assignedTo in sync (1 proxy ↔ 1 profile) and live-checks the new proxy so the row's IP/country
+  // badge refreshes immediately instead of showing "chưa check".
+  const applyProxyToProfile = useCallback(
+    async (id: string, sp: SavedProxy | null) => {
       // Free any pool proxy currently pointing at THIS profile (except the newly chosen one).
       for (const x of proxyPool) {
         if (x.assignedTo === id && (!sp || x.id !== sp.id)) {
@@ -774,7 +775,7 @@ export default function App(): JSX.Element {
               onShare={setSharing}
               onDelete={remove}
               onMoveGroup={moveGroup}
-              onSetProxy={setProfileProxy}
+              onOpenProxyPicker={setProxyPickFor}
             />
           )}
         </main>
@@ -782,6 +783,14 @@ export default function App(): JSX.Element {
 
       {sharing && (
         <ShareModal profile={sharing} proxies={proxyPool} onClose={() => setSharing(null)} />
+      )}
+      {proxyPickFor && (
+        <ProxyPickerModal
+          profile={proxyPickFor}
+          pool={proxyPool}
+          onApply={applyProxyToProfile}
+          onClose={() => setProxyPickFor(null)}
+        />
       )}
       {editing && (
         <EditProfileModal profile={editing} onClose={() => setEditing(null)} onSaved={refresh} />
