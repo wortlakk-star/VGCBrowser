@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import type { Profile, ProfileStatus, SavedProxy } from '../../shared/types'
+import type { AccountStatus, Profile, ProfileStatus, SavedProxy } from '../../shared/types'
 
 interface Props {
   profiles: Profile[]
@@ -22,6 +22,8 @@ interface Props {
   onMoveGroup: (id: string, group: string) => void
   /** Open the proxy picker (choose existing / paste new / generate) for this profile. */
   onOpenProxyPicker: (profile: Profile) => void
+  /** Set the account health status ('' = clear). */
+  onSetAccountStatus: (id: string, status: AccountStatus | '') => void
 }
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
@@ -30,6 +32,14 @@ const STATUS_LABEL: Record<ProfileStatus, string> = {
   running: 'Đang chạy',
   error: 'Lỗi'
 }
+
+const ACCT_STATUS: Record<AccountStatus, { label: string; cls: string }> = {
+  live: { label: 'Live', cls: 'live' },
+  ready: { label: 'Sẵn sàng', cls: 'ready' },
+  die: { label: 'Die', cls: 'die' },
+  banned: { label: 'Banned', cls: 'banned' }
+}
+const ACCT_ORDER: AccountStatus[] = ['live', 'ready', 'die', 'banned']
 
 /** Pull the Chrome major version out of a UA string for a compact summary. */
 function browserSummary(ua: string): string {
@@ -111,7 +121,8 @@ export function ProfileTable({
   onShare,
   onDelete,
   onMoveGroup,
-  onOpenProxyPicker
+  onOpenProxyPicker,
+  onSetAccountStatus
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
@@ -188,7 +199,14 @@ export function ProfileTable({
                   <input type="checkbox" checked={sel} onChange={() => onToggleSelect(p.id)} />
                 </td>
                 <td className="col-name">
-                  <div className="pname">{p.name}</div>
+                  <div className="pname">
+                    {p.name}
+                    {p.account?.status && (
+                      <span className={`acct-pill ${ACCT_STATUS[p.account.status].cls}`}>
+                        {ACCT_STATUS[p.account.status].label}
+                      </span>
+                    )}
+                  </div>
                   <div className="psub">
                     {p.os} · {browserSummary(p.fingerprint?.userAgent ?? '')}
                     {p.group && <span className="pgroup">{p.group}</span>}
@@ -306,6 +324,36 @@ export function ProfileTable({
                               ))}
                             </select>
                           </label>
+                          <label className="menu-group">
+                            <span>Trạng thái</span>
+                            <select
+                              value={p.account?.status ?? ''}
+                              onChange={(e) =>
+                                onSetAccountStatus(p.id, e.target.value as AccountStatus | '')
+                              }
+                            >
+                              <option value="">— chưa đặt —</option>
+                              {ACCT_ORDER.map((s) => (
+                                <option key={s} value={s}>
+                                  {ACCT_STATUS[s].label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {p.account?.totp && (
+                            <button
+                              onClick={() => {
+                                const secret = p.account?.totp
+                                if (secret)
+                                  void window.vgc.totpNow(secret).then((code) => {
+                                    if (code) void navigator.clipboard?.writeText(code)
+                                  })
+                                setMenuFor(null)
+                              }}
+                            >
+                              🔑 Copy mã 2FA
+                            </button>
+                          )}
                           <div className="menu-sep" />
                           <button
                             className="danger"

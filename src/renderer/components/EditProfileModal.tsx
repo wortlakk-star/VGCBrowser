@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type {
+  AccountStatus,
   Cookie,
   Fingerprint,
   OsType,
@@ -62,6 +63,10 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
   const [group, setGroup] = useState(profile.group ?? '')
   const [tags, setTags] = useState(profile.tags.join(', '))
   const [notes, setNotes] = useState(profile.notes)
+  const [accUser, setAccUser] = useState(profile.account?.user ?? '')
+  const [accPass, setAccPass] = useState(profile.account?.pass ?? '')
+  const [accTotp, setAccTotp] = useState(profile.account?.totp ?? '')
+  const [accStatus, setAccStatus] = useState<AccountStatus | ''>(profile.account?.status ?? '')
   const [startUrls, setStartUrls] = useState(profile.startUrls.join('\n'))
   const [os, setOs] = useState<OsType>(profile.os)
   const [proxy, setProxy] = useState({ ...profile.proxy })
@@ -212,7 +217,13 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
         proxy,
         cookies,
         extensions,
-        fingerprint: fp
+        fingerprint: fp,
+        account: {
+          user: accUser.trim() || undefined,
+          pass: accPass || undefined,
+          totp: accTotp.trim() || undefined,
+          status: accStatus || undefined
+        }
       })
       onSaved()
       onClose()
@@ -264,6 +275,42 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               Ghi chú
               <textarea value={notes} rows={2} onChange={(e) => setNotes(e.target.value)} />
             </label>
+
+            <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: 'var(--accent, #4fd1a1)' }}>
+              👤 Tài khoản
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <label>
+                Email / user
+                <input value={accUser} onChange={(e) => setAccUser(e.target.value)} />
+              </label>
+              <label>
+                Mật khẩu
+                <input value={accPass} onChange={(e) => setAccPass(e.target.value)} />
+              </label>
+              <label>
+                Khóa 2FA (base32)
+                <input
+                  value={accTotp}
+                  onChange={(e) => setAccTotp(e.target.value)}
+                  placeholder="JBSWY3DPEHPK3PXP"
+                />
+              </label>
+              <label>
+                Trạng thái
+                <select
+                  value={accStatus}
+                  onChange={(e) => setAccStatus(e.target.value as AccountStatus | '')}
+                >
+                  <option value="">— chưa đặt —</option>
+                  <option value="live">Live</option>
+                  <option value="ready">Sẵn sàng</option>
+                  <option value="die">Die</option>
+                  <option value="banned">Banned</option>
+                </select>
+              </label>
+            </div>
+
             <label>
               Trang khởi động (mỗi dòng 1 URL)
               <textarea

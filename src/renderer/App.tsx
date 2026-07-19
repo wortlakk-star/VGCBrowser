@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  AccountStatus,
   DataSyncState,
   EngineProgress,
   Profile,
@@ -8,6 +9,7 @@ import type {
   UpdateStatus
 } from '../shared/types'
 import { ProfileTable } from './components/ProfileTable'
+import { BulkImportModal } from './components/BulkImportModal'
 import { EditProfileModal } from './components/EditProfileModal'
 import { CreateProfileModal } from './components/CreateProfileModal'
 import { ProxyPickerModal } from './components/ProxyPickerModal'
@@ -45,6 +47,8 @@ export default function App(): JSX.Element {
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [showBulkImport, setShowBulkImport] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<AccountStatus | ''>('') // account-health filter
   const [showGmail, setShowGmail] = useState(false)
   const [theme, setTheme] = useState<Theme>(getTheme())
   const [engineProg, setEngineProg] = useState<EngineProgress | null>(null)
@@ -323,6 +327,18 @@ export default function App(): JSX.Element {
     [refresh]
   )
 
+  const setAccountStatus = useCallback(
+    async (id: string, status: AccountStatus | '') => {
+      const p = profiles.find((x) => x.id === id)
+      if (!p) return
+      await window.vgc.updateProfile(id, {
+        account: { ...(p.account ?? {}), status: status || undefined }
+      })
+      await refresh()
+    },
+    [profiles, refresh]
+  )
+
   // Auto-check each given profile's proxy and store the result ON THE PROFILE
   // (proxyCheck), so the list shows a fresh IP/country/✓ right after opening — works
   // for inline proxies too, not just pool ones. Checks run in parallel; the writes
@@ -499,14 +515,16 @@ export default function App(): JSX.Element {
     return profiles.filter((p) => {
       if (groupFilter === '#ungrouped' && p.group) return false
       if (groupFilter && groupFilter !== '#ungrouped' && p.group !== groupFilter) return false
+      if (statusFilter && p.account?.status !== statusFilter) return false
       if (!q) return true
       return (
         p.name.toLowerCase().includes(q) ||
+        (p.account?.user ?? '').toLowerCase().includes(q) ||
         p.tags.some((t) => t.toLowerCase().includes(q)) ||
         (p.group ?? '').toLowerCase().includes(q)
       )
     })
-  }, [profiles, query, groupFilter])
+  }, [profiles, query, groupFilter, statusFilter])
 
   // ── selection ──
   const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id))
@@ -708,9 +726,29 @@ export default function App(): JSX.Element {
           <button className="btn" onClick={importProfiles}>
             ↧ Nhập
           </button>
+          <button
+            className="btn"
+            onClick={() => setShowBulkImport(true)}
+            title="Dán danh sách email|pass|proxy|2FA → tạo profile hàng loạt"
+          >
+            ⇊ Nhập acc hàng loạt
+          </button>
           <button className="btn" onClick={exportAll}>
             ↥ Xuất
           </button>
+          <select
+            className="group-select"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as AccountStatus | '')}
+            title="Lọc theo trạng thái tài khoản"
+            style={{ width: 140 }}
+          >
+            <option value="">Mọi trạng thái</option>
+            <option value="live">🟢 Live</option>
+            <option value="ready">🟡 Sẵn sàng</option>
+            <option value="die">🔴 Die</option>
+            <option value="banned">⛔ Banned</option>
+          </select>
           <button
             className="btn"
             onClick={syncTimezones}
@@ -776,6 +814,7 @@ export default function App(): JSX.Element {
               onDelete={remove}
               onMoveGroup={moveGroup}
               onOpenProxyPicker={setProxyPickFor}
+              onSetAccountStatus={setAccountStatus}
             />
           )}
         </main>
@@ -790,6 +829,14 @@ export default function App(): JSX.Element {
           pool={proxyPool}
           onApply={applyProxyToProfile}
           onClose={() => setProxyPickFor(null)}
+        />
+      )}
+      {showBulkImport && (
+        <BulkImportModal
+          groups={groupsWithCounts.map((g) => g.name)}
+          defaultGroup={groupFilter && groupFilter !== '#ungrouped' ? groupFilter : undefined}
+          onClose={() => setShowBulkImport(false)}
+          onImported={refresh}
         />
       )}
       {editing && (

@@ -1623,6 +1623,31 @@ code {
 .pname {
   font-weight: 600;
 }
+.acct-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.acct-pill.live {
+  background: rgba(79, 209, 161, 0.18);
+  color: #4fd1a1;
+}
+.acct-pill.ready {
+  background: rgba(255, 215, 106, 0.16);
+  color: #ffd76a;
+}
+.acct-pill.die {
+  background: rgba(255, 138, 138, 0.16);
+  color: #ff8a8a;
+}
+.acct-pill.banned {
+  background: rgba(255, 90, 90, 0.22);
+  color: #ff6b6b;
+}
 .psub {
   font-size: 11.5px;
   color: var(--dim);
