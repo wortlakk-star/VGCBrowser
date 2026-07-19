@@ -374,6 +374,59 @@ export default function App(): JSX.Element {
     [profiles, refresh]
   )
 
+  // Change a single profile's proxy straight from the list row. `proxyId` = a pool proxy id, or
+  // '' to remove the proxy. Mirrors the Proxy Manager's assign: keeps the pool's assignedTo in
+  // sync (1 proxy ↔ 1 profile) and, when assigning, live-checks the new proxy so the row's
+  // IP/country badge refreshes immediately instead of showing "chưa check".
+  const setProfileProxy = useCallback(
+    async (id: string, proxyId: string) => {
+      const sp = proxyId ? proxyPool.find((x) => x.id === proxyId) : null
+      // Free any pool proxy currently pointing at THIS profile (except the newly chosen one).
+      for (const x of proxyPool) {
+        if (x.assignedTo === id && (!sp || x.id !== sp.id)) {
+          await window.vgc.saveProxy({ ...x, assignedTo: '' })
+        }
+      }
+      if (sp) {
+        // If this proxy was assigned to another profile, clear that profile's proxy first.
+        if (sp.assignedTo && sp.assignedTo !== id) {
+          await window.vgc.updateProfile(sp.assignedTo, { proxy: { type: 'none' } }).catch(() => {})
+        }
+        const cfg = {
+          type: sp.type,
+          host: sp.host,
+          port: sp.port,
+          username: sp.username,
+          password: sp.password
+        }
+        await window.vgc.updateProfile(id, { proxy: cfg })
+        await window.vgc.saveProxy({ ...sp, assignedTo: id })
+        // Immediate check → the row shows the new IP/country right away.
+        try {
+          const res = await window.vgc.checkProxy(cfg)
+          await window.vgc
+            .updateProfile(id, {
+              proxyCheck: {
+                status: res.ok ? 'ok' : 'error',
+                ip: res.ip,
+                country: res.country,
+                countryCode: res.countryCode,
+                latencyMs: res.latencyMs,
+                at: new Date().toISOString()
+              }
+            })
+            .catch(() => {})
+        } catch {
+          /* leave unchecked — the ↻ button can re-check */
+        }
+      } else {
+        await window.vgc.updateProfile(id, { proxy: { type: 'none' }, proxyCheck: undefined })
+      }
+      await refresh()
+    },
+    [proxyPool, refresh]
+  )
+
   const run = useCallback(
     async (id: string) => {
       try {
@@ -721,6 +774,7 @@ export default function App(): JSX.Element {
               onShare={setSharing}
               onDelete={remove}
               onMoveGroup={moveGroup}
+              onSetProxy={setProfileProxy}
             />
           )}
         </main>

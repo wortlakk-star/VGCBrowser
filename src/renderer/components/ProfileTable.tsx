@@ -20,6 +20,8 @@ interface Props {
   onShare: (p: Profile) => void
   onDelete: (id: string) => void
   onMoveGroup: (id: string, group: string) => void
+  /** Change this profile's proxy inline. proxyId = a pool proxy id, or '' to remove. */
+  onSetProxy: (id: string, proxyId: string) => void
 }
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
@@ -90,6 +92,17 @@ function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   )
 }
 
+/** The pool proxy this profile is currently using (matched by host/port/user), if any. */
+function matchedPoolProxy(p: Profile, pool: SavedProxy[]): SavedProxy | undefined {
+  if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) return undefined
+  return pool.find(
+    (x) =>
+      x.host === p.proxy.host &&
+      x.port === p.proxy.port &&
+      (x.username || '') === (p.proxy.username || '')
+  )
+}
+
 export function ProfileTable({
   profiles,
   statuses,
@@ -107,7 +120,8 @@ export function ProfileTable({
   onDuplicate,
   onShare,
   onDelete,
-  onMoveGroup
+  onMoveGroup,
+  onSetProxy
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
@@ -280,6 +294,53 @@ export function ProfileTable({
                           >
                             🔗 Chia sẻ
                           </button>
+                          <div className="menu-sep" />
+                          <label className="menu-group">
+                            <span>Proxy</span>
+                            {(() => {
+                              const matched = matchedPoolProxy(p, proxyPool)
+                              const hasProxy = !!(
+                                p.proxy &&
+                                p.proxy.type !== 'none' &&
+                                p.proxy.host
+                              )
+                              const val = matched ? matched.id : hasProxy ? '__cur__' : ''
+                              return (
+                                <select
+                                  value={val}
+                                  onChange={(e) => {
+                                    const v = e.target.value
+                                    if (v === '__cur__') return // "current (not in pool)" placeholder
+                                    onSetProxy(p.id, v)
+                                    setMenuFor(null)
+                                  }}
+                                >
+                                  {hasProxy && !matched && (
+                                    <option value="__cur__">
+                                      Hiện tại: {p.proxy.host} (ngoài kho)
+                                    </option>
+                                  )}
+                                  <option value="">🚫 Bỏ proxy</option>
+                                  {matched && (
+                                    <option value={matched.id}>
+                                      ✓ {matched.label} (
+                                      {(matched.lastCountryCode || '').toUpperCase()}{' '}
+                                      {matched.lastIp || matched.host})
+                                    </option>
+                                  )}
+                                  <optgroup label="Proxy rảnh trong kho">
+                                    {proxyPool
+                                      .filter((x) => !x.assignedTo)
+                                      .map((x) => (
+                                        <option key={x.id} value={x.id}>
+                                          {x.label} ({x.type} {x.host}:{x.port})
+                                        </option>
+                                      ))}
+                                  </optgroup>
+                                </select>
+                              )
+                            })()}
+                          </label>
                           <div className="menu-sep" />
                           <label className="menu-group">
                             <span>Nhóm</span>
