@@ -67,7 +67,8 @@ function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
     (x) =>
       x.host === p.proxy.host &&
       x.port === p.proxy.port &&
-      (x.username || '') === (p.proxy.username || '')
+      (x.username || '') === (p.proxy.username || '') &&
+      (x.password || '') === (p.proxy.password || '')
   )
   if (sp && sp.lastStatus === 'ok' && sp.lastIp) {
     return (

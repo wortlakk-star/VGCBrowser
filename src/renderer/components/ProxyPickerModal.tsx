@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Profile, ProxyProviderId, SavedProxy } from '../../shared/types'
+import type { Profile, ProxyProviderId, ProxyType, SavedProxy } from '../../shared/types'
 import { parseLine } from '../lib/proxy-parse'
 
 interface Props {
@@ -45,6 +45,7 @@ export function ProxyPickerModal({ profile, pool, onApply, onClose }: Props): JS
   const [mode, setMode] = useState<Mode>('pool')
   const [poolId, setPoolId] = useState<string>(cur ? cur.id : '')
   const [manualText, setManualText] = useState('')
+  const [manualType, setManualType] = useState<ProxyType>('socks5')
   const [genProvider, setGenProvider] = useState<ProxyProviderId>('evomi')
   const [genCountry, setGenCountry] = useState('us')
   const [genProtocol, setGenProtocol] = useState<'http' | 'socks5'>('socks5')
@@ -67,7 +68,7 @@ export function ProxyPickerModal({ profile, pool, onApply, onClose }: Props): JS
           .split('\n')
           .map((l) => l.trim())
           .filter(Boolean)
-          .map((l) => parseLine(l, 'socks5'))
+          .map((l) => parseLine(l, manualType))
           .find(Boolean)
         if (!parsed) {
           setErr('Không đọc được proxy. Định dạng: host:port:user:pass (hoặc user:pass@host:port).')
@@ -161,7 +162,21 @@ export function ProxyPickerModal({ profile, pool, onApply, onClose }: Props): JS
 
             {mode === 'manual' && (
               <div style={{ marginTop: 12 }}>
-                <label>Dán proxy mới</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <label style={{ margin: 0 }}>Dán proxy mới</label>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontSize: 12, color: 'var(--muted, #9fdcc7)' }}>Loại:</span>
+                  <select
+                    className="group-select"
+                    style={{ width: 120 }}
+                    value={manualType}
+                    onChange={(e) => setManualType(e.target.value as ProxyType)}
+                  >
+                    <option value="socks5">SOCKS5</option>
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                  </select>
+                </div>
                 <textarea
                   rows={2}
                   autoFocus
