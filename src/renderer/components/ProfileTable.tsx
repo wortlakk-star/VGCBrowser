@@ -126,6 +126,7 @@ export function ProfileTable({
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
   const [checkingProxy, setCheckingProxy] = useState<Set<string>>(new Set())
+  const [proxyEditFor, setProxyEditFor] = useState<string | null>(null) // row whose proxy picker is open
 
   // Position the ⋯ menu relative to the button's on-screen rect (position: fixed, so
   // it escapes the table's overflow) and FLIP IT UP when there isn't enough room below
@@ -212,16 +213,66 @@ export function ProfileTable({
                 </td>
                 <td className="col-proxy">
                   <div className="proxy-cell">
-                    <span className="mono">{proxyInfo(p, proxyPool)}</span>
-                    {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
-                      <button
-                        className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
-                        title="Kiểm tra proxy (IP + vị trí)"
-                        disabled={checkingProxy.has(p.id)}
-                        onClick={() => void runProxyCheck(p.id)}
-                      >
-                        ↻
-                      </button>
+                    {proxyEditFor === p.id ? (
+                      (() => {
+                        const matched = matchedPoolProxy(p, proxyPool)
+                        const hasProxy = !!(p.proxy && p.proxy.type !== 'none' && p.proxy.host)
+                        const val = matched ? matched.id : hasProxy ? '__cur__' : ''
+                        return (
+                          <select
+                            className="proxy-inline-select"
+                            autoFocus
+                            value={val}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              if (v !== '__cur__') onSetProxy(p.id, v)
+                              setProxyEditFor(null)
+                            }}
+                            onBlur={() => setProxyEditFor(null)}
+                          >
+                            {hasProxy && !matched && (
+                              <option value="__cur__">Hiện tại: {p.proxy.host} (ngoài kho)</option>
+                            )}
+                            <option value="">🚫 Bỏ proxy</option>
+                            {matched && (
+                              <option value={matched.id}>
+                                ✓ {matched.label} ({(matched.lastCountryCode || '').toUpperCase()}{' '}
+                                {matched.lastIp || matched.host})
+                              </option>
+                            )}
+                            <optgroup label="Proxy rảnh trong kho">
+                              {proxyPool
+                                .filter((x) => !x.assignedTo)
+                                .map((x) => (
+                                  <option key={x.id} value={x.id}>
+                                    {x.label} ({x.type} {x.host}:{x.port})
+                                  </option>
+                                ))}
+                            </optgroup>
+                          </select>
+                        )
+                      })()
+                    ) : (
+                      <>
+                        <span className="mono">{proxyInfo(p, proxyPool)}</span>
+                        {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
+                          <button
+                            className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
+                            title="Kiểm tra proxy (IP + vị trí)"
+                            disabled={checkingProxy.has(p.id)}
+                            onClick={() => void runProxyCheck(p.id)}
+                          >
+                            ↻
+                          </button>
+                        )}
+                        <button
+                          className="proxy-check-btn"
+                          title="Chọn / đổi proxy"
+                          onClick={() => setProxyEditFor(p.id)}
+                        >
+                          +
+                        </button>
+                      </>
                     )}
                   </div>
                 </td>
@@ -294,53 +345,6 @@ export function ProfileTable({
                           >
                             🔗 Chia sẻ
                           </button>
-                          <div className="menu-sep" />
-                          <label className="menu-group">
-                            <span>Proxy</span>
-                            {(() => {
-                              const matched = matchedPoolProxy(p, proxyPool)
-                              const hasProxy = !!(
-                                p.proxy &&
-                                p.proxy.type !== 'none' &&
-                                p.proxy.host
-                              )
-                              const val = matched ? matched.id : hasProxy ? '__cur__' : ''
-                              return (
-                                <select
-                                  value={val}
-                                  onChange={(e) => {
-                                    const v = e.target.value
-                                    if (v === '__cur__') return // "current (not in pool)" placeholder
-                                    onSetProxy(p.id, v)
-                                    setMenuFor(null)
-                                  }}
-                                >
-                                  {hasProxy && !matched && (
-                                    <option value="__cur__">
-                                      Hiện tại: {p.proxy.host} (ngoài kho)
-                                    </option>
-                                  )}
-                                  <option value="">🚫 Bỏ proxy</option>
-                                  {matched && (
-                                    <option value={matched.id}>
-                                      ✓ {matched.label} (
-                                      {(matched.lastCountryCode || '').toUpperCase()}{' '}
-                                      {matched.lastIp || matched.host})
-                                    </option>
-                                  )}
-                                  <optgroup label="Proxy rảnh trong kho">
-                                    {proxyPool
-                                      .filter((x) => !x.assignedTo)
-                                      .map((x) => (
-                                        <option key={x.id} value={x.id}>
-                                          {x.label} ({x.type} {x.host}:{x.port})
-                                        </option>
-                                      ))}
-                                  </optgroup>
-                                </select>
-                              )
-                            })()}
-                          </label>
                           <div className="menu-sep" />
                           <label className="menu-group">
                             <span>Nhóm</span>
