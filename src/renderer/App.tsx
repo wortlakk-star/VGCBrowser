@@ -49,6 +49,8 @@ export default function App(): JSX.Element {
   const [showCreate, setShowCreate] = useState(false)
   const [showBulkImport, setShowBulkImport] = useState(false)
   const [statusFilter, setStatusFilter] = useState<AccountStatus | ''>('') // account-health filter
+  const [loginBusy, setLoginBusy] = useState(false)
+  const [loginMsg, setLoginMsg] = useState('')
   const [showGmail, setShowGmail] = useState(false)
   const [theme, setTheme] = useState<Theme>(getTheme())
   const [engineProg, setEngineProg] = useState<EngineProgress | null>(null)
@@ -555,6 +557,42 @@ export default function App(): JSX.Element {
   const bulkStop = useCallback(async () => {
     await window.vgc.stopMany([...selected])
   }, [selected])
+  const runGmailLogin = useCallback(
+    async (ids: string[]) => {
+      if (!ids.length) return
+      setLoginBusy(true)
+      setLoginMsg(`Đang đăng nhập ${ids.length} profile…`)
+      try {
+        const results = await window.vgc.gmailLogin(ids)
+        const c = (s: string): number => results.filter((r) => r.status === s).length
+        setLoginMsg(
+          `✓ Xong ${results.length}: 🟢 ${c('live')} live · 🔴 ${c('die')} die · ⚠️ ${c('needs_manual')} cần tay · ✗ ${c('error')} lỗi`
+        )
+        await refresh()
+      } catch (e) {
+        setLoginMsg(`Lỗi: ${(e as Error).message}`)
+      } finally {
+        setLoginBusy(false)
+      }
+    },
+    [refresh]
+  )
+  const bulkGmailLogin = useCallback(async () => {
+    const ids = [...selected]
+    if (!ids.length) return
+    if (
+      !window.confirm(
+        `Tự đăng nhập Gmail cho ${ids.length} profile đã chọn?\n` +
+          'App sẽ mở lần lượt + tự điền email/mật khẩu/mã 2FA đã lưu, rồi tự đánh dấu Live/Die.'
+      )
+    )
+      return
+    await runGmailLogin(ids)
+  }, [selected, runGmailLogin])
+  // Live progress line during a Gmail login/password run.
+  useEffect(() => {
+    return window.vgc.onGmailProgress((p) => setLoginMsg(`${p.email || ''} · ${p.message}`))
+  }, [])
   const bulkDelete = useCallback(async () => {
     if (!window.confirm(`Xoá ${selected.size} profile đã chọn?`)) return
     for (const id of selected) {
@@ -772,6 +810,14 @@ export default function App(): JSX.Element {
             <button className="btn" onClick={bulkStop}>
               Dừng
             </button>
+            <button
+              className="btn"
+              onClick={bulkGmailLogin}
+              disabled={loginBusy}
+              title="Tự đăng nhập Gmail bằng email/mật khẩu/2FA đã lưu, rồi đánh dấu Live/Die"
+            >
+              {loginBusy ? '⏳ Đang login…' : '🔑 Đăng nhập Gmail'}
+            </button>
             <button className="btn" onClick={exportSelected}>
               Xuất
             </button>
@@ -780,6 +826,15 @@ export default function App(): JSX.Element {
             </button>
             <button className="btn ghost" onClick={() => setSelected(new Set())}>
               Bỏ chọn
+            </button>
+          </div>
+        )}
+        {loginMsg && (
+          <div className="bulkbar" style={{ background: 'var(--card)' }}>
+            <span>🔑 {loginMsg}</span>
+            <span style={{ flex: 1 }} />
+            <button className="btn ghost" onClick={() => setLoginMsg('')}>
+              Ẩn
             </button>
           </div>
         )}

@@ -13,6 +13,7 @@ import type {
   Fingerprint,
   GenerateProxiesOpts,
   GmailChangeResult,
+  GmailLoginResult,
   GmailPasswordTask,
   GmailProgress,
   OsType,
@@ -122,6 +123,10 @@ const api = {
   // ── Bulk Gmail password change ──
   changeGmailPassword: (profileId: string, task: GmailPasswordTask): Promise<GmailChangeResult> =>
     ipcRenderer.invoke('gmail:changePassword', profileId, task),
+
+  /** Auto sign-in these profiles into Gmail using their stored creds; sets live/die. */
+  gmailLogin: (profileIds: string[]): Promise<GmailLoginResult[]> =>
+    ipcRenderer.invoke('gmail:login', profileIds),
 
   /** Durably append "email|newPassword|status" to the on-disk log; returns its path. */
   logGmailResult: (line: string): Promise<string> => ipcRenderer.invoke('gmail:logResult', line),

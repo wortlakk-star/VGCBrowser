@@ -89,7 +89,7 @@ function injectRecaptchaExpr(token: string): string {
 // single next action for whatever Google is showing, and reports back what it saw.
 // Kept as a string so it can be shipped verbatim through Runtime.evaluate. Pure DOM;
 // no external deps. TUNE HERE when Google changes its markup/wording.
-const BRAIN = /* js */ `
+export const BRAIN = /* js */ `
 (function (cfg) {
   // Attaching CDP (even over the pipe) flips navigator.webdriver to TRUE, which Google
   // blocks at sign-in. Re-assert FALSE inline every poll — addScriptToEvaluateOnNewDocument
@@ -293,7 +293,7 @@ const BRAIN = /* js */ `
 })(__CFG__)
 `
 
-function phaseMessage(state: BrainState): string {
+export function phaseMessage(state: BrainState): string {
   switch (state) {
     case 'signin_email':
       return 'Đang đăng nhập (nhập email)…'
@@ -326,7 +326,7 @@ function sleep(ms: number): Promise<void> {
 
 /** Attach to the profile's first page target and return a driver bound to its
  *  session. Same-tab navigations keep the session valid (flatten routing). */
-async function attachPage(
+export async function attachPage(
   conn: CdpConnection
 ): Promise<{ evaluate: (expr: string) => Promise<unknown>; navigate: (url: string) => Promise<void> }> {
   // Follow the LIVE page session. Google's flow does cross-process navigations (the initial

@@ -381,3 +381,13 @@ export interface GmailProgress {
   phase: string // machine state: 'launch' | 'signin' | 'reauth' | 'newpass' | 'challenge' | 'done' | ...
   message: string // human-readable Vietnamese status
 }
+
+/** Result of an auto Gmail sign-in. live = logged in; die = wrong pass / no account;
+ *  needs_manual = a challenge/captcha we couldn't clear. Maps to the profile's account.status. */
+export type GmailLoginStatus = 'live' | 'die' | 'needs_manual' | 'error'
+export interface GmailLoginResult {
+  profileId: string
+  email: string
+  status: GmailLoginStatus
+  message: string
+}

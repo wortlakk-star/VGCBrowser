@@ -52,6 +52,7 @@ import {
 } from './proxy-store'
 import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { changeGmailPassword } from './gmail-password'
+import { gmailLogin } from './gmail-login'
 import { setCloudSession } from './session'
 import {
   getAccountSecret,
@@ -83,7 +84,8 @@ import type {
   ProxyProviderId,
   GenerateProxiesOpts,
   GmailPasswordTask,
-  GmailProgress
+  GmailProgress,
+  GmailLoginResult
 } from '../shared/types'
 
 function focusedWindow(): BrowserWindow | null {
@@ -266,6 +268,37 @@ export function registerIpc(): void {
         for (const w of BrowserWindow.getAllWindows()) w.webContents.send('gmail:progress', p)
       })
   )
+
+  // Auto sign-in to Gmail for a batch of profiles (uses each profile's stored account creds).
+  // Runs sequentially; broadcasts progress; sets account.status to live/die from the result.
+  ipcMain.handle('gmail:login', async (_e, profileIds: string[]): Promise<GmailLoginResult[]> => {
+    const emit = (p: GmailProgress): void => {
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('gmail:progress', p)
+    }
+    const results: GmailLoginResult[] = []
+    for (const id of profileIds) {
+      const prof = await getProfile(id)
+      const acc = prof?.account
+      if (!prof || !acc?.user || !acc?.pass) {
+        const r: GmailLoginResult = {
+          profileId: id,
+          email: acc?.user ?? '',
+          status: 'error',
+          message: 'Thiếu email/mật khẩu (Sửa profile → 👤 Tài khoản)'
+        }
+        results.push(r)
+        emit({ profileId: id, email: r.email, phase: 'error', message: r.message })
+        continue
+      }
+      const r = await gmailLogin(id, { email: acc.user, password: acc.pass, totpSecret: acc.totp }, emit)
+      results.push(r)
+      // Reflect a definitive live/die on the profile (leave status alone for needs_manual/error).
+      if (r.status === 'live' || r.status === 'die') {
+        await updateProfile(id, { account: { ...acc, status: r.status } }).catch(() => {})
+      }
+    }
+    return results
+  })
 
   // Durably append one account's result (email|new password|status) the moment it's
   // known, so a crash / close mid-run can NEVER lose a freshly-set random password.
