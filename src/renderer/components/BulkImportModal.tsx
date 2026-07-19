@@ -32,6 +32,7 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
   const [proxyType, setProxyType] = useState<ProxyType>('socks5')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [importedText, setImportedText] = useState('') // the text already imported — blocks a duplicate re-click
 
   const lines = text
     .split('\n')
@@ -83,11 +84,15 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
     }
     onImported()
     setBusy(false)
+    // Remember what was imported so an immediate second click (the modal stays open on a
+    // shortfall) can't create the same accounts again — there is no dedup in createProfile.
+    if (created > 0) setImportedText(text)
     setMsg(
       `✓ Đã tạo ${created}/${lines.length} profile.` +
         (badProxy ? ` ⚠️ ${badProxy} dòng proxy sai định dạng → tạo không proxy.` : '')
     )
-    if (created && !badProxy) onClose()
+    // Only auto-close on a FULLY successful run, so a partial "X/N" result stays visible.
+    if (created === lines.length && !badProxy) onClose()
   }
 
   return (
@@ -180,8 +185,16 @@ export function BulkImportModal({ groups, defaultGroup, onClose, onImported }: P
           <button className="btn" onClick={onClose}>
             Đóng
           </button>
-          <button className="btn primary" onClick={() => void doImport()} disabled={busy || !lines.length}>
-            {busy ? 'Đang tạo…' : `Tạo ${lines.length || ''} profile`}
+          <button
+            className="btn primary"
+            onClick={() => void doImport()}
+            disabled={busy || !lines.length || text === importedText}
+          >
+            {busy
+              ? 'Đang tạo…'
+              : text === importedText && importedText
+                ? 'Đã tạo (sửa danh sách để tạo tiếp)'
+                : `Tạo ${lines.length || ''} profile`}
           </button>
         </footer>
       </div>

@@ -201,7 +201,7 @@ export function ProfileTable({
                 <td className="col-name">
                   <div className="pname">
                     {p.name}
-                    {p.account?.status && (
+                    {p.account?.status && ACCT_STATUS[p.account.status] && (
                       <span className={`acct-pill ${ACCT_STATUS[p.account.status].cls}`}>
                         {ACCT_STATUS[p.account.status].label}
                       </span>

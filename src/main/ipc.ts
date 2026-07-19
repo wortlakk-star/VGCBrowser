@@ -18,6 +18,8 @@ import type {
 } from '../shared/types'
 import { generateFingerprint } from '../shared/fingerprint'
 import { generateTotp, looksLikeTotpSecret } from './totp'
+
+const ACCOUNT_STATUSES = new Set(['live', 'die', 'banned', 'ready'])
 import { checkProxy } from './proxy-check'
 import { createProfile, updateProfile, hostOs } from './profiles-service'
 import { getSettings, saveSettings, regenerateToken, type AppSettings } from './settings'
@@ -195,6 +197,14 @@ export function registerIpc(): void {
         fingerprint: p.fingerprint ?? generateFingerprint(os),
         proxy: p.proxy ?? { type: 'none' },
         startUrls: Array.isArray(p.startUrls) ? p.startUrls : [],
+        // Normalize an out-of-vocabulary account.status (foreign export / other version) so a bad
+        // value can't reach the store + crash the list's status-pill render.
+        account: p.account
+          ? {
+              ...p.account,
+              status: ACCOUNT_STATUSES.has(p.account.status as string) ? p.account.status : undefined
+            }
+          : undefined,
         createdAt: now,
         updatedAt: now,
         lastUsedAt: undefined

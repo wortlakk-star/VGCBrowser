@@ -201,6 +201,15 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
   const save = async (): Promise<void> => {
     setSaving(true)
     try {
+      // Merge account: re-read the freshest persisted account and overwrite ONLY the fields the
+      // user actually changed here — so a background cloud-pull update to a field the user didn't
+      // touch (e.g. status set on another machine) isn't reverted by this save.
+      const latest = (await window.vgc.listProfiles()).find((x) => x.id === profile.id)
+      const acct: NonNullable<Profile['account']> = { ...(latest?.account ?? profile.account ?? {}) }
+      if (accUser.trim() !== (profile.account?.user ?? '')) acct.user = accUser.trim() || undefined
+      if (accPass !== (profile.account?.pass ?? '')) acct.pass = accPass || undefined
+      if (accTotp.trim() !== (profile.account?.totp ?? '')) acct.totp = accTotp.trim() || undefined
+      if (accStatus !== (profile.account?.status ?? '')) acct.status = accStatus || undefined
       await window.vgc.updateProfile(profile.id, {
         name: name.trim() || profile.name,
         group: group.trim() || undefined,
@@ -218,12 +227,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
         cookies,
         extensions,
         fingerprint: fp,
-        account: {
-          user: accUser.trim() || undefined,
-          pass: accPass || undefined,
-          totp: accTotp.trim() || undefined,
-          status: accStatus || undefined
-        }
+        account: acct
       })
       onSaved()
       onClose()
