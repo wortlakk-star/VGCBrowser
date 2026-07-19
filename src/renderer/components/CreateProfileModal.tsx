@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { OsType, ProxyConfig, ProxyProviderId, SavedProxy } from '../../shared/types'
+import type { OsType, ProxyConfig, ProxyProviderId, ProxyType, SavedProxy } from '../../shared/types'
 import { parseLine } from '../lib/proxy-parse'
 
 interface Props {
@@ -58,6 +58,7 @@ export function CreateProfileModal({
   // ── Proxy ──
   const [proxyMode, setProxyMode] = useState<ProxyMode>('none')
   const [manualText, setManualText] = useState('')
+  const [manualType, setManualType] = useState<ProxyType>('socks5') // default type for lines w/o a scheme
   const [pool, setPool] = useState<SavedProxy[]>([])
   const [poolId, setPoolId] = useState('') // specific pool proxy (count === 1)
   const [genProvider, setGenProvider] = useState<ProxyProviderId>('evomi')
@@ -99,7 +100,7 @@ export function CreateProfileModal({
           .filter(Boolean)
         // Parse each line IN PLACE (no compacting) so line i maps to profile i — a bad line must
         // not shift every later line onto the wrong profile (which would duplicate an IP).
-        const parsedLines = lines.map((l) => parseLine(l, 'socks5'))
+        const parsedLines = lines.map((l) => parseLine(l, manualType))
         if (n === 1) {
           const first = parsedLines.find(Boolean)
           if (!first) {
@@ -255,6 +256,21 @@ export function CreateProfileModal({
 
             {proxyMode === 'manual' && (
               <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: 'var(--muted, #9fdcc7)' }}>
+                    Loại proxy (dòng không ghi scheme):
+                  </span>
+                  <select
+                    className="group-select"
+                    style={{ width: 130 }}
+                    value={manualType}
+                    onChange={(e) => setManualType(e.target.value as ProxyType)}
+                  >
+                    <option value="socks5">SOCKS5</option>
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                  </select>
+                </div>
                 <textarea
                   rows={count > 1 ? 4 : 2}
                   placeholder={
@@ -266,7 +282,8 @@ export function CreateProfileModal({
                   style={{ width: '100%', fontFamily: 'ui-monospace,Consolas,monospace' }}
                 />
                 <p className="hint">
-                  Hỗ trợ host:port:user:pass · user:pass@host:port · socks5://… (mặc định SOCKS5).
+                  Hỗ trợ host:port:user:pass · user:pass@host:port · socks5://http://… (dòng ghi
+                  rõ scheme thì theo scheme; còn lại theo loại đã chọn).
                 </p>
               </div>
             )}

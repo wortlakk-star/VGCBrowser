@@ -24,14 +24,19 @@ const PROVIDERS: Array<[ProxyProviderId, string]> = [
 const genId = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
 
-/** The pool proxy this profile currently uses (matched by host/port/user), if any. */
+/** The pool proxy this profile currently uses, if any. Matched on the FULL tuple incl. password:
+ *  iProyal/Evomi rotating+sticky proxies share host/port/username and differ ONLY by password
+ *  (password = session = exit IP), so matching without it would pick the wrong pool entry and, on
+ *  Apply, silently move the profile to a different IP + wipe whichever profile that entry belonged
+ *  to. Mirrors ProxyManagerModal's usedByProfile. */
 function matchedPoolProxy(profile: Profile, pool: SavedProxy[]): SavedProxy | undefined {
   if (!profile.proxy || profile.proxy.type === 'none' || !profile.proxy.host) return undefined
   return pool.find(
     (x) =>
       x.host === profile.proxy.host &&
       x.port === profile.proxy.port &&
-      (x.username || '') === (profile.proxy.username || '')
+      (x.username || '') === (profile.proxy.username || '') &&
+      (x.password || '') === (profile.proxy.password || '')
   )
 }
 

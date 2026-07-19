@@ -92,17 +92,6 @@ function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   )
 }
 
-/** The pool proxy this profile is currently using (matched by host/port/user), if any. */
-function matchedPoolProxy(p: Profile, pool: SavedProxy[]): SavedProxy | undefined {
-  if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) return undefined
-  return pool.find(
-    (x) =>
-      x.host === p.proxy.host &&
-      x.port === p.proxy.port &&
-      (x.username || '') === (p.proxy.username || '')
-  )
-}
-
 export function ProfileTable({
   profiles,
   statuses,
