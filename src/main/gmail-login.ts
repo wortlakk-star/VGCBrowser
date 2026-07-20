@@ -39,6 +39,7 @@ export async function gmailLogin(
   onProgress: (p: GmailProgress) => void
 ): Promise<GmailLoginResult> {
   const done = (status: GmailLoginResult['status'], message: string): GmailLoginResult => {
+    dbg(`[gmail-login ${task.email}] DONE status=${status} — ${message}`)
     try {
       stopProfile(profileId)
     } catch {
@@ -55,13 +56,25 @@ export async function gmailLogin(
   }
 
   emit('launch', PHASE_MSG.launch)
+  dbg(`[gmail-login ${task.email}] start (profile ${profileId})`)
   try {
     await launchProfile(profileId, { automation: true })
     const conn: CdpConnection | null = getAutomationConn(profileId)
+    dbg(`[gmail-login ${task.email}] launched — automationConn=${conn ? 'ok' : 'NULL'}`)
     if (!conn) throw new Error('Không mở được kênh điều khiển (CDP pipe)')
     const page = await attachPage(conn)
+    dbg(`[gmail-login ${task.email}] attached; navigating to account home`)
     await sleep(800)
     await page.navigate(HOME_URL)
+    // Let the (possibly redirecting) page settle before the first brain poll, so we read the
+    // real landing page — account home if signed-in, the sign-in identifier page if not — and
+    // not a transient about:blank / mid-redirect state.
+    await sleep(2500)
+    dbg(
+      `[gmail-login ${task.email}] landed at ${String(
+        (await page.evaluate('location.href').catch(() => '?')) || '?'
+      )}`
+    )
 
     const secret = task.totpSecret?.trim()
     const deadline = Date.now() + LOGIN_BUDGET_MS
@@ -87,6 +100,7 @@ export async function gmailLogin(
       }
       if (res.state !== last) {
         last = res.state
+        dbg(`[gmail-login ${task.email}] state=${res.state}${res.detail ? ` (${res.detail})` : ''}`)
         emit(res.state, PHASE_MSG[res.state] ?? res.state)
       }
 
@@ -113,6 +127,7 @@ export async function gmailLogin(
     }
     return done('needs_manual', 'Quá thời gian — kiểm tra tay')
   } catch (e) {
+    dbg(`[gmail-login ${task.email}] THREW: ${String(e)}`)
     return done('error', (e as Error).message)
   }
 }

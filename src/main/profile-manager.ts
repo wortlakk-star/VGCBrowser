@@ -666,9 +666,12 @@ export async function launchProfile(
   // Where to land. CDP mode opens about:blank (injector then reopens tabs). Native mode
   // has no injector, so open the profile's start URLs directly. Clean-login → Google.
   if (automation) {
-    // Land straight on Google's change-password page. If the profile isn't signed in,
-    // Google redirects to the sign-in flow — the driver's brain handles both.
-    args.push('https://myaccount.google.com/signinoptions/password')
+    // Land on a BLANK page — never a Google form. Every automation caller (gmail-login,
+    // gmail-password, rpa warm-up) navigates to its own target right after attaching, so a
+    // real landing page only causes a race: e.g. the change-password form would load first
+    // and the login brain (loginOnly) would see it as a forced new-password page and bail
+    // WITHOUT ever signing in. about:blank has no form for the brain to misread.
+    args.push('about:blank')
   } else if (cleanLogin) {
     args.push('https://accounts.google.com/')
   } else if (skipCdp) {
