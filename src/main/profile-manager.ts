@@ -644,7 +644,7 @@ export async function launchProfile(
   // In CDP mode the injector already applies the WebRTC filter + screen spoof, so we only
   // need the guard extension in native mode, where nothing else stops WebRTC from leaking the
   // real IPv4/IPv6 or stops screen.* from reporting this machine's real display.
-  const guardExt = skipCdp ? ensureNativeGuardExtension(userDataDir, fp) : null
+  const guardExt = skipCdp ? ensureNativeGuardExtension(userDataDir, fp, seedFromString(id)) : null
   const extList = [...(guardExt ? [guardExt] : []), ...(profile.extensions ?? [])]
   if (extList.length > 0) {
     const list = extList.join(',')

@@ -130,6 +130,26 @@ async function main(): Promise<void> {
       sid,
       '(function(){try{var c=document.createElement("canvas");var g=c.getContext("webgl");return JSON.stringify({vendor:g.getParameter(37445),renderer:g.getParameter(37446)});}catch(e){return "ERR:"+e;}})()'
     )
+    // ── Extra spoofs (client rects / screen avail / connection / mediaDevices) ──
+    // clientRects: a plain 100×30 block has an EXACTLY-integer rect on clean Chrome;
+    // our deterministic sub-pixel farbling makes width ≠ 100 by < 0.001, and two reads
+    // must return the identical value (stable, not drifting).
+    const rects = await evaluate(
+      conn,
+      sid,
+      '(function(){try{var d=document.createElement("div");d.style.cssText="position:absolute;left:37px;top:59px;width:100px;height:30px";document.body.appendChild(d);var a=d.getBoundingClientRect();var b=d.getBoundingClientRect();var stable=(a.x===b.x&&a.width===b.width&&a.y===b.y);var noised=(a.width!==100&&Math.abs(a.width-100)<0.001);document.body.removeChild(d);return JSON.stringify({stable:stable,noised:noised,isRect:(a instanceof DOMRect)});}catch(e){return "ERR:"+e;}})()'
+    )
+    const availOff = await evaluate(conn, sid, 'screen.availLeft+","+screen.availTop')
+    const netInfo = await evaluate(
+      conn,
+      sid,
+      'navigator.connection?(navigator.connection.effectiveType+","+navigator.connection.downlink):"none"'
+    )
+    const mediaLabels = await evaluate(
+      conn,
+      sid,
+      'navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices?navigator.mediaDevices.enumerateDevices().then(function(l){return JSON.stringify({n:l.length,allBlank:l.every(function(d){return d.label==="";})});}):"none"'
+    )
 
     const checks: Array<[string, unknown, unknown]> = [
       ['hardwareConcurrency', cores, fp.hardwareConcurrency],
@@ -157,9 +177,42 @@ async function main(): Promise<void> {
     if (brandsOk) pass++
     console.log(`${brandsOk ? 'PASS' : 'FAIL'}  userAgentData.brands: ${uaBrands}`)
 
-    console.log(`\n${pass}/7 checks passed.`)
+    // clientRects farbling (stable + noised + real DOMRect).
+    let rectsParsed: { stable?: boolean; noised?: boolean; isRect?: boolean } = {}
+    try {
+      rectsParsed = JSON.parse(String(rects))
+    } catch {
+      // leave empty → fails below
+    }
+    const rectsOk = rectsParsed.stable === true && rectsParsed.noised === true && rectsParsed.isRect === true
+    if (rectsOk) pass++
+    console.log(`${rectsOk ? 'PASS' : 'FAIL'}  clientRects: ${rects}`)
+
+    // screen.availLeft / availTop forced to 0.
+    const availOk = String(availOff) === '0,0'
+    if (availOk) pass++
+    console.log(`${availOk ? 'PASS' : 'FAIL'}  screen.avail offset: ${availOff}`)
+
+    // navigator.connection normalised (effectiveType 4g, downlink capped at 10).
+    const netOk = String(netInfo) === '4g,10'
+    if (netOk) pass++
+    console.log(`${netOk ? 'PASS' : 'FAIL'}  navigator.connection: ${netInfo}`)
+
+    // mediaDevices labels stripped (no real hardware names leak).
+    let mediaParsed: { n?: number; allBlank?: boolean } = {}
+    try {
+      mediaParsed = JSON.parse(String(mediaLabels))
+    } catch {
+      // 'none' or error → fails below
+    }
+    const mediaOk = mediaParsed.allBlank === true
+    if (mediaOk) pass++
+    console.log(`${mediaOk ? 'PASS' : 'FAIL'}  mediaDevices labels blank: ${mediaLabels}`)
+
+    const TOTAL = 11
+    console.log(`\n${pass}/${TOTAL} checks passed.`)
     conn.close()
-    process.exitCode = pass === 7 ? 0 : 1
+    process.exitCode = pass === TOTAL ? 0 : 1
   } finally {
     try {
       proc.kill()

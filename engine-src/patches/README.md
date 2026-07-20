@@ -3,6 +3,8 @@
 ## Applied so far (committed as .patch files here — re-apply to a clean Chromium checkout)
 - **`01-webgl-vendor-renderer.patch`** ✅ — WebGL `UNMASKED_VENDOR/RENDERER_WEBGL` read `--vgc-webgl-vendor` / `--vgc-webgl-renderer`. Verified: page-side WebGL returns the spoofed value (native, no JS tell).
 - **`02-forward-vgc-switches.patch`** ✅ — `ChromeContentBrowserClient::AppendExtraCommandLineSwitches` forwards the `--vgc-*` switches to **child (renderer) processes**. REQUIRED: WebGL runs in the renderer; without forwarding the renderer never sees the switch and returns the real GPU.
+- **`06-screen-native.patch`** 🟡 DRAFT — `Screen::width/height/avail*/colorDepth/pixelDepth` read `--vgc-screen=WxH` (+ `--vgc-color-depth`). Moves the screen spoof off the JS getters (the most lie-detectable surface left) into C++. Needs the new switch wired in `profile-manager.ts` + the JS screen spoof removed from `webrtc-guard.ts` on the native path once verified. Authored by method name — build + validate before shipping.
+- **`07-client-rects-native.patch`** 🟡 DRAFT — `Element::getBoundingClientRect` / `getClientRects` apply deterministic sub-pixel farbling seeded from the EXISTING `--vgc-seed` (no new switch). Mirrors the JS algorithm in `src/main/stealth-extra.ts`. Closes the `clientRectsNoise` vector natively. Authored by method name — build + validate before shipping.
 - **`AppIcon.icon/`** — the VGC `.icon` source (macOS). NOTE: macOS 26 still prefers the compiled `Assets.car` AppIcon, so the build alone does NOT change the Dock icon. The reliable fix is applied at **package time** (`scripts/package-mac-engine.sh`): delete `CFBundleIconName` from `Info.plist` → macOS falls back to `CFBundleIconFile=app.icns`, which is the VGC logo.
 
 > Apply order on a fresh `out/vgc` checkout: `git apply engine-src/patches/01-*.patch engine-src/patches/02-*.patch`, copy `AppIcon.icon` over `chrome/app/theme/chromium/mac/AppIcon.icon`, rebuild `chrome`, then `scripts/package-mac-engine.sh`.
@@ -37,6 +39,16 @@ Switch names (no leading `--` in the API): `vgc-webgl-vendor`, `vgc-webgl-render
 | **Fonts** | `third_party/blink/renderer/platform/fonts/font_cache.cc` / platform font enumeration | font availability lookup | Restrict detectable fonts to a per-OS allowlist (the app already generates one in `fingerprint.ts`). Hardest vector — schedule last. |
 | **WebRTC IP** | `third_party/blink/renderer/modules/peerconnection/...` / webrtc port allocator | ICE candidate gathering | Only surface the proxy's public IP / use mDNS host candidates; never leak the real local IP. (App passes the proxy IP via the fingerprint; consider a `--vgc-webrtc-ip` switch.) |
 | **navigator.platform / UA-CH** | already handled natively via CDP `setUserAgentOverride` | — | Keep as-is; no patch needed. |
+| **Screen** | `third_party/blink/renderer/core/frame/screen.cc` | `Screen::width/height/availWidth/availHeight/availLeft/availTop/colorDepth/pixelDepth` | 🟡 `06-screen-native.patch` — return `--vgc-screen=WxH` / `--vgc-color-depth`; avail offsets 0; avail height minus a taskbar inset. |
+| **Client rects** | `third_party/blink/renderer/core/dom/element.cc` | `Element::getBoundingClientRect` / `getClientRects` | 🟡 `07-client-rects-native.patch` — deterministic sub-pixel offset seeded from `--vgc-seed` (reuse; no new switch). |
+
+### JS layer (ships without a rebuild — CDP mode + native-mode guard extension)
+The vectors below are spoofed in JS today (`src/main/stealth-extra.ts`, shared by
+`fingerprint-script.ts` and `webrtc-guard.ts`) and verified by `npm run verify` (11/11):
+client rects, `screen.availLeft/availTop`, `navigator.connection`, `mediaDevices` labels.
+The 🟡 native patches above supersede the JS screen + client-rects spoofs once built — at
+that point disable the JS duplicates on the native path (see each patch header) so native
+and JS do not double-spoof.
 
 ## Branding (name + icon)
 | Target | Change |

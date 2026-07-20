@@ -14,6 +14,7 @@
 // Hints/timezone/geo are already done natively via CDP (see cdp-injector.ts).
 
 import type { Fingerprint } from '../shared/types'
+import { extraSpoofBody } from './stealth-extra'
 
 /** Stable 32-bit FNV-1a hash of a string → noise seed. */
 export function seedFromString(s: string): number {
@@ -61,6 +62,9 @@ export function buildStealthScript(
 
   // The body below is plain JS (no template literals / no ${}) so it survives
   // being embedded in this TS template string. Only CFG is interpolated.
+  // extraSpoofBody adds the vectors not covered natively (client rects, screen avail
+  // offsets, navigator.connection, mediaDevices) — it reuses the mask()/def() helpers
+  // STEALTH_BODY declares, so it must be concatenated AFTER STEALTH_BODY.
   return (
     '(function(){' +
     '"use strict";' +
@@ -68,6 +72,7 @@ export function buildStealthScript(
     JSON.stringify(cfg) +
     ';' +
     STEALTH_BODY +
+    extraSpoofBody({ seed, clientRectsNoise: fp.clientRectsNoise === true }) +
     '})();'
   )
 }

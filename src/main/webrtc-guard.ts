@@ -17,6 +17,7 @@
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import type { Fingerprint } from '../shared/types'
+import { extraSpoofBody } from './stealth-extra'
 
 const MANIFEST = JSON.stringify({
   manifest_version: 3,
@@ -112,11 +113,20 @@ function webrtcScript(webrtc: string, publicIp: string): string {
 /**
  * Write the per-profile native-mode guard extension into the profile's user-data-dir and
  * return its directory (to pass to --load-extension), or null on write failure (never break
- * a launch over this). Always spoofs the screen; adds the WebRTC filter unless webrtc==='real'.
+ * a launch over this). Always spoofs the screen; adds the WebRTC filter unless webrtc==='real';
+ * always applies the shared extra spoofs (client rects / screen avail offsets /
+ * navigator.connection / mediaDevices) that the native engine does not yet cover.
  * It lives OUTSIDE Default/ so the cloud sync (which only zips Default/) never carries this
  * machine's proxy IP elsewhere.
+ *
+ * `seed` is the same per-profile noise seed the engine gets via --vgc-seed
+ * (seedFromString(profile.id)), so JS-mode and native-mode noise are derived identically.
  */
-export function ensureNativeGuardExtension(userDataDir: string, fp: Fingerprint): string | null {
+export function ensureNativeGuardExtension(
+  userDataDir: string,
+  fp: Fingerprint,
+  seed: number
+): string | null {
   const dir = join(userDataDir, 'vgc-webrtc-guard')
   try {
     mkdirSync(dir, { recursive: true })
@@ -126,6 +136,7 @@ export function ensureNativeGuardExtension(userDataDir: string, fp: Fingerprint)
       MASK_PREAMBLE +
       screenScript(fp) +
       (fp.webrtc !== 'real' ? webrtcScript(fp.webrtc, fp.webrtcPublicIp ?? '') : '') +
+      extraSpoofBody({ seed, clientRectsNoise: fp.clientRectsNoise === true }) +
       '})();'
     writeFileSync(join(dir, 'guard.js'), body)
     return dir
