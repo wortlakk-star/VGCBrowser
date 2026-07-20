@@ -152,7 +152,10 @@ export const BRAIN = /* js */ `
     var img = document.querySelector('img#captchaimg') ||
       document.querySelector('img[src*="Captcha"]') ||
       document.querySelector('img[src*="captcha"]');
-    if (img) {
+    // Only a LOADED image is a real captcha. Google keeps an EMPTY <img id=captchaimg>
+    // (src='', naturalWidth 0) in the sign-in DOM as a placeholder even when there is NO
+    // captcha — drawing it gave CapSolver a blank image (empty answer) and the flow looped.
+    if (img && img.naturalWidth > 0) {
       info.captchaKind = 'image';
       try {
         var cv = document.createElement('canvas');
@@ -170,10 +173,20 @@ export const BRAIN = /* js */ `
   // Captcha present on THIS page (image "type the text" or reCAPTCHA). We can't clear
   // it without a solver service — flag it, but still fill any visible field first so a
   // manual solve on the open window lets the flow continue.
-  var hasCaptcha = !!(document.querySelector('img#captchaimg') ||
-    document.querySelector('input[name=ca]') ||
-    document.querySelector('iframe[src*="recaptcha"]') ||
-    document.querySelector('.g-recaptcha')) ||
+  // Detect a captcha ONLY when it is REAL, never on Google's always-present empty
+  // placeholders: <img id=captchaimg> with an empty src (naturalWidth 0) and the invisible
+  // reCAPTCHA iframe live in the sign-in DOM on EVERY page. Matching their mere presence made
+  // the brain report 'captcha' at every step, mask the true state (email/password/2FA), feed
+  // CapSolver a blank image, and hang — "opens the login then just sits there". Require a
+  // LOADED image, a VISIBLE reCAPTCHA widget, or the human-facing challenge text.
+  var _capImg = document.querySelector('img#captchaimg') ||
+    document.querySelector('img[src*="Captcha"]') ||
+    document.querySelector('img[src*="captcha"]');
+  var _rc = document.querySelector('.g-recaptcha') ||
+    document.querySelector('[class*="recaptcha-checkbox"]');
+  var hasCaptcha =
+    !!(_capImg && _capImg.naturalWidth > 0) ||
+    !!(_rc && _rc.offsetParent !== null) ||
     body.indexOf("i'm not a robot") !== -1 ||
     body.indexOf('tôi không phải là người máy') !== -1 ||
     body.indexOf('nhập các ký tự bạn nhìn thấy') !== -1 ||
