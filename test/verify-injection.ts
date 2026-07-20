@@ -148,7 +148,19 @@ async function main(): Promise<void> {
     const mediaLabels = await evaluate(
       conn,
       sid,
-      'navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices?navigator.mediaDevices.enumerateDevices().then(function(l){return JSON.stringify({n:l.length,allBlank:l.every(function(d){return d.label==="";})});}):"none"'
+      'navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices?navigator.mediaDevices.enumerateDevices().then(function(l){return JSON.stringify({n:l.length,allBlank:l.every(function(d){return d.label==="";}),allReal:l.every(function(d){return d instanceof MediaDeviceInfo;})});}):"none"'
+    )
+    // getClientRects must stay a NATIVE DOMRectList (we farble only getBoundingClientRect).
+    const gcrType = await evaluate(
+      conn,
+      sid,
+      '(function(){try{return document.body.getClientRects() instanceof DOMRectList;}catch(e){return "ERR:"+e;}})()'
+    )
+    // Patched fns must carry the correct .name (empty .name + native toString is a tell).
+    const nameOk = await evaluate(
+      conn,
+      sid,
+      '(function(){try{return Element.prototype.getBoundingClientRect.name==="getBoundingClientRect"&&Object.getOwnPropertyDescriptor(Screen.prototype,"availLeft").get.name==="get availLeft";}catch(e){return "ERR:"+e;}})()'
     )
 
     const checks: Array<[string, unknown, unknown]> = [
@@ -199,7 +211,7 @@ async function main(): Promise<void> {
     console.log(`${netOk ? 'PASS' : 'FAIL'}  navigator.connection: ${netInfo}`)
 
     // mediaDevices labels stripped (no real hardware names leak).
-    let mediaParsed: { n?: number; allBlank?: boolean } = {}
+    let mediaParsed: { n?: number; allBlank?: boolean; allReal?: boolean } = {}
     try {
       mediaParsed = JSON.parse(String(mediaLabels))
     } catch {
@@ -209,7 +221,22 @@ async function main(): Promise<void> {
     if (mediaOk) pass++
     console.log(`${mediaOk ? 'PASS' : 'FAIL'}  mediaDevices labels blank: ${mediaLabels}`)
 
-    const TOTAL = 11
+    // mediaDevices entries must remain real MediaDeviceInfo (instanceof survives).
+    const mediaRealOk = mediaParsed.allReal === true
+    if (mediaRealOk) pass++
+    console.log(`${mediaRealOk ? 'PASS' : 'FAIL'}  mediaDevices real MediaDeviceInfo: ${mediaParsed.allReal}`)
+
+    // getClientRects stays native DOMRectList (no plain-Array tell).
+    const gcrOk = gcrType === true
+    if (gcrOk) pass++
+    console.log(`${gcrOk ? 'PASS' : 'FAIL'}  getClientRects is DOMRectList: ${gcrType}`)
+
+    // Patched fns carry the correct .name.
+    const nameChkOk = nameOk === true
+    if (nameChkOk) pass++
+    console.log(`${nameChkOk ? 'PASS' : 'FAIL'}  patched fn .name correct: ${nameOk}`)
+
+    const TOTAL = 14
     console.log(`\n${pass}/${TOTAL} checks passed.`)
     conn.close()
     process.exitCode = pass === TOTAL ? 0 : 1

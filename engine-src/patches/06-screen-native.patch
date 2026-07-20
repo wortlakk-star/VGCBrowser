@@ -1,16 +1,20 @@
 # VGC Core — native screen spoof (screen.width/height/avail*/colorDepth/pixelDepth)
 #
-# STATUS: DRAFT — authored against Chromium M151 by METHOD NAME (see README: "match by
-# method name, not line number"). NOT yet built/verified in CI like 01–05. Apply with:
-#     patch -p1 --fuzz=3 < engine-src/patches/06-screen-native.patch
-# then confirm each Screen::* accessor got the guard and rebuild `chrome`.
+# STATUS: DRAFT — a HAND-APPLICATION GUIDE, not a git-apply-able diff. The hunks are anchored
+# by METHOD NAME (Chromium drifts per version — see README) with bare `@@ method {` markers, so
+# `git apply` / `patch --fuzz` will NOT apply them cleanly. Locate each named Screen::* accessor
+# in a real M151 checkout, add the anonymous-namespace helper, insert the marked `+` lines at the
+# top of each method, then rebuild `chrome`. Regenerate as a real `git diff` against your checkout
+# before committing it as a "verified" patch (as 01/02 are).
 #
 # NEW SWITCH: --vgc-screen=WIDTHxHEIGHT  (+ optional --vgc-color-depth=24)
-#   • Add to src/main/profile-manager.ts (native switches block, alongside --vgc-seed):
+#   1. Wire in src/main/profile-manager.ts (native switches block, alongside --vgc-seed):
 #         `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
 #         `--vgc-color-depth=${fp.screen.colorDepth}`,
-#   • --vgc-* switches are already forwarded to the renderer by patch 02, and Screen lives
-#     in the renderer (Blink), so no extra forwarding is needed.
+#   2. ⚠️ FORWARD TO THE RENDERER: Screen lives in Blink (renderer), and patch 02 forwards only
+#      an ALLOWLIST (kVgcSwitches) — it does NOT include these. You MUST add "vgc-screen" and
+#      "vgc-color-depth" to kVgcSwitches in 02-forward-vgc-switches.patch AND vgc-native-all.patch,
+#      or the accessors below never see the switch and silently return the REAL display.
 #
 # WHY NATIVE: screen is currently spoofed in JS (webrtc-guard.ts screenScript +
 # stealth-extra.ts availLeft/availTop). JS getters on Screen.prototype are the single most

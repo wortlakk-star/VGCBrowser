@@ -5,17 +5,19 @@
 //   • webrtc-guard.ts        (native mode — the DEFAULT path, MV3 guard extension)
 //
 // Covered:
-//   1. Client rects   — getBoundingClientRect / getClientRects / Range rects farbling.
-//                        `clientRectsNoise` was declared in the Fingerprint type but had
-//                        NO implementation anywhere (dead flag). This closes that gap.
+//   1. Client rects   — getBoundingClientRect (Element + Range) sub-pixel farbling, returning
+//                        a REAL DOMRect. `clientRectsNoise` was declared in the Fingerprint
+//                        type but had NO implementation anywhere (dead flag). getClientRects is
+//                        left native (JS DOMRectList isn't constructable); patch 07 does it in C++.
 //   2. Screen offsets — screen.availLeft / availTop forced to 0 (a nonzero value leaks a
 //                        secondary monitor's placement → ties every profile to one rig).
 //   3. connection     — navigator.connection normalised to stable, privacy-rounded values
 //                        (Chrome exposes effectiveType/rtt/downlink; a per-session-varying
 //                        real link is a weak cross-profile correlator).
-//   4. mediaDevices   — enumerateDevices() label stripped + non-default ids stabilised
-//                        (post-permission the real mic/cam MODEL NAMES + per-machine ids
-//                        are a strong same-machine correlator across "different" accounts).
+//   4. mediaDevices   — the mic/cam LABEL is blanked at the MediaDeviceInfo.prototype level
+//                        (the real same-machine correlator across "different" accounts). Real
+//                        objects/ids are kept intact so instanceof, getCapabilities() and
+//                        getUserMedia({deviceId:{exact}}) selection all keep working.
 //
 // The body is plain JS (no template ${}) and is FULLY SELF-CONTAINED: it defines its
 // own toString-masking (xmask/xdef) that CHAINS to whatever Function.prototype.toString
@@ -46,7 +48,7 @@ try {
   // whatever the host installed so the host's own masks still resolve through the chain.
   var _xToString = Function.prototype.toString;
   var _xNative = new WeakMap();
-  function xmask(fn, name){ try{ _xNative.set(fn, 'function ' + name + '() { [native code] }'); }catch(e){} return fn; }
+  function xmask(fn, name){ try{ _xNative.set(fn, 'function ' + name + '() { [native code] }'); Object.defineProperty(fn, 'name', { value: name, configurable: true }); }catch(e){} return fn; }
   var _xPatched = function toString(){ if(_xNative.has(this)) return _xNative.get(this); return _xToString.call(this); };
   try { Function.prototype.toString = xmask(_xPatched, 'toString'); } catch(e){}
   function xdef(obj, prop, getter){ try{ Object.defineProperty(obj, prop, { get: xmask(getter, 'get ' + prop), configurable:true, enumerable:true }); }catch(e){} }
@@ -54,9 +56,9 @@ try {
   // Local PRNG so this block is self-contained (does not depend on the host's mulberry32).
   function xmul(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
-  // ── 1. Client rects farbling ──────────────────────────────────────────────
-  // getClientRects/getBoundingClientRect fingerprinting hashes the sub-pixel box
-  // geometry of rendered text. We add a deterministic, per-metric sub-pixel offset:
+  // ── 1. Client rects farbling (getBoundingClientRect only) ─────────────────
+  // clientRects fingerprinting hashes the sub-pixel box geometry of rendered text. We add a
+  // deterministic, per-metric sub-pixel offset:
   //   • deterministic  → the SAME element+metric always yields the SAME delta, so a
   //                       double-read returns identical rects (unstable = "spoofed" tell).
   //   • per-value      → different coordinates get different deltas, so RATIOS between
@@ -64,6 +66,11 @@ try {
   //                       absolute ones.
   //   • ~±0.0001 px    → far below any real layout effect (invisible), but shifts the
   //                       float hash creepjs / pixelscan compute.
+  // xrect returns a REAL DOMRect (correct prototype, instanceof/toStringTag intact), so there
+  // is no wrong-type tell. getClientRects() is deliberately LEFT NATIVE: a JS DOMRectList is
+  // not constructable, and returning a plain Array is a stronger '[object Array]' tell than the
+  // farbling is worth — the native patch 07-client-rects-native.patch farbles getClientRects at
+  // the C++ level (real DOMRectList) once the engine is rebuilt.
   if (XCFG.clientRects) {
     try {
       function xrn(v, salt){
@@ -78,19 +85,11 @@ try {
           return { x:x, y:y, width:w, height:h, top:y, right:x+w, bottom:y+h, left:x, toJSON:function(){ return { x:x, y:y, width:w, height:h, top:y, right:x+w, bottom:y+h, left:x }; } };
         } catch(e){ return r; }
       }
-      function xlist(list){
-        try { var out=[]; for (var i=0;i<list.length;i++) out.push(xrect(list[i])); out.item=function(k){ return this[k]||null; }; return out; }
-        catch(e){ return list; }
-      }
       var _gbcr = Element.prototype.getBoundingClientRect;
       Element.prototype.getBoundingClientRect = xmask(function(){ return xrect(_gbcr.apply(this, arguments)); }, 'getBoundingClientRect');
-      var _gcr = Element.prototype.getClientRects;
-      Element.prototype.getClientRects = xmask(function(){ return xlist(_gcr.apply(this, arguments)); }, 'getClientRects');
       if (window.Range) {
         var _rr = Range.prototype.getBoundingClientRect;
         Range.prototype.getBoundingClientRect = xmask(function(){ return xrect(_rr.apply(this, arguments)); }, 'getBoundingClientRect');
-        var _rcr = Range.prototype.getClientRects;
-        Range.prototype.getClientRects = xmask(function(){ return xlist(_rcr.apply(this, arguments)); }, 'getClientRects');
       }
     } catch(e){}
   }
@@ -121,33 +120,25 @@ try {
     }
   } catch(e){}
 
-  // ── 4. mediaDevices.enumerateDevices ──────────────────────────────────────
-  // The high-value leak is POST-permission: real device LABELS ("HD Pro Webcam C920",
-  // "Realtek Audio") + per-machine deviceId/groupId salts, identical across every profile
-  // on this host. We blank labels and replace non-default ids with seed-derived stable ids;
-  // kinds + count are preserved so getUserMedia capability is unchanged. 'default' /
-  // 'communications' ids are kept verbatim (sites select the default device by that id).
+  // ── 4. mediaDevices labels ────────────────────────────────────────────────
+  // The real cross-machine correlator is the LABEL ("HD Pro Webcam C920", "Realtek Audio") —
+  // identical across every profile on a host. deviceId/groupId are ALREADY per-profile salted
+  // by Chrome (each profile has its own user-data-dir), so they are NOT a cross-profile tell,
+  // and rewriting them only broke getUserMedia({deviceId:{exact}}) selection. So we blank ONLY
+  // the label, at the PROTOTYPE level — keeping the REAL MediaDeviceInfo/InputDeviceInfo objects
+  // (instanceof, getCapabilities(), and an empty Object.keys all survive; no plain-object tell).
+  // toJSON is overridden too because MediaDeviceInfo.toJSON() serialises the label from the
+  // internal slot, bypassing the getter — without this, JSON.stringify(device) would re-leak it.
   try {
-    var MD = navigator.mediaDevices;
-    if (MD && MD.enumerateDevices) {
-      var _enum = MD.enumerateDevices.bind(MD);
-      var _sid = function(tag, i){
-        var s = (XCFG.seed ^ 0x9E3779B9 ^ ((i * 2654435761) >>> 0)) >>> 0, h = '';
-        for (var k = 0; k < 8; k++){ s ^= s>>>13; s = Math.imul(s, 0x5BD1E995)>>>0; s ^= s>>>15; h += ('00000000' + (s>>>0).toString(16)).slice(-8); }
-        return (tag + h).slice(0, 64);
-      };
-      MD.enumerateDevices = xmask(function(){
-        return _enum().then(function(list){
-          try {
-            return list.map(function(d, i){
-              var keep = (d.deviceId === 'default' || d.deviceId === 'communications');
-              var id = keep ? d.deviceId : (d.deviceId ? _sid('d', i) : '');
-              var gid = d.groupId ? _sid('g' + d.kind, i) : '';
-              return { deviceId: id, kind: d.kind, label: '', groupId: gid, toJSON: function(){ return { deviceId: id, kind: d.kind, label: '', groupId: gid }; } };
-            });
-          } catch(e){ return list; }
+    var _MDI = window.MediaDeviceInfo;
+    if (_MDI && _MDI.prototype) {
+      xdef(_MDI.prototype, 'label', function(){ return ''; });
+      if (_MDI.prototype.toJSON) {
+        Object.defineProperty(_MDI.prototype, 'toJSON', {
+          configurable: true, enumerable: true, writable: true,
+          value: xmask(function(){ return { deviceId: this.deviceId, kind: this.kind, label: '', groupId: this.groupId }; }, 'toJSON')
         });
-      }, 'enumerateDevices');
+      }
     }
   } catch(e){}
 } catch(e){ /* never throw into the page */ }

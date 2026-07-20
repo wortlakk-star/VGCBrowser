@@ -39,7 +39,7 @@ const MANIFEST = JSON.stringify({
 // instead of our source. Shared by the screen + WebRTC blocks below via closure.
 const MASK_PREAMBLE = `
   var _toString=Function.prototype.toString, _native=new WeakMap();
-  function mask(fn,name){try{_native.set(fn,'function '+name+'() { [native code] }');}catch(e){}return fn;}
+  function mask(fn,name){try{_native.set(fn,'function '+name+'() { [native code] }');Object.defineProperty(fn,'name',{value:name,configurable:true});}catch(e){}return fn;}
   var patchedToString=function toString(){if(_native.has(this))return _native.get(this);return _toString.call(this);};
   Function.prototype.toString=mask(patchedToString,'toString');
   function def(obj,prop,getter){try{Object.defineProperty(obj,prop,{get:mask(getter,'get '+prop),configurable:true,enumerable:true});}catch(e){}}

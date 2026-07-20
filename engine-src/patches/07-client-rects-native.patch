@@ -1,11 +1,12 @@
 # VGC Core — native client-rects farbling (getBoundingClientRect / getClientRects)
 #
-# STATUS: DRAFT — authored against Chromium M151 by METHOD NAME (see README: "match by
-# method name, not line number"). NOT yet built/verified in CI like 01–05. Apply with:
-#     patch -p1 --fuzz=3 < engine-src/patches/07-client-rects-native.patch
-# then confirm the hunks landed in Element::getBoundingClientRect / Element::getClientRects
-# and rebuild `chrome`. Reuses the EXISTING --vgc-seed switch (already passed by
-# profile-manager.ts and already forwarded to the renderer by patch 02) — no new switch.
+# STATUS: DRAFT — a HAND-APPLICATION GUIDE, not a git-apply-able diff (bare `@@ method {`
+# markers, anchored by METHOD NAME — see README). Locate Element::getBoundingClientRect and
+# Element::getClientRects in a real M151 checkout, add the anonymous-namespace helpers, insert
+# the marked `+` lines, then rebuild `chrome`. Regenerate as a real `git diff` before committing
+# it as a "verified" patch. Reuses the EXISTING --vgc-seed switch — already passed by
+# profile-manager.ts AND already in patch 02's kVgcSwitches allowlist (forwarded to the
+# renderer), so NO new switch or forwarding change is needed.
 #
 # WHY NATIVE: the JS version (src/main/stealth-extra.ts) overrides Element.prototype
 # getters, which a lie-detector can flag via toString/descriptor probing. This C++ patch

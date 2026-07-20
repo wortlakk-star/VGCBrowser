@@ -86,7 +86,7 @@ try {
   // toString masking: make patched fns report as native code.
   var _toString = Function.prototype.toString;
   var _native = new WeakMap();
-  function mask(fn, name){ try{ _native.set(fn, 'function ' + name + '() { [native code] }'); }catch(e){} return fn; }
+  function mask(fn, name){ try{ _native.set(fn, 'function ' + name + '() { [native code] }'); Object.defineProperty(fn, 'name', { value: name, configurable: true }); }catch(e){} return fn; }
   var patchedToString = function toString(){ if(_native.has(this)) return _native.get(this); return _toString.call(this); };
   Function.prototype.toString = mask(patchedToString, 'toString');
 

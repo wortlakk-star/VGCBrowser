@@ -17,8 +17,10 @@ const js = readFileSync(join(out, 'guard.js'), 'utf8')
 try {
   new vm.Script(js) // parse-only: throws on any syntax error in the concatenated body
   console.log('PASS: guard.js parses (' + js.length + ' bytes, MV3 content script)')
-  console.log('PASS: contains extra spoofs =', /XCFG/.test(js) && /getBoundingClientRect/.test(js) && /enumerateDevices/.test(js))
-  process.exit(0)
+  const hasSpoofs =
+    /XCFG/.test(js) && /getBoundingClientRect/.test(js) && /MediaDeviceInfo/.test(js) && /availLeft/.test(js)
+  console.log((hasSpoofs ? 'PASS' : 'FAIL') + ': contains extra spoofs (rects/screen/media) =', hasSpoofs)
+  process.exit(hasSpoofs ? 0 : 1)
 } catch (e) {
   console.log('FAIL: guard.js syntax error:', (e as Error).message)
   process.exit(1)
