@@ -342,7 +342,12 @@ export function registerIpc(): void {
 
   // Scheduled auto warm-up config (per account).
   ipcMain.handle('warm:getSchedule', () => getSchedule())
-  ipcMain.handle('warm:setSchedule', (_e, patch: Partial<WarmSchedule>) => setSchedule(patch))
+  ipcMain.handle('warm:setSchedule', (_e, patch: Partial<WarmSchedule>) => {
+    // Only the scheduler tick may set lastRun — strip it from renderer patches so a stale
+    // round-trip can't revert the tick's fresh stamp (which would re-run the batch early).
+    const { lastRun: _drop, ...safe } = patch
+    return setSchedule(safe)
+  })
 
   // Durably append one account's result (email|new password|status) the moment it's
   // known, so a crash / close mid-run can NEVER lose a freshly-set random password.

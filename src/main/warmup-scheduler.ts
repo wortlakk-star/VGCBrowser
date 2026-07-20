@@ -42,6 +42,10 @@ let running = false
 
 async function tick(): Promise<void> {
   if (running) return // a previous scheduled batch is still going
+  // Pin the batch to the account that was signed in when it began — file()/getProfile/setSchedule
+  // all key off the CURRENT account, so if the user switches Supabase accounts mid-run we'd
+  // otherwise read the wrong profile store and stamp lastRun onto the wrong account's schedule.
+  const key0 = accountKey()
   const cfg = getSchedule()
   if (!cfg.enabled || !cfg.profileIds.length) return
   const due =
@@ -50,13 +54,14 @@ async function tick(): Promise<void> {
   running = true
   try {
     for (const id of cfg.profileIds) {
+      if (accountKey() !== key0) return // account switched mid-batch → abort
       const prof = await getProfile(id)
       if (!prof) continue
       // eslint-disable-next-line no-await-in-loop -- run one profile at a time (sequential)
       await runWarmup(id, prof.name, { minutes: cfg.minutes }, () => {})
     }
-    // Stamp completion on whatever the schedule is NOW (the user may have edited it mid-run).
-    setSchedule({ lastRun: new Date().toISOString() })
+    // Only stamp lastRun if we're still on the account this batch actually ran for.
+    if (accountKey() === key0) setSchedule({ lastRun: new Date().toISOString() })
   } catch {
     /* never let a scheduled run crash the app */
   } finally {

@@ -12,6 +12,10 @@ import { dbg } from './dbg'
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const rnd = (min: number, max: number): number => min + Math.random() * (max - min)
 
+// Profiles currently being warmed — a shared lock so the scheduled tick and a manual "Nuôi acc"
+// can't drive (and tear down) the SAME profile's browser at the same time.
+const inFlight = new Set<string>()
+
 export interface WarmupOpts {
   minutes?: number
 }
@@ -30,6 +34,7 @@ export async function runWarmup(
     }
   }
   const finish = (status: RpaResult['status'], message: string): RpaResult => {
+    inFlight.delete(profileId)
     try {
       stopProfile(profileId) // persists the session to disk
     } catch {
@@ -37,6 +42,12 @@ export async function runWarmup(
     }
     return { profileId, name, status, message }
   }
+
+  // Already being warmed (e.g. a scheduled tick + a manual click) → don't drive it twice.
+  if (inFlight.has(profileId)) {
+    return { profileId, name, status: 'error', message: 'Profile đang được nuôi — bỏ qua' }
+  }
+  inFlight.add(profileId)
 
   emit('launch', 'Đang mở profile…')
   try {

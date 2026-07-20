@@ -20,7 +20,15 @@ export function WarmScheduleModal({ selectedIds, onClose }: Props): JSX.Element 
     if (!sch) return
     setSaving(true)
     try {
-      const next = await window.vgc.setWarmSchedule(sch)
+      // Send ONLY user-editable fields — never round-trip lastRun (a scheduler tick may have
+      // stamped a newer one while this modal was open; setWarmSchedule patch-merges, so omitting
+      // lastRun preserves the tick's value).
+      const next = await window.vgc.setWarmSchedule({
+        enabled: sch.enabled,
+        profileIds: sch.profileIds,
+        everyHours: sch.everyHours,
+        minutes: sch.minutes
+      })
       setSch(next)
       setMsg('✓ Đã lưu.')
     } finally {
