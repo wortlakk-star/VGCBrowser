@@ -139,6 +139,20 @@ export function registerIpc(): void {
     }
   })
 
+  // Open profiles tiled into a grid: each item carries its computed window position/size.
+  ipcMain.handle(
+    'profiles:launchGrid',
+    async (_e, items: Array<{ id: string; x: number; y: number; w: number; h: number }>) => {
+      for (const it of items) {
+        try {
+          await launchProfile(it.id, { window: { x: it.x, y: it.y, w: it.w, h: it.h } })
+        } catch {
+          // keep launching the rest
+        }
+      }
+    }
+  )
+
   ipcMain.handle('profiles:stopMany', (_e, ids: string[]) => {
     for (const id of ids) stopProfile(id)
   })

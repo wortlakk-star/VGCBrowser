@@ -557,6 +557,26 @@ export default function App(): JSX.Element {
   const bulkStop = useCallback(async () => {
     await window.vgc.stopMany([...selected])
   }, [selected])
+  // Open the selected profiles tiled into a grid on the primary screen.
+  const bulkGrid = useCallback(async () => {
+    const ids = [...selected]
+    if (!ids.length) return
+    const sw = window.screen.availWidth || 1920
+    const sh = window.screen.availHeight || 1040
+    const cols = Math.ceil(Math.sqrt(ids.length))
+    const rows = Math.ceil(ids.length / cols)
+    const w = Math.floor(sw / cols)
+    const h = Math.floor(sh / rows)
+    const items = ids.map((id, i) => ({
+      id,
+      x: (i % cols) * w,
+      y: Math.floor(i / cols) * h,
+      w,
+      h
+    }))
+    await window.vgc.launchGrid(items)
+    void autoCheckProxies(ids)
+  }, [selected, autoCheckProxies])
   const runGmailLogin = useCallback(
     async (ids: string[]) => {
       if (!ids.length) return
@@ -806,6 +826,13 @@ export default function App(): JSX.Element {
             <span>{selected.size} đã chọn</span>
             <button className="btn" onClick={bulkRun}>
               Mở
+            </button>
+            <button
+              className="btn"
+              onClick={bulkGrid}
+              title="Mở tất cả profile đã chọn, xếp cửa sổ thành lưới trên màn hình"
+            >
+              ▦ Mở lưới
             </button>
             <button className="btn" onClick={bulkStop}>
               Dừng

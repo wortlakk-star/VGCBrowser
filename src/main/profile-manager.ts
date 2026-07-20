@@ -319,7 +319,13 @@ function spawnAndWait(
 
 export async function launchProfile(
   id: string,
-  opts: { headless?: boolean; cleanLogin?: boolean; automation?: boolean } = {}
+  opts: {
+    headless?: boolean
+    cleanLogin?: boolean
+    automation?: boolean
+    /** Tile the window at this position/size (for "mở lưới"). Overrides the default window-size. */
+    window?: { x: number; y: number; w: number; h: number }
+  } = {}
 ): Promise<ProfileRuntimeState> {
   const existing = running.get(id)
   if (existing) {
@@ -511,7 +517,7 @@ export async function launchProfile(
     // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
     '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,
-    `--window-size=${fp.screen.width},${fp.screen.height}`,
+    `--window-size=${opts.window ? `${opts.window.w},${opts.window.h}` : `${fp.screen.width},${fp.screen.height}`}`,
     `--user-agent=${fp.userAgent}`,
     // Make navigator.userAgentData (UA Client Hints) report the SAME Chrome version as
     // the UA string above. Without this the engine leaks its own build version (151)
@@ -647,6 +653,9 @@ export async function launchProfile(
 
   // Headless (used by the automation API).
   if (opts.headless) args.push('--headless=new')
+
+  // Tile the window into a grid slot (opts.window from "Mở lưới").
+  if (opts.window) args.push(`--window-position=${opts.window.x},${opts.window.y}`)
 
   // CDP over a PIPE — for the fingerprint injector (CDP mode) OR the automation control
   // connection (bulk Gmail tool). A PIPE (fds 3/4), NOT a TCP debug port: a port would

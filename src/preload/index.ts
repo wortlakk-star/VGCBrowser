@@ -70,6 +70,11 @@ const api = {
   launchMany: (ids: string[]): Promise<void> =>
     ipcRenderer.invoke('profiles:launchMany', ids),
 
+  /** Open profiles tiled into a grid — each item has its window position/size. */
+  launchGrid: (
+    items: Array<{ id: string; x: number; y: number; w: number; h: number }>
+  ): Promise<void> => ipcRenderer.invoke('profiles:launchGrid', items),
+
   stopProfile: (id: string): Promise<void> =>
     ipcRenderer.invoke('profiles:stop', id),
 
