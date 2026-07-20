@@ -609,6 +609,35 @@ export default function App(): JSX.Element {
       return
     await runGmailLogin(ids)
   }, [selected, runGmailLogin])
+  const bulkWarmup = useCallback(async () => {
+    const ids = [...selected]
+    if (!ids.length) return
+    const mins = Number(
+      window.prompt('Nuôi mỗi profile mấy phút? (mở Gmail, cuộn/đọc mail như người thật rồi đóng)', '2') ??
+        ''
+    )
+    if (!mins || mins <= 0) return
+    if (
+      !window.confirm(
+        `Nuôi ${ids.length} profile, mỗi cái ~${mins} phút? Chạy lần lượt (≈ ${Math.ceil(ids.length * mins)} phút tổng). Nên đăng nhập Gmail trước.`
+      )
+    )
+      return
+    setLoginBusy(true)
+    setLoginMsg(`Đang nuôi ${ids.length} profile…`)
+    try {
+      const results = await window.vgc.warmupProfiles(ids, mins)
+      const c = (s: string): number => results.filter((r) => r.status === s).length
+      setLoginMsg(
+        `✓ Nuôi xong ${results.length}: ✅ ${c('done')} · 🔒 ${c('not_logged_in')} chưa login · ✗ ${c('error')} lỗi`
+      )
+      await refresh()
+    } catch (e) {
+      setLoginMsg(`Lỗi: ${(e as Error).message}`)
+    } finally {
+      setLoginBusy(false)
+    }
+  }, [selected, refresh])
   // Live progress line during a Gmail login/password run.
   useEffect(() => {
     return window.vgc.onGmailProgress((p) => setLoginMsg(`${p.email || ''} · ${p.message}`))
@@ -844,6 +873,14 @@ export default function App(): JSX.Element {
               title="Tự đăng nhập Gmail bằng email/mật khẩu/2FA đã lưu, rồi đánh dấu Live/Die"
             >
               {loginBusy ? '⏳ Đang login…' : '🔑 Đăng nhập Gmail'}
+            </button>
+            <button
+              className="btn"
+              onClick={bulkWarmup}
+              disabled={loginBusy}
+              title="Nuôi acc: mở Gmail + hoạt động như người thật (cuộn, đọc mail) vài phút rồi đóng"
+            >
+              🌱 Nuôi acc
             </button>
             <button className="btn" onClick={exportSelected}>
               Xuất

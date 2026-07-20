@@ -391,3 +391,12 @@ export interface GmailLoginResult {
   status: GmailLoginStatus
   message: string
 }
+
+/** Result of an RPA "warm-up" run (human-like Gmail activity to keep the account trusted). */
+export type RpaStatus = 'done' | 'not_logged_in' | 'error'
+export interface RpaResult {
+  profileId: string
+  name: string
+  status: RpaStatus
+  message: string
+}

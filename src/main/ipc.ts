@@ -53,6 +53,7 @@ import {
 import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { changeGmailPassword } from './gmail-password'
 import { gmailLogin } from './gmail-login'
+import { runWarmup } from './rpa'
 import { setCloudSession } from './session'
 import {
   getAccountSecret,
@@ -85,7 +86,8 @@ import type {
   GenerateProxiesOpts,
   GmailPasswordTask,
   GmailProgress,
-  GmailLoginResult
+  GmailLoginResult,
+  RpaResult
 } from '../shared/types'
 
 function focusedWindow(): BrowserWindow | null {
@@ -318,6 +320,23 @@ export function registerIpc(): void {
     }
     return results
   })
+
+  // RPA warm-up: human-like Gmail activity on a batch of profiles to keep them trusted.
+  ipcMain.handle(
+    'rpa:warmup',
+    async (_e, profileIds: string[], minutes?: number): Promise<RpaResult[]> => {
+      const emit = (p: GmailProgress): void => {
+        for (const w of BrowserWindow.getAllWindows()) w.webContents.send('gmail:progress', p)
+      }
+      const results: RpaResult[] = []
+      for (const id of profileIds) {
+        const prof = await getProfile(id)
+        if (!prof) continue
+        results.push(await runWarmup(id, prof.name, { minutes }, emit))
+      }
+      return results
+    }
+  )
 
   // Durably append one account's result (email|new password|status) the moment it's
   // known, so a crash / close mid-run can NEVER lose a freshly-set random password.

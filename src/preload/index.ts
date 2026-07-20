@@ -15,6 +15,7 @@ import type {
   GmailChangeResult,
   GmailLoginResult,
   GmailPasswordTask,
+  RpaResult,
   GmailProgress,
   OsType,
   Profile,
@@ -132,6 +133,10 @@ const api = {
   /** Auto sign-in these profiles into Gmail using their stored creds; sets live/die. */
   gmailLogin: (profileIds: string[]): Promise<GmailLoginResult[]> =>
     ipcRenderer.invoke('gmail:login', profileIds),
+
+  /** RPA warm-up: human-like Gmail activity on each profile for `minutes` to keep it trusted. */
+  warmupProfiles: (profileIds: string[], minutes?: number): Promise<RpaResult[]> =>
+    ipcRenderer.invoke('rpa:warmup', profileIds, minutes),
 
   /** Durably append "email|newPassword|status" to the on-disk log; returns its path. */
   logGmailResult: (line: string): Promise<string> => ipcRenderer.invoke('gmail:logResult', line),
