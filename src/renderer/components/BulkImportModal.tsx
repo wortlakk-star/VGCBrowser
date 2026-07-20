@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { OsType, ProxyType } from '../../shared/types'
+import { useEffect, useState } from 'react'
+import type { OsType, ProxyType, SavedProxy } from '../../shared/types'
 import { parseLine } from '../lib/proxy-parse'
 
 interface Props {
@@ -39,9 +39,19 @@ export function BulkImportModal({
   const [group, setGroup] = useState(defaultGroup ?? '')
   const [proxyType, setProxyType] = useState<ProxyType>('socks5')
   const [autoLogin, setAutoLogin] = useState(false)
+  const [autoProxy, setAutoProxy] = useState(false)
+  const [pool, setPool] = useState<SavedProxy[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [importedText, setImportedText] = useState('') // the text already imported — blocks a duplicate re-click
+
+  useEffect(() => {
+    void window.vgc
+      .listProxies()
+      .then(setPool)
+      .catch(() => {})
+  }, [])
+  const freeCount = pool.filter((p) => !p.assignedTo).length
 
   const lines = text
     .split('\n')
@@ -58,6 +68,10 @@ export function BulkImportModal({
     let created = 0
     let badProxy = 0
     const createdIds: string[] = []
+    // Auto-take free pool proxies (one per profile that has no proxy of its own on the line).
+    const freeQueue = autoProxy ? pool.filter((p) => !p.assignedTo) : []
+    const poolAssigned: Array<{ profileId: string; sp: SavedProxy }> = []
+    let noProxyLeft = 0
     for (let i = 0; i < lines.length; i++) {
       const cols = lines[i].split(/[|\t]/).map((c) => c.trim())
       const email = cols[0] || ''
@@ -66,18 +80,25 @@ export function BulkImportModal({
       const twofa = cols[3] || ''
       const pp = proxyStr ? parseLine(proxyStr, proxyType) : null
       if (proxyStr && !pp) badProxy++
+      // No proxy on the line → take one from the pool when "tự lấy proxy" is on.
+      let poolSp: SavedProxy | null = null
+      if (!pp && autoProxy) {
+        poolSp = freeQueue.shift() ?? null
+        if (!poolSp) noProxyLeft++
+      }
+      const cfg = pp ?? poolSp
       try {
         const p = await window.vgc.createProfile({
           name: email || `Acc ${i + 1}`,
           os,
           group: group || undefined,
-          proxy: pp
+          proxy: cfg
             ? {
-                type: pp.type,
-                host: pp.host,
-                port: pp.port,
-                username: pp.username,
-                password: pp.password
+                type: cfg.type,
+                host: cfg.host,
+                port: cfg.port,
+                username: cfg.username,
+                password: cfg.password
               }
             : { type: 'none' },
           account: {
@@ -89,10 +110,22 @@ export function BulkImportModal({
         })
         created++
         createdIds.push(p.id)
+        if (poolSp) poolAssigned.push({ profileId: p.id, sp: poolSp })
       } catch {
         /* skip a bad line, keep importing the rest */
       }
     }
+    // Mark taken pool proxies assigned to their new profile (1 proxy ↔ 1 profile).
+    for (const { profileId, sp } of poolAssigned) {
+      try {
+        await window.vgc.saveProxy({ ...sp, assignedTo: profileId })
+      } catch {
+        /* pool bookkeeping only — never fail the import over it */
+      }
+    }
+    // Refresh the local pool so a second import in the same modal doesn't hand out proxies that
+    // this run just assigned (freeCount + freeQueue read from `pool`).
+    if (poolAssigned.length) void window.vgc.listProxies().then(setPool).catch(() => {})
     onImported()
     setBusy(false)
     // Auto-login the new profiles into Gmail (checkbox) — the login batch runs in App (progress
@@ -107,10 +140,11 @@ export function BulkImportModal({
     if (created > 0) setImportedText(text)
     setMsg(
       `✓ Đã tạo ${created}/${lines.length} profile.` +
-        (badProxy ? ` ⚠️ ${badProxy} dòng proxy sai định dạng → tạo không proxy.` : '')
+        (badProxy ? ` ⚠️ ${badProxy} dòng proxy sai định dạng.` : '') +
+        (noProxyLeft ? ` ⚠️ ${noProxyLeft} profile không có proxy (kho hết proxy rảnh).` : '')
     )
     // Only auto-close on a FULLY successful run, so a partial "X/N" result stays visible.
-    if (created === lines.length && !badProxy) onClose()
+    if (created === lines.length && !badProxy && !noProxyLeft) onClose()
   }
 
   return (
@@ -189,6 +223,20 @@ export function BulkImportModal({
             </div>
             <label
               style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, cursor: 'pointer' }}
+            >
+              <input
+                type="checkbox"
+                checked={autoProxy}
+                onChange={(e) => setAutoProxy(e.target.checked)}
+                style={{ width: 'auto' }}
+              />
+              <span>
+                📦 Tự lấy proxy rảnh từ kho cho dòng không ghi proxy (còn <b>{freeCount}</b> proxy
+                rảnh — mỗi profile 1 cái)
+              </span>
+            </label>
+            <label
+              style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, cursor: 'pointer' }}
             >
               <input
                 type="checkbox"
