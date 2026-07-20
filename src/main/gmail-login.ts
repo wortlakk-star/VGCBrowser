@@ -11,7 +11,12 @@ import { generateTotp } from './totp'
 import { attachPage, BRAIN } from './gmail-password'
 import { dbg } from './dbg'
 
-const HOME_URL = 'https://myaccount.google.com/'
+// Sign IN here, not myaccount.google.com/: when the profile is signed OUT, myaccount.google.com/
+// 302s to the public marketing page (www.google.com/account/about) — NO sign-in form — so the
+// brain would see nothing to type and the login would hang doing nothing. accounts.google.com/
+// lands on the real v3/signin/identifier form when signed out, and (harmlessly) redirects to the
+// myaccount home when already signed in — which the brain's success heuristic still matches.
+const HOME_URL = 'https://accounts.google.com/'
 const LOGIN_BUDGET_MS = 120000 // 2 min per account
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -21,8 +26,9 @@ const PHASE_MSG: Record<string, string> = {
   signin_email: 'Đang nhập email…',
   reauth: 'Đang nhập mật khẩu…',
   totp: 'Đang nhập mã 2FA…',
-  challenge: 'Gặp thử thách xác minh…',
-  captcha: 'Gặp captcha…',
+  chooser: 'Đang chọn tài khoản…',
+  challenge: '⚠️ Google yêu cầu xác minh — hãy xác minh trên cửa sổ đang mở',
+  captcha: '⚠️ Gặp captcha — hãy giải trên cửa sổ đang mở',
   loading: 'Đang tải…'
 }
 
@@ -79,16 +85,22 @@ export async function gmailLogin(
     const secret = task.totpSecret?.trim()
     const deadline = Date.now() + LOGIN_BUDGET_MS
     let last = ''
+    // Did we ever observe a REAL sign-in step (email typed, password typed, 2FA, account picked,
+    // or a challenge)? 'done' is only trustworthy as a genuine login once a step happened, OR
+    // when it persists (an already-signed-in session stays 'done'; a still-loading account shell
+    // whose URL momentarily matches the success regex does not). This blocks a false "live".
+    let sawStep = false
+    let doneStreak = 0
     while (Date.now() < deadline) {
-      // Rebuild each poll so the injected TOTP is the CURRENT code. newPassword is '' —
-      // the change-password branch of the brain never fires (we're on the account home, which
-      // has no two-password form), so login never mutates anything.
+      // Rebuild each poll so the injected TOTP is the CURRENT code. newPassword is '' — the
+      // change-password (two-field) branch of the brain never fires in loginOnly mode, so login
+      // never mutates anything; it only signs in.
       const cfg = JSON.stringify({
         email: task.email,
         oldPassword: task.password,
         newPassword: '',
         totp: secret ? generateTotp(secret) : '',
-        loginOnly: true // the brain must NEVER type/submit a password in login mode
+        loginOnly: true // never type/submit into a NEW-password (change) form — sign-in only
       })
       const expr = BRAIN.split('__CFG__').join(cfg)
       let res: { state: string; detail?: string }
@@ -103,10 +115,26 @@ export async function gmailLogin(
         dbg(`[gmail-login ${task.email}] state=${res.state}${res.detail ? ` (${res.detail})` : ''}`)
         emit(res.state, PHASE_MSG[res.state] ?? res.state)
       }
+      if (
+        res.state === 'signin_email' ||
+        res.state === 'reauth' ||
+        res.state === 'totp' ||
+        res.state === 'chooser' ||
+        res.state === 'challenge' ||
+        res.state === 'captcha'
+      ) {
+        sawStep = true
+      }
+      if (res.state !== 'done') doneStreak = 0
 
       switch (res.state) {
         case 'done':
-          return done('live', 'Đăng nhập thành công')
+          // We drove an actual sign-in → definitely live. Otherwise this is an already-signed-in
+          // session (or a transient) — trust it only once 'done' persists across two polls so a
+          // still-loading shell can't be misread as a completed login.
+          if (sawStep) return done('live', 'Đăng nhập thành công')
+          if (++doneStreak >= 2) return done('live', 'Đã đăng nhập sẵn')
+          break
         case 'newpass_form':
         case 'weak_password':
           // Google is FORCING a change/create-password page — NOT a normal signed-in home. In
@@ -117,11 +145,13 @@ export async function gmailLogin(
           return done('die', 'Không tìm thấy tài khoản Google')
         case 'wrong_password':
           return done('die', 'Sai mật khẩu')
+        // captcha / challenge are NOT terminal: the automation window is VISIBLE, so keep polling
+        // within the budget — the user (or a wired solver) can clear the interstitial and the
+        // brain then proceeds to 'done'. We only give up (needs_manual) when the budget runs out.
         case 'captcha':
         case 'challenge':
-          return done('needs_manual', 'Cần xác minh tay' + (res.detail ? ` (${res.detail})` : ''))
         default:
-          break // signin_email / reauth / totp / loading / unknown → let the brain keep acting
+          break // signin_email / reauth / totp / chooser / captcha / challenge / loading → keep acting
       }
       await sleep(1500)
     }

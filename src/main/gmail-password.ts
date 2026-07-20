@@ -35,6 +35,7 @@ type BrainState =
   | 'signin_email'
   | 'reauth' // single current-password field (sign-in Passwd OR re-auth)
   | 'totp' // Google Authenticator 2-step code prompt (auto-filled from the secret)
+  | 'chooser' // "Choose an account" page — click the tile matching cfg.email (or "use another")
   | 'captcha' // image captcha / reCAPTCHA — needs a solver or manual input
   | 'newpass_form'
   | 'wrong_password'
@@ -202,6 +203,40 @@ export const BRAIN = /* js */ `
   var emailField = document.querySelector('input[type=email]');
   var pf = pwFields();
 
+  // Account chooser ("Choose an account" / "Chọn tài khoản"): a profile with a residual Google
+  // session lands here instead of the email form. Nothing is typeable, so without this the brain
+  // would return 'unknown' forever and the login would hang typing nothing. Only act on the REAL
+  // chooser — an accounts.google.com sign-in page (NOT the myaccount home, which also has an
+  // account chip with data-email and must be left to the 'done' heuristic) whose URL or text
+  // marks it as the chooser. Then click the tile matching cfg.email, else "Use another account".
+  var onChooser =
+    !vis(emailField) && pf.length === 0 &&
+    /accounts\\.google\\.com/.test(url) && !/myaccount\\.google\\.com/.test(url) &&
+    (/accountchooser|signinchooser|\\/chooser/i.test(url) ||
+      body.indexOf('choose an account') !== -1 || body.indexOf('chọn tài khoản') !== -1 ||
+      body.indexOf('choisir un compte') !== -1 || body.indexOf('elige una cuenta') !== -1 ||
+      body.indexOf('konto auswählen') !== -1 || body.indexOf('escolha uma conta') !== -1);
+  if (onChooser) {
+    var tiles = Array.prototype.slice
+      .call(document.querySelectorAll('[data-identifier], [data-email], li[jsname], div[role=link]'))
+      .filter(vis);
+    var want = (cfg.email || '').trim().toLowerCase();
+    var picked = null;
+    for (var ti = 0; ti < tiles.length; ti++) {
+      var idv = (tiles[ti].getAttribute('data-identifier') || tiles[ti].getAttribute('data-email') ||
+        tiles[ti].innerText || '').toLowerCase();
+      if (want && idv.indexOf(want) !== -1) { picked = tiles[ti]; break; }
+    }
+    if (picked) { picked.click(); return { state: 'chooser', url: url, detail: 'pick-account' }; }
+    if (clickText(['use another account', 'thêm tài khoản khác', 'sử dụng tài khoản khác',
+                   'add account', 'thêm tài khoản'])) {
+      return { state: 'chooser', url: url, detail: 'another-account' };
+    }
+    // On the chooser but couldn't act — report it (not 'unknown') so the caller keeps polling as
+    // a real step rather than treating the page as a dead end.
+    return { state: 'chooser', url: url, detail: 'stuck' };
+  }
+
   // Sign-in: identifier (email) step.
   if (vis(emailField) && pf.length === 0) {
     if (emailField.value.trim().toLowerCase() !== cfg.email.trim().toLowerCase()) setVal(emailField, cfg.email);
@@ -312,6 +347,8 @@ export function phaseMessage(state: BrainState): string {
       return 'Đang nhập mật khẩu hiện tại…'
     case 'totp':
       return 'Đang nhập mã 2FA (Authenticator)…'
+    case 'chooser':
+      return 'Đang chọn tài khoản…'
     case 'captcha':
       return '⚠️ Dính captcha — giải trên cửa sổ đang mở'
     case 'newpass_form':
