@@ -98,6 +98,10 @@ export const BRAIN = /* js */ `
   // right before we fill/submit, so it's false at interaction time.
   try { Object.defineProperty(Navigator.prototype, 'webdriver', { get: function () { return false; }, configurable: true, enumerable: true }); } catch (e) {}
   var url = location.href;
+  // Match on HOSTNAME, never a substring of the full href: the account-chooser URL carries the
+  // destination in a continue= param (e.g. ...accountchooser?continue=...myaccount.google.com...),
+  // so a substring test for 'myaccount.google.com' over the href gives false positives.
+  var host = location.hostname;
   var vis = function (el) { return !!el && el.offsetParent !== null && !el.disabled; };
   function setVal(el, val) {
     try {
@@ -211,7 +215,7 @@ export const BRAIN = /* js */ `
   // marks it as the chooser. Then click the tile matching cfg.email, else "Use another account".
   var onChooser =
     !vis(emailField) && pf.length === 0 &&
-    /accounts\\.google\\.com/.test(url) && !/myaccount\\.google\\.com/.test(url) &&
+    host === 'accounts.google.com' &&
     (/accountchooser|signinchooser|\\/chooser/i.test(url) ||
       body.indexOf('choose an account') !== -1 || body.indexOf('chọn tài khoản') !== -1 ||
       body.indexOf('choisir un compte') !== -1 || body.indexOf('elige una cuenta') !== -1 ||
@@ -222,11 +226,25 @@ export const BRAIN = /* js */ `
       .filter(vis);
     var want = (cfg.email || '').trim().toLowerCase();
     var picked = null;
+    var pickedFallback = null;
     for (var ti = 0; ti < tiles.length; ti++) {
-      var idv = (tiles[ti].getAttribute('data-identifier') || tiles[ti].getAttribute('data-email') ||
-        tiles[ti].innerText || '').toLowerCase();
-      if (want && idv.indexOf(want) !== -1) { picked = tiles[ti]; break; }
+      // Prefer an EXACT attribute match — a substring match would pick bigjohn@gmail.com when
+      // signing in john@gmail.com (one address is a suffix of the other).
+      var attr = (tiles[ti].getAttribute('data-identifier') || tiles[ti].getAttribute('data-email') || '')
+        .trim().toLowerCase();
+      if (want && attr) {
+        if (attr === want) { picked = tiles[ti]; break; }
+        continue; // an attribute exists but isn't ours → not this tile
+      }
+      // No usable attribute → fall back to an EXACT line match inside the tile's text.
+      if (want && !pickedFallback) {
+        var lines = (tiles[ti].innerText || '').toLowerCase().split('\\n');
+        for (var li2 = 0; li2 < lines.length; li2++) {
+          if (lines[li2].trim() === want) { pickedFallback = tiles[ti]; break; }
+        }
+      }
     }
+    if (!picked) picked = pickedFallback;
     if (picked) { picked.click(); return { state: 'chooser', url: url, detail: 'pick-account' }; }
     if (clickText(['use another account', 'thêm tài khoản khác', 'sử dụng tài khoản khác',
                    'add account', 'thêm tài khoản'])) {
