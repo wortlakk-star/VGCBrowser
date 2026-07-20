@@ -332,8 +332,13 @@ export const BRAIN = /* js */ `
     }
   }
 
-  // Success heuristic: back on a plain account page with no password fields.
-  if (/myaccount\\.google\\.com\\/(security|home|personal-info|\\?|#|$)/.test(url) && pf.length === 0 && !vis(emailField)) {
+  // Success heuristic: on the myaccount host with no email/password field to fill. Gate on the
+  // HOSTNAME (not a path whitelist) so the multi-login prefix (myaccount.google.com/u/1/…) and
+  // any landing sub-page all count as signed-in — the old /(security|home|…)/ whitelist missed
+  // /u/<n>/ and left multi-account profiles hanging to timeout. Login only reaches this host
+  // after actually signing in (it starts on accounts.google.com); the change-password caller
+  // additionally requires sawSubmit before trusting 'done', so a transient can't be mis-honored.
+  if (host === 'myaccount.google.com' && pf.length === 0 && !vis(emailField)) {
     return { state: 'done', url: url };
   }
 
