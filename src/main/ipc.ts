@@ -54,6 +54,7 @@ import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { changeGmailPassword } from './gmail-password'
 import { gmailLogin } from './gmail-login'
 import { runWarmup } from './rpa'
+import { getSchedule, setSchedule } from './warmup-scheduler'
 import { setCloudSession } from './session'
 import {
   getAccountSecret,
@@ -87,7 +88,8 @@ import type {
   GmailPasswordTask,
   GmailProgress,
   GmailLoginResult,
-  RpaResult
+  RpaResult,
+  WarmSchedule
 } from '../shared/types'
 
 function focusedWindow(): BrowserWindow | null {
@@ -337,6 +339,10 @@ export function registerIpc(): void {
       return results
     }
   )
+
+  // Scheduled auto warm-up config (per account).
+  ipcMain.handle('warm:getSchedule', () => getSchedule())
+  ipcMain.handle('warm:setSchedule', (_e, patch: Partial<WarmSchedule>) => setSchedule(patch))
 
   // Durably append one account's result (email|new password|status) the moment it's
   // known, so a crash / close mid-run can NEVER lose a freshly-set random password.

@@ -7,6 +7,7 @@ import { stopAllAndSync } from './profile-manager'
 import { restartApiServer, stopApiServer } from './api-manager'
 import { initUpdater, hasDownloadedUpdate, installOnQuit } from './updater'
 import { startProxyKeepAlive, stopProxyKeepAlive } from './proxy-keepalive'
+import { startScheduler, stopScheduler } from './warmup-scheduler'
 
 // Network races — a browser tab or upstream proxy closing mid-write — surface as
 // socket errors with these codes. The proxy relay attaches its own handlers, but
@@ -143,6 +144,12 @@ app.whenReady().then(() => {
   } catch (e) {
     console.error('[startup] proxy keep-alive failed:', e)
   }
+  try {
+    // Scheduled auto warm-up (runs due profiles while the app is open).
+    startScheduler()
+  } catch (e) {
+    console.error('[startup] warm-up scheduler failed:', e)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -165,6 +172,7 @@ async function gracefulQuit(): Promise<void> {
   }
   stopApiServer()
   stopProxyKeepAlive()
+  stopScheduler()
   // If a newer version finished downloading, APPLY it now (the app is fully quitting).
   // electron-updater's own auto-install-on-quit hooks the 'quit' event, which app.exit(0)
   // below never emits — so on an always-on VPS the download sat pending forever and the

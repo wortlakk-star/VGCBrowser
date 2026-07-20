@@ -400,3 +400,12 @@ export interface RpaResult {
   status: RpaStatus
   message: string
 }
+
+/** Per-account scheduled auto warm-up config. */
+export interface WarmSchedule {
+  enabled: boolean
+  profileIds: string[]
+  everyHours: number
+  minutes: number
+  lastRun?: string // ISO
+}

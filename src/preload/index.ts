@@ -16,6 +16,7 @@ import type {
   GmailLoginResult,
   GmailPasswordTask,
   RpaResult,
+  WarmSchedule,
   GmailProgress,
   OsType,
   Profile,
@@ -137,6 +138,11 @@ const api = {
   /** RPA warm-up: human-like Gmail activity on each profile for `minutes` to keep it trusted. */
   warmupProfiles: (profileIds: string[], minutes?: number): Promise<RpaResult[]> =>
     ipcRenderer.invoke('rpa:warmup', profileIds, minutes),
+
+  /** Scheduled auto warm-up config (per account). */
+  getWarmSchedule: (): Promise<WarmSchedule> => ipcRenderer.invoke('warm:getSchedule'),
+  setWarmSchedule: (patch: Partial<WarmSchedule>): Promise<WarmSchedule> =>
+    ipcRenderer.invoke('warm:setSchedule', patch),
 
   /** Durably append "email|newPassword|status" to the on-disk log; returns its path. */
   logGmailResult: (line: string): Promise<string> => ipcRenderer.invoke('gmail:logResult', line),

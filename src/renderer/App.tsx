@@ -10,6 +10,7 @@ import type {
 } from '../shared/types'
 import { ProfileTable } from './components/ProfileTable'
 import { BulkImportModal } from './components/BulkImportModal'
+import { WarmScheduleModal } from './components/WarmScheduleModal'
 import { EditProfileModal } from './components/EditProfileModal'
 import { CreateProfileModal } from './components/CreateProfileModal'
 import { ProxyPickerModal } from './components/ProxyPickerModal'
@@ -48,6 +49,7 @@ export default function App(): JSX.Element {
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [showBulkImport, setShowBulkImport] = useState(false)
+  const [showWarmSchedule, setShowWarmSchedule] = useState(false)
   const [statusFilter, setStatusFilter] = useState<AccountStatus | ''>('') // account-health filter
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginMsg, setLoginMsg] = useState('')
@@ -844,6 +846,13 @@ export default function App(): JSX.Element {
           >
             {tzSyncing ? '🕐 Đang khớp…' : '🕐 Khớp múi giờ'}
           </button>
+          <button
+            className="btn"
+            onClick={() => setShowWarmSchedule(true)}
+            title="Hẹn giờ tự nuôi acc — app tự mở + hoạt động người thật theo lịch"
+          >
+            🕒 Hẹn giờ nuôi
+          </button>
           {/* Nút "Đổi MK Gmail" tạm ẩn theo yêu cầu — code backend giữ nguyên để thêm lại sau. */}
           <button className="btn primary" onClick={() => setShowCreate(true)}>
             + Tạo profile
@@ -958,6 +967,9 @@ export default function App(): JSX.Element {
           onImported={refresh}
           onLogin={(ids) => void runGmailLogin(ids)}
         />
+      )}
+      {showWarmSchedule && (
+        <WarmScheduleModal selectedIds={[...selected]} onClose={() => setShowWarmSchedule(false)} />
       )}
       {editing && (
         <EditProfileModal profile={editing} onClose={() => setEditing(null)} onSaved={refresh} />
