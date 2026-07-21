@@ -217,7 +217,13 @@ export const BRAIN = /* js */ `
     return { state: 'weak_password', url: url };
   }
 
-  var emailField = document.querySelector('input[type=email]');
+  // Google's identifier (email) field is <input type="text" id="identifierId" name="identifier">
+  // — NOT type=email (Google changed it for username/webauthn autocomplete). Matching only
+  // input[type=email] found NOTHING, so the email was never typed and the login hung on the very
+  // first page ("opens login then just sits there"). Target the field by its stable id/name too.
+  var emailField = document.querySelector('input[type=email]') ||
+    document.querySelector('input#identifierId') ||
+    document.querySelector('input[name=identifier]');
   var pf = pwFields();
 
   // Account chooser ("Choose an account" / "Chọn tài khoản"): a profile with a residual Google
