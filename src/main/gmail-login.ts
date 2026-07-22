@@ -133,16 +133,22 @@ export async function gmailLogin(
       }
       if (res.state !== 'done') doneStreak = 0
 
-      // Page failed to load (proxy/net error) → chrome-error / blank. Re-navigate to retry
-      // instead of wasting the budget polling a dead page.
-      if ((res.state === 'unknown' || res.state === 'loading') && navRetries < 4 && Date.now() - lastNavAt > 6000) {
+      // Page failed to load (proxy/net error) → chrome-error / blank. Re-navigate to retry;
+      // after 4 failed tries GIVE UP FAST (the proxy is dead) instead of burning the whole 2-min
+      // budget polling a dead tab — that slow grind is what made a bulk batch feel frozen.
+      if (res.state === 'unknown' || res.state === 'loading') {
         const url = String((await page.evaluate('location.href').catch(() => '')) || '')
         if (/^chrome-error:|chromewebdata|^about:blank$|^data:/.test(url)) {
-          navRetries++
-          lastNavAt = Date.now()
-          dbg(`[gmail-login ${task.email}] load failed (${url}) — re-navigate retry ${navRetries}`)
-          await page.navigate(HOME_URL)
-          await sleep(2500)
+          if (navRetries >= 4) {
+            return done('needs_manual', 'Proxy không tải được trang Google (thử 4 lần) — kiểm tra/thay proxy')
+          }
+          if (Date.now() - lastNavAt > 6000) {
+            navRetries++
+            lastNavAt = Date.now()
+            dbg(`[gmail-login ${task.email}] load failed (${url}) — re-navigate retry ${navRetries}`)
+            await page.navigate(HOME_URL)
+            await sleep(2500)
+          }
           continue
         }
       }
