@@ -91,6 +91,12 @@ export async function gmailLogin(
     // whose URL momentarily matches the success regex does not). This blocks a false "live".
     let sawStep = false
     let doneStreak = 0
+    // The residential proxy sometimes fails to load accounts.google.com on the first hit
+    // (net error → chrome-error page). Without a retry the brain just sees an unactionable page
+    // and burns the whole 2-min budget doing nothing (that's the bulk-import "đứng"). Re-navigate
+    // a few times — a flaky proxy usually loads on the 2nd/3rd try.
+    let navRetries = 0
+    let lastNavAt = Date.now()
     while (Date.now() < deadline) {
       // Rebuild each poll so the injected TOTP is the CURRENT code. newPassword is '' — the
       // change-password (two-field) branch of the brain never fires in loginOnly mode, so login
@@ -126,6 +132,20 @@ export async function gmailLogin(
         sawStep = true
       }
       if (res.state !== 'done') doneStreak = 0
+
+      // Page failed to load (proxy/net error) → chrome-error / blank. Re-navigate to retry
+      // instead of wasting the budget polling a dead page.
+      if ((res.state === 'unknown' || res.state === 'loading') && navRetries < 4 && Date.now() - lastNavAt > 6000) {
+        const url = String((await page.evaluate('location.href').catch(() => '')) || '')
+        if (/^chrome-error:|chromewebdata|^about:blank$|^data:/.test(url)) {
+          navRetries++
+          lastNavAt = Date.now()
+          dbg(`[gmail-login ${task.email}] load failed (${url}) — re-navigate retry ${navRetries}`)
+          await page.navigate(HOME_URL)
+          await sleep(2500)
+          continue
+        }
+      }
 
       switch (res.state) {
         case 'done':
