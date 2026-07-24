@@ -205,8 +205,11 @@ async function main(): Promise<void> {
     if (availOk) pass++
     console.log(`${availOk ? 'PASS' : 'FAIL'}  screen.avail offset: ${availOff}`)
 
-    // navigator.connection normalised (effectiveType 4g, downlink capped at 10).
-    const netOk = String(netInfo) === '4g,10'
+    // navigator.connection normalised: effectiveType 4g, downlink is now SEEDED per profile
+    // (one of the plausible broadband values, ≤10) instead of a fixed 10, so two profiles
+    // don't share an identical connection. Accept any of the seeded downlink values.
+    const netStr = String(netInfo)
+    const netOk = /^4g,(10|9|8\.5|7\.5|6\.5|5\.5|4\.5)$/.test(netStr)
     if (netOk) pass++
     console.log(`${netOk ? 'PASS' : 'FAIL'}  navigator.connection: ${netInfo}`)
 

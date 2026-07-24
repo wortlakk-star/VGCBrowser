@@ -29,7 +29,21 @@ import { attachInjector, type InjectorHandle } from './cdp-injector'
 import { CdpConnection } from './cdp'
 import { startRelay, proxyNeedsRelay, type RelayHandle } from './proxy-relay'
 import { seedFromString } from './fingerprint-script'
-import { downloadProfileData, uploadProfileData, downloadProfileCookies } from './cloud-data'
+import {
+  downloadProfileData,
+  uploadProfileData,
+  downloadProfileCookies,
+  uploadProfileCookiesDb,
+  downloadProfileCookiesDb,
+  uploadProfilePasswords,
+  downloadProfilePasswords
+} from './cloud-data'
+import {
+  exportCookies,
+  importCookies,
+  exportLogins,
+  importLogins
+} from './password-bridge'
 import { dbg } from './dbg'
 import { ensureNativeGuardExtension } from './webrtc-guard'
 import { getCloudSession, getCloudEmail } from './session'
@@ -166,6 +180,50 @@ export function allRuntimeStates(): ProfileRuntimeState[] {
 
 let isQuitting = false
 
+/**
+ * Cross-machine SAVED PASSWORDS + COOKIES bridge (previously UNWIRED — "future task").
+ * On close: DECRYPT the profile's Login Data + Cookies with THIS machine's os_crypt key
+ * (password-bridge.ts reads the machine DPAPI/keychain key, NOT the portable one) and
+ * upload them account-secret-encrypted. On open: download + RE-ENCRYPT with the opening
+ * machine's key + merge (insert/update, never delete). This is what keeps a Gmail signed
+ * in on machine A signed in on machine B (before, B had to sign in again). Fully
+ * best-effort: any failure is a no-op — the bridge never deletes and writes the DB
+ * atomically, so it can never corrupt or downgrade the live session.
+ */
+async function uploadCredentials(id: string): Promise<void> {
+  try {
+    const dir = profileDataDir(id)
+    const [cookies, logins] = await Promise.all([
+      exportCookies(dir, id).catch(() => []),
+      exportLogins(dir, id).catch(() => [])
+    ])
+    await Promise.allSettled([
+      cookies.length ? uploadProfileCookiesDb(id, cookies) : Promise.resolve(),
+      logins.length ? uploadProfilePasswords(id, logins) : Promise.resolve()
+    ])
+    if (cookies.length || logins.length)
+      dbg(`[creds ${id}] uploaded ${cookies.length} cookies + ${logins.length} logins`)
+  } catch {
+    /* best-effort — never block close */
+  }
+}
+
+async function downloadCredentials(id: string): Promise<void> {
+  try {
+    const dir = profileDataDir(id)
+    const [cookies, logins] = await Promise.all([
+      downloadProfileCookiesDb(id).catch(() => []),
+      downloadProfilePasswords(id).catch(() => [])
+    ])
+    if (cookies.length) await importCookies(dir, id, cookies).catch(() => 0)
+    if (logins.length) await importLogins(dir, id, logins).catch(() => 0)
+    if (cookies.length || logins.length)
+      dbg(`[creds ${id}] imported ${cookies.length} cookies + ${logins.length} logins`)
+  } catch {
+    /* best-effort — never block open */
+  }
+}
+
 /** When a single profile closes (app stays open): auto-upload its session. */
 async function syncDataOnClose(id: string): Promise<void> {
   try {
@@ -183,7 +241,9 @@ async function syncDataOnClose(id: string): Promise<void> {
       // Uploads Local Storage / IndexedDB / Preferences etc. — NOT Cookies/Login Data
       // (excluded via SKIP_FILES; those stay per-machine so the session never churns).
       await uploadProfileData(id)
-      dbg(`[close ${id}] uploaded zip (Cookies/Login Data kept LOCAL, bridge OFF)`)
+      // Cross-machine cookies + saved passwords (decrypt-locally → cloud → re-encrypt on B).
+      await uploadCredentials(id)
+      dbg(`[close ${id}] uploaded zip + credentials bridge`)
     })
     broadcastData({ id, phase: 'done' })
   } catch (err) {
@@ -206,7 +266,8 @@ export async function stopAllAndSync(): Promise<void> {
     ids.map(async (id) => {
       try {
         broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud trước khi thoát…' })
-        await uploadProfileData(id) // Cookies/Login Data excluded (kept local)
+        await uploadProfileData(id)
+        await uploadCredentials(id) // cross-machine cookies + saved passwords
         broadcastData({ id, phase: 'done' })
       } catch {
         // best-effort — don't block quit on a single failure
@@ -421,7 +482,10 @@ export async function launchProfile(
       // they're sealed with a per-machine key, so the cross-machine bridge is disabled
       // here (it churned the session). downloadProfileData preserves the local copies.
       const got = await withDataLock(id, () => downloadProfileData(id))
-      dbg(`[open ${id}] downloaded=${got}; session stores kept LOCAL (bridge OFF)`)
+      // Cross-machine cookies + saved passwords: download + re-encrypt with THIS machine's
+      // key BEFORE launch (browser not running yet, so mutating the DB is safe).
+      await withDataLock(id, () => downloadCredentials(id))
+      dbg(`[open ${id}] downloaded=${got} + credentials bridge`)
       // Legacy CDP cookie seed — only used in CDP mode; native mode ignores it.
       syncedCookies = await downloadProfileCookies(id).catch(() => [])
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
@@ -574,7 +638,12 @@ export async function launchProfile(
     // IDENTICAL real Windows font set — a high-entropy same-machine correlator Google uses
     // to link "different" profiles. fp.fonts is a per-profile subset of the real fonts.
     ...(fp.fonts && fp.fonts.length ? [`--vgc-fonts=${fp.fonts.join(',')}`] : []),
-    // Unique per-profile seed → engine seeds canvas/audio noise so every Chrome differs.
+    // Native screen spoof (engine screen.cc) → screen.width/height/avail*/colorDepth come
+    // from these, so the JS Screen.prototype getters (the most lie-detectable surface) are
+    // no longer needed on the native path (webrtc-guard.ts drops screenScript when native).
+    `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
+    `--vgc-color-depth=${fp.screen.colorDepth}`,
+    // Unique per-profile seed → engine seeds canvas/audio/client-rects/connection noise.
     `--vgc-seed=${seedFromString(id)}`,
     // Profile name shown in the OS window title (title bar / Cmd-Tab / Dock) so you
     // can tell which profile a window is — NOT in document.title, so it never leaks
@@ -591,12 +660,11 @@ export async function launchProfile(
   // "thoát ra là mất cookie, phải đăng nhập lại" bug. WITHOUT the switch the same profile
   // kept all 217 cookies across a real close/reopen, every one still machine-key-decryptable.
   // So we NEVER pass the switch: the engine keeps its stable machine key, the on-disk
-  // session always decrypts, and same-machine login persists indefinitely. NOTE: cookies +
-  // saved passwords are now PURELY LOCAL — they do NOT cross machines. The old plaintext
-  // bridge (password-bridge.ts) is currently UNWIRED; a second machine shows sites logged
-  // out until you sign in there once. Re-wiring cross-machine transfer is a future task and
-  // must never re-introduce a shared engine key. Every earlier "fix" (2.1.11–2.1.14) failed because it kept
-  // this switch on.
+  // session always decrypts, and same-machine login persists indefinitely. Cross-machine
+  // cookies + saved passwords now travel via the WIRED bridge (uploadCredentials /
+  // downloadCredentials above): they are decrypted with THIS machine's key, stored
+  // account-secret-encrypted in the cloud, and re-encrypted with the other machine's key on
+  // open — WITHOUT a shared engine key (which is what destroyed cookies in 2.1.11–2.1.14).
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
   // HARDENING: childEnv inherits the whole host environment. If this machine ever has
   // GOOGLE_DEFAULT_CLIENT_ID / _SECRET set globally (a stray setx, a dev shell, CI), they

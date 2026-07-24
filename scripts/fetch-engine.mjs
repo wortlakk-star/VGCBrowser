@@ -18,7 +18,7 @@ import { pipeline } from 'node:stream/promises'
 import AdmZip from 'adm-zip'
 
 // Keep in sync with the default `engineUrl` in src/main/settings.ts.
-const ENGINE_URL = process.env.VGC_ENGINE_URL || 'https://vgcbrowser.com/dl/vgc-core-155.zip'
+const ENGINE_URL = process.env.VGC_ENGINE_URL || 'https://vgcbrowser.com/dl/vgc-core-156.zip'
 
 const root = process.cwd()
 const engineDir = join(root, 'engine')

@@ -17,3 +17,5 @@ test/scan.cjs
 test/tells.cjs
 test/correlation.cjs
 test/tells.cjs
+test/rectbase.ts
+test/rectbase.cjs

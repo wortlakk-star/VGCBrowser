@@ -125,6 +125,20 @@ const PROBE = `(async () => {
   // ── client rects ──
   try { const r = document.body.getBoundingClientRect(); o.rects = [r.width, r.height].join(','); } catch(e){ o.rects='ERR'; }
 
+  // getBoundingClientRect vs getClientRects CONSISTENCY (the old JS half-measure farbled
+  // only getBoundingClientRect → the two disagreed = a tell). Native farbling should make
+  // them match. Also window-vs-worker connection consistency is checked via o.worker above.
+  try {
+    const sp2 = document.createElement('span'); sp2.textContent = 'vgc rect consistency probe';
+    sp2.style.cssText = 'position:absolute;left:5.5px;top:7.5px;font-size:20px';
+    document.body.appendChild(sp2);
+    const list = sp2.getClientRects();
+    const b = sp2.getBoundingClientRect(), cr = list[0];
+    o.rectConsistent = (b.width === cr.width && b.height === cr.height && b.x === cr.x && b.y === cr.y);
+    o.rectDbg = 'n=' + list.length + ' b=[' + [b.x,b.y,b.width,b.height].map(v=>v.toFixed(4)).join(',') + '] cr0=[' + [cr.x,cr.y,cr.width,cr.height].map(v=>v.toFixed(4)).join(',') + ']';
+    document.body.removeChild(sp2);
+  } catch(e){ o.rectConsistent = 'ERR:' + e; }
+
   // ── speechSynthesis voices (OS TTS voices — a classic same-machine correlator) ──
   try {
     let voices = speechSynthesis.getVoices();
@@ -158,7 +172,7 @@ const PROBE = `(async () => {
   //    profile = a same-machine correlator that page-level spoofing can't hide) ──
   o.worker = await new Promise((resolve) => {
     try {
-      const src = 'self.onmessage=function(){self.postMessage([navigator.hardwareConcurrency,navigator.deviceMemory,navigator.platform,(navigator.languages||[]).join(",")].join("|"))}';
+      const src = 'self.onmessage=function(){var c=navigator.connection||{};self.postMessage([navigator.hardwareConcurrency,navigator.deviceMemory,navigator.platform,(navigator.languages||[]).join(","),c.effectiveType,c.rtt,c.downlink].join("|"))}';
       const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
       const w = new Worker(url);
       const t = setTimeout(() => resolve('timeout'), 6000);
@@ -224,6 +238,8 @@ async function launchAndProbe(fp: Fingerprint, id: string, port: number): Promis
     `--vgc-timezone=${fp.timezone}`,
     `--vgc-accept-languages=${langs.join(',')}`,
     ...(fp.fonts && fp.fonts.length ? [`--vgc-fonts=${fp.fonts.join(',')}`] : []),
+    `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
+    `--vgc-color-depth=${fp.screen.colorDepth}`,
     `--vgc-seed=${seed}`,
     `--vgc-profile-name=${id}`,
     ...(guardExt ? [`--load-extension=${guardExt}`, `--disable-extensions-except=${guardExt}`] : []),
@@ -307,8 +323,12 @@ async function main(): Promise<void> {
   console.log('\n===== VERDICT =====')
   console.log(`fonts per profile: ${fsets.map((s) => s.length).join(', ')} ; shared by all 3: ${sharedFonts.length}`)
   // Worker: is it leaking the real machine? (same across profiles AND == real host)
-  console.log(`worker readback: ${probes.map((p) => p.worker).join('  ||  ')}`)
+  console.log(`worker readback (cores|mem|plat|langs|et|rtt|dl): ${probes.map((p) => p.worker).join('  ||  ')}`)
   console.log(`webrtc IPs:      ${probes.map((p) => p.webrtc).join('  ||  ')}`)
+  const rc = probes.map((p) => p.rectConsistent)
+  console.log(
+    `getBoundingClientRect == getClientRects: ${JSON.stringify(rc)} ${rc.every((x) => x === true) ? '🟢' : '🔴 MISMATCH tell'}`
+  )
 
   const DANGER = ['fonts', 'canvas', 'audio', 'webglRenderer', 'webglPixel', 'screen', 'voices', 'worker']
   const hits = DANGER.filter((d) => correlators.includes(d))

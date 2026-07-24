@@ -82,16 +82,29 @@ function screenScript(fp: Fingerprint): string {
     pixelDepth: s.pixelDepth ?? s.colorDepth,
     dpr: fp.devicePixelRatio
   })
+  // __vgcNative: does the VGC Core ENGINE already spoof screen natively (screen.cc)? If the
+  // width/height already equal the target, yes — then we SKIP the JS Screen.prototype
+  // overrides (the native accessor is undetectable; a JS getter on top would re-introduce
+  // the very tell the native patch removes) and also skip the JS connection + client-rects
+  // spoofs below (also native now), avoiding a window↔worker mismatch. On the system-Chrome
+  // FALLBACK (engine blocked → stock Chrome, which ignores --vgc-*), the values DON'T match,
+  // so __vgcNative is false and the full JS spoof applies as before. Same var gates
+  // stealth-extra's connection/client-rects (see extraSpoofBody). devicePixelRatio +
+  // matchMedia are still JS-only (no native dpr patch), so those always apply.
   return `
+  var __vgcNative=false;
   try {
     var S=${cfg};
     var _realDpr=window.devicePixelRatio;
-    def(Screen.prototype,'width',function(){return S.width;});
-    def(Screen.prototype,'height',function(){return S.height;});
-    def(Screen.prototype,'availWidth',function(){return S.width;});
-    def(Screen.prototype,'availHeight',function(){return S.height-40;});
-    def(Screen.prototype,'colorDepth',function(){return S.colorDepth;});
-    def(Screen.prototype,'pixelDepth',function(){return S.pixelDepth;});
+    __vgcNative=(screen.width===S.width&&screen.height===S.height&&S.width>0);
+    if(!__vgcNative){
+      def(Screen.prototype,'width',function(){return S.width;});
+      def(Screen.prototype,'height',function(){return S.height;});
+      def(Screen.prototype,'availWidth',function(){return S.width;});
+      def(Screen.prototype,'availHeight',function(){return S.height-40;});
+      def(Screen.prototype,'colorDepth',function(){return S.colorDepth;});
+      def(Screen.prototype,'pixelDepth',function(){return S.pixelDepth;});
+    }
     def(window,'devicePixelRatio',function(){return S.dpr;});
     patchMatchMedia(_realDpr,S.dpr);
   } catch(e){}

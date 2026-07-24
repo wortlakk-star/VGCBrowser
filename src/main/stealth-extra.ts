@@ -84,7 +84,11 @@ try {
   // not constructable, and returning a plain Array is a stronger '[object Array]' tell than the
   // farbling is worth — the native patch 07-client-rects-native.patch farbles getClientRects at
   // the C++ level (real DOMRectList) once the engine is rebuilt.
-  if (XCFG.clientRects) {
+  // __vgcNative (set by the guard's screenScript) = the VGC Core engine already farbles BOTH
+  // getBoundingClientRect AND getClientRects natively — so skip the JS half-measure (which
+  // only touched getBoundingClientRect → a getBoundingClientRect≠getClientRects mismatch).
+  // Undefined in CDP mode / on the system-Chrome fallback → the JS path still runs.
+  if (XCFG.clientRects && (typeof __vgcNative === 'undefined' || __vgcNative !== true)) {
     try {
       function xrn(v, salt){
         var s = (XCFG.seed ^ (salt>>>0) ^ ((Math.round(v*1000))>>>0)) >>> 0;
@@ -121,8 +125,13 @@ try {
   // are already privacy-rounded by Chrome but still vary with the real link per session —
   // a weak correlator. Pin them to stable, plausible broadband values (rtt seeded per
   // profile so they are not all identical). downlink is capped at 10 like real Chrome.
+  // Skip when the VGC Core engine spoofs navigator.connection natively (network_information.cc,
+  // which covers window AND workers consistently) — a JS override here would only touch the
+  // window, so the worker's rtt/downlink would disagree. Still runs in CDP / on the fallback.
   try {
-    var _conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    var _conn = (typeof __vgcNative !== 'undefined' && __vgcNative === true)
+      ? null
+      : (navigator.connection || navigator.mozConnection || navigator.webkitConnection);
     if (_conn) {
       var NI = Object.getPrototypeOf(_conn);
       var _cr = xmul((XCFG.seed ^ 0x27D4EB2F) >>> 0);

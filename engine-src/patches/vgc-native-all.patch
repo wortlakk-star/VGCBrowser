@@ -127,10 +127,10 @@ index bcd4118f88..9df5fe4ce2 100644
  
  #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index faf8c2e79b..b54476daae 100644
+index faf8c2e79b..2d44d12ac4 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2854,6 +2854,30 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2854,6 +2854,34 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
    };
    command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
  
@@ -155,6 +155,10 @@ index faf8c2e79b..b54476daae 100644
 +      // Font matching runs in the renderer, so the switch must be forwarded or every
 +      // profile enumerates the identical real font set — a same-machine correlator.
 +      "vgc-fonts",
++      // Native screen spoof (screen.cc) — spoofs screen.width/height/avail*/colorDepth in
++      // the renderer so there is no JS Screen.prototype tell.
++      "vgc-screen",
++      "vgc-color-depth",
 +  };
 +  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
 +
@@ -559,6 +563,112 @@ index ea1b977331..a13f832fb3 100644
  
  // static
  void TranslateManager::SetIgnoreMissingKeyForTesting(bool ignore) {
+diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
+index aa3d9236fd..855a8dd744 100644
+--- a/third_party/blink/renderer/core/dom/element.cc
++++ b/third_party/blink/renderer/core/dom/element.cc
+@@ -32,6 +32,7 @@
+ #include <memory>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/containers/adapters.h"
+ #include "base/feature_list.h"
+ #include "cc/input/snap_selection_strategy.h"
+@@ -3442,6 +3443,52 @@ void Element::ClientQuads(Vector<gfx::QuadF>& quads) const {
+   }
+ }
+ 
++namespace {
++
++// VGC Core: per-profile client-rect farbling seeded from --vgc-seed (reuses the existing
++// switch, already forwarded to the renderer). Native so there is no JS Element.prototype
++// override to lie-detect, AND it farbles getClientRects + getBoundingClientRect
++// CONSISTENTLY — the old JS half-measure only touched getBoundingClientRect, so
++// getBoundingClientRect(el).width != getClientRects(el)[0].width was itself a tell. Same
++// (seed, rounded value) ⇒ same ±~1e-4 delta ⇒ stable across reads.
++uint32_t VgcRectSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    if (s.empty())
++      return 0u;
++    uint32_t h = 2166136261u;
++    for (char c : s) {
++      h ^= static_cast<uint8_t>(c);
++      h *= 16777619u;
++    }
++    return h == 0u ? 1u : h;
++  }();
++  return seed;
++}
++double VgcRectNoise(double v, uint32_t salt) {
++  const uint32_t seed = VgcRectSeed();
++  if (seed == 0)
++    return v;
++  // Seed the delta from the value rounded to the NEAREST PIXEL (not *1000): the raw layout
++  // value jitters at the sub-pixel level between separate getBoundingClientRect /
++  // getClientRects queries, and a fine quantization straddled the boundary → different
++  // delta → bcr != cr[0] (a tell). Integer-pixel quantization is stable across that jitter,
++  // so the same metric gets the same delta everywhere and the two APIs stay consistent.
++  const int64_t q = static_cast<int64_t>(v < 0 ? v - 0.5 : v + 0.5);
++  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(q);
++  s ^= s >> 15; s *= 0x2C1B3C6Du; s ^= s >> 12; s *= 0x297A2D39u; s ^= s >> 15;
++  return v + ((static_cast<double>(s & 0xFFFFu) / 65535.0) - 0.5) * 0.0002;
++}
++gfx::RectF VgcNoiseRectF(const gfx::RectF& r) {
++  if (VgcRectSeed() == 0)
++    return r;
++  return gfx::RectF(VgcRectNoise(r.x(), 0x1001u), VgcRectNoise(r.y(), 0x2002u),
++                    VgcRectNoise(r.width(), 0x3003u), VgcRectNoise(r.height(), 0x4004u));
++}
++
++}  // namespace
++
+ DOMRectList* Element::getClientRects() {
+   Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
+   if (rects.empty()) {
+@@ -3452,6 +3499,7 @@ DOMRectList* Element::getClientRects() {
+   for (auto& rect : rects) {
+     GetDocument().AdjustRectForScrollAndAbsoluteZoom(rect,
+                                                      *element_layout_object);
++    rect = VgcNoiseRectF(rect);  // VGC: farble so getClientRects hashing differs per profile
+   }
+   return MakeGarbageCollected<DOMRectList>(rects);
+ }
+@@ -3505,7 +3553,31 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
+ DOMRect* Element::GetBoundingClientRect() {
+   GetDocument().EnsurePaintLocationDataValidForNode(
+       this, DocumentUpdateReason::kJavaScript);
+-  return DOMRect::FromRectF(GetBoundingClientRectNoLifecycleUpdate());
++  gfx::RectF bounds = GetBoundingClientRectNoLifecycleUpdate();
++  // VGC: build the bounding rect from the SAME per-rect farbling getClientRects() applies,
++  // then union — so union(getClientRects) == getBoundingClientRect exactly (a detector that
++  // cross-checks the two sees no discrepancy). Internal callers use the raw NoLifecycleUpdate
++  // path above, so layout/hit-testing are unaffected. Single-rect elements ⇒ bcr == cr[0].
++  if (VgcRectSeed() != 0) {
++    Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
++    LayoutObject* lo = GetLayoutObject();
++    if (!rects.empty() && lo) {
++      gfx::RectF u;
++      bool first = true;
++      for (auto& r : rects) {
++        GetDocument().AdjustRectForScrollAndAbsoluteZoom(r, *lo);
++        r = VgcNoiseRectF(r);
++        if (first) {
++          u = r;
++          first = false;
++        } else {
++          u.Union(r);
++        }
++      }
++      bounds = u;
++    }
++  }
++  return DOMRect::FromRectF(bounds);
+ }
+ 
+ DOMRect* Element::GetBoundingClientRectForBinding() {
 diff --git a/third_party/blink/renderer/core/frame/navigator.cc b/third_party/blink/renderer/core/frame/navigator.cc
 index 583f05f8dd..36a3411080 100644
 --- a/third_party/blink/renderer/core/frame/navigator.cc
@@ -695,6 +805,131 @@ index 75cd346131..2b7c247ee6 100644
    String accept_languages_override;
    probe::ApplyAcceptLanguageOverride(execution_context_,
                                       &accept_languages_override);
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+index 69ffc2b05f..359e572ba6 100644
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
+@@ -28,7 +28,10 @@
+ 
+ #include "third_party/blink/renderer/core/frame/screen.h"
+ 
++#include "base/command_line.h"
+ #include "base/numerics/safe_conversions.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/event_target_names.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+@@ -40,6 +43,50 @@
+ 
+ namespace blink {
+ 
++namespace {
++
++// VGC Core: parse --vgc-screen=WIDTHxHEIGHT and --vgc-color-depth once. Absent ⇒ no-op.
++// Moves the screen spoof off the JS Screen.prototype getters (the most lie-detectable
++// surface left) into the C++ accessor, so there is no JS tell. availLeft/availTop become
++// 0 (primary monitor) and availHeight is height minus a taskbar inset (mirrors the JS
++// "height - 40"). The switch is forwarded to the renderer via kVgcSwitches.
++struct VgcScreenCfg {
++  int width = 0;
++  int height = 0;
++  int depth = 0;
++  bool has_size = false;
++  bool has_depth = false;
++};
++const VgcScreenCfg& VgcScreen() {
++  static const VgcScreenCfg cfg = [] {
++    VgcScreenCfg v;
++    const auto* cmd = base::CommandLine::ForCurrentProcess();
++    const std::string size = cmd->GetSwitchValueASCII("vgc-screen");
++    if (!size.empty()) {
++      const auto parts = base::SplitString(size, "x", base::TRIM_WHITESPACE,
++                                           base::SPLIT_WANT_NONEMPTY);
++      int w = 0, h = 0;
++      if (parts.size() == 2 && base::StringToInt(parts[0], &w) &&
++          base::StringToInt(parts[1], &h) && w > 0 && h > 0) {
++        v.width = w;
++        v.height = h;
++        v.has_size = true;
++      }
++    }
++    const std::string depth = cmd->GetSwitchValueASCII("vgc-color-depth");
++    int d = 0;
++    if (!depth.empty() && base::StringToInt(depth, &d) && d > 0) {
++      v.depth = d;
++      v.has_depth = true;
++    }
++    return v;
++  }();
++  return cfg;
++}
++constexpr int kVgcTaskbarInset = 40;
++
++}  // namespace
++
+ Screen::Screen(LocalDOMWindow* window, int64_t display_id)
+     : ExecutionContextClient(window), display_id_(display_id) {}
+ 
+@@ -79,12 +126,16 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+ }
+ 
+ int Screen::height() const {
++  if (VgcScreen().has_size)
++    return VgcScreen().height;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/false).height();
+ }
+ 
+ int Screen::width() const {
++  if (VgcScreen().has_size)
++    return VgcScreen().width;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/false).width();
+@@ -97,6 +148,8 @@ unsigned Screen::colorDepth() const {
+   // https://drafts.csswg.org/cssom-view/#dom-screen-colordepth
+   unsigned unknown_color_depth = 24u;
+ 
++  if (VgcScreen().has_depth)
++    return static_cast<unsigned>(VgcScreen().depth);
+   if (!DomWindow()) {
+     return unknown_color_depth;
+   }
+@@ -110,24 +163,32 @@ unsigned Screen::pixelDepth() const {
+ }
+ 
+ int Screen::availLeft() const {
++  if (VgcScreen().has_size)
++    return 0;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).x();
+ }
+ 
+ int Screen::availTop() const {
++  if (VgcScreen().has_size)
++    return 0;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).y();
+ }
+ 
+ int Screen::availHeight() const {
++  if (VgcScreen().has_size)
++    return VgcScreen().height - kVgcTaskbarInset;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).height();
+ }
+ 
+ int Screen::availWidth() const {
++  if (VgcScreen().has_size)
++    return VgcScreen().width;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).width();
 diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.cc b/third_party/blink/renderer/core/timezone/timezone_controller.cc
 index 48eb8d2fbd..bb65046b90 100644
 --- a/third_party/blink/renderer/core/timezone/timezone_controller.cc
@@ -825,6 +1060,88 @@ index cac05bfc5b..722e51a35f 100644
 +      VgcApplyCanvasNoise(image_data_pixmap);
      }
    }
+ 
+diff --git a/third_party/blink/renderer/modules/netinfo/network_information.cc b/third_party/blink/renderer/modules/netinfo/network_information.cc
+index 976a3c8c36..f857903b8a 100644
+--- a/third_party/blink/renderer/modules/netinfo/network_information.cc
++++ b/third_party/blink/renderer/modules/netinfo/network_information.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ 
++#include "base/command_line.h"
+ #include "base/time/time.h"
+ #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
+ #include "third_party/blink/public/platform/task_type.h"
+@@ -27,6 +28,31 @@ namespace blink {
+ 
+ namespace {
+ 
++// VGC Core: per-profile navigator.connection spoof seeded from --vgc-seed. NetworkInformation
++// is the SAME class for window and WorkerNavigator, so this covers BOTH — the old JS guard
++// only spoofed the window (a worker leaked the real, per-session rtt/downlink, and disagreed
++// with the window). Values are stable per profile and in Chrome's rounded, plausible range.
++uint32_t VgcNetSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    if (s.empty())
++      return 0u;
++    uint32_t h = 2166136261u;
++    for (char c : s) {
++      h ^= static_cast<uint8_t>(c);
++      h *= 16777619u;
++    }
++    return h == 0u ? 1u : h;
++  }();
++  return seed;
++}
++uint32_t VgcNetHash(uint32_t salt) {
++  uint32_t s = VgcNetSeed() ^ salt;
++  s ^= s >> 16; s *= 0x85EBCA6Bu; s ^= s >> 13; s *= 0xC2B2AE35u; s ^= s >> 16;
++  return s;
++}
++
+ V8ConnectionType::Enum ConnectionTypeToEnum(WebConnectionType type) {
+   switch (type) {
+     case kWebConnectionTypeCellular2G:
+@@ -111,6 +137,8 @@ double NetworkInformation::downlinkMax() const {
+ }
+ 
+ V8EffectiveConnectionType NetworkInformation::effectiveType() {
++  if (VgcNetSeed() != 0)
++    return V8EffectiveConnectionType(V8EffectiveConnectionType::Enum::k4G);
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<WebEffectiveConnectionType> override_ect =
+       GetNetworkStateNotifier().GetWebHoldbackEffectiveType();
+@@ -132,6 +160,8 @@ V8EffectiveConnectionType NetworkInformation::effectiveType() {
+ }
+ 
+ uint32_t NetworkInformation::rtt() {
++  if (VgcNetSeed() != 0)
++    return 25u + (VgcNetHash(0x2717u) % 8u) * 25u;  // 25..200 ms, seeded, stable
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<base::TimeDelta> override_rtt =
+       GetNetworkStateNotifier().GetWebHoldbackHttpRtt();
+@@ -148,6 +178,10 @@ uint32_t NetworkInformation::rtt() {
+ }
+ 
+ double NetworkInformation::downlink() {
++  if (VgcNetSeed() != 0) {
++    static const double kDl[] = {10.0, 9.0, 8.5, 7.5, 6.5, 5.5, 4.5};
++    return kDl[VgcNetHash(0x5171u) % 7u];  // seeded, stable per profile
++  }
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<double> override_downlink_mbps =
+       GetNetworkStateNotifier().GetWebHoldbackDownlinkThroughputMbps();
+@@ -165,6 +199,8 @@ double NetworkInformation::downlink() {
+ }
+ 
+ bool NetworkInformation::saveData() const {
++  if (VgcNetSeed() != 0)
++    return false;
+   bool save_data =
+       IsObserving() ? save_data_ : GetNetworkStateNotifier().SaveDataEnabled();
  
 diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 index fcac660801..4cadc6d00a 100644
