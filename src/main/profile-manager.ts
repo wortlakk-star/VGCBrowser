@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, promises as fs } from 'fs'
 import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
-import { resolveSystemBrowser } from './engine'
+import { resolveSystemBrowser, isDedicatedEngine } from './engine'
 import { checkProxy, directGeo } from './proxy-check'
 import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, patchProfile, listProfiles } from './store'
@@ -517,7 +517,13 @@ export async function launchProfile(
     // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
     '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,
-    `--window-size=${opts.window ? `${opts.window.w},${opts.window.h}` : `${fp.screen.width},${fp.screen.height}`}`,
+    // Default window must not exceed the reported WORK AREA. The screen spoof reports
+    // availHeight = screen.height - 40 (the taskbar inset, in webrtc-guard.ts /
+    // fingerprint-script.ts), so opening at the FULL screen height made outerHeight >
+    // screen.availHeight — impossible on a real machine with a taskbar, a first-class
+    // creepjs/pixelscan tell. Cap the height to availHeight (a maximized-but-coherent
+    // window). Grid mode already passes an explicit, bounded slot size.
+    `--window-size=${opts.window ? `${opts.window.w},${opts.window.h}` : `${fp.screen.width},${Math.max(400, fp.screen.height - 40)}`}`,
     `--user-agent=${fp.userAgent}`,
     // Make navigator.userAgentData (UA Client Hints) report the SAME Chrome version as
     // the UA string above. Without this the engine leaks its own build version (151)
@@ -562,6 +568,12 @@ export async function launchProfile(
     // because --lang is a no-op on macOS, which leaked the host's real OS language on
     // every profile regardless of the proxy country.
     `--vgc-accept-languages=${(fp.languages && fp.languages.length ? fp.languages : [fp.language]).join(',')}`,
+    // Per-profile FONT allowlist → engine (font_cache.cc) hides every system font NOT in
+    // this list, so the width-probe / measureText / canvas / FontFaceSet.check all report
+    // a per-profile font set. Without this every profile on one machine enumerated the
+    // IDENTICAL real Windows font set — a high-entropy same-machine correlator Google uses
+    // to link "different" profiles. fp.fonts is a per-profile subset of the real fonts.
+    ...(fp.fonts && fp.fonts.length ? [`--vgc-fonts=${fp.fonts.join(',')}`] : []),
     // Unique per-profile seed → engine seeds canvas/audio noise so every Chrome differs.
     `--vgc-seed=${seedFromString(id)}`,
     // Profile name shown in the OS window title (title bar / Cmd-Tab / Dock) so you
@@ -721,9 +733,18 @@ export async function launchProfile(
       throw new Error(msg)
     }
     console.error('[vgc] engine spawn failed, dùng trình duyệt hệ thống thay thế:', err)
+    // ⚠️ Coherence warning (S1): stock Chrome ignores every --vgc-* switch, and in NATIVE
+    // mode (the default) there is no CDP injector to compensate — so a fallback profile
+    // reports the HOST machine's real cores/GPU/timezone/screen under the profile's spoofed
+    // UA string. That contradiction is worse than an un-spoofed browser. Surface it loudly
+    // instead of the old comment's false "CDP injection still applies" claim (only true when
+    // !skipCdp). A proper fix (force CDP injection on the genuine-Chrome fallback) needs the
+    // debugging pipe wired before spawn + Google-login re-validation — tracked separately.
     broadcastEngine(id, {
       phase: 'done',
-      message: 'Engine bị chặn — đang dùng Chrome hệ thống thay thế'
+      message: skipCdp
+        ? '⚠️ Engine bị chặn — đang chạy Chrome hệ thống KHÔNG có che vân tay (lộ thông số máy thật). Hãy cài lại engine VGC Core.'
+        : 'Engine bị chặn — đang dùng Chrome hệ thống (che vân tay qua CDP)'
     })
     try {
       proc = await spawnAndWait(fallback, args, usePipe, childEnv)
@@ -801,9 +822,15 @@ export async function launchProfile(
   // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
   // then open the profile's start URLs through it so they get the overrides.
   try {
-    // Only the VGC Core engine (.app on Mac) spoofs WebGL natively → skip the JS
-    // override there to avoid a redundant, detectable getParameter patch.
-    const nativeWebgl = process.platform === 'darwin' && actualEngine.includes('VGC Core.app')
+    // The VGC Core engine spoofs WebGL natively (C++), so the JS getParameter override must
+    // be skipped there — stacking it on top re-introduces the exact detectable patch the
+    // native spoof removes. This holds on Windows too (the bundled engine/chromium build),
+    // not just the Mac .app — the old check was darwin-only, so every Windows CDP launch on
+    // the real VGC Core engine got a redundant getParameter patch. A system-Chrome fallback
+    // is NOT dedicated, so it correctly keeps the JS override.
+    const nativeWebgl =
+      (process.platform === 'darwin' && actualEngine.includes('VGC Core.app')) ||
+      isDedicatedEngine(actualEngine)
     const injector = await attachInjector(
       { ...profile, fingerprint: fp },
       { write: proc.stdio[3] as Writable, read: proc.stdio[4] as Readable },

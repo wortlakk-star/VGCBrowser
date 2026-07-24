@@ -1,7 +1,12 @@
-// ── VGC Browser — brand the engine executables ───────────────────────────────
-// Replaces the icon embedded in the bundled VGC Core engine (chrome.exe and
-// chrome_proxy.exe) with the VGC logo, so a profile opened on Windows shows the
-// VGC icon on the taskbar instead of the Chrome/Chromium icon.
+// ── VGC Browser — brand the engine binaries ──────────────────────────────────
+// Replaces the icon embedded in the bundled VGC Core engine with the VGC logo, so
+// a profile opened on Windows shows the VGC icon instead of the Chromium one.
+//
+// chrome.dll IS REQUIRED HERE, not just the .exe. On Windows the whole browser UI
+// lives in chrome.dll, and the browser window loads its icon (IDR_MAINFRAME) from
+// THAT module — not from the running .exe. Branding only chrome.exe therefore fixed
+// the icon Explorer shows for the file while the WINDOW and TASKBAR kept the stock
+// blue Chromium logo, which is exactly what "the logo disappeared" looked like.
 //
 // Runs automatically by `npm run dist` AFTER fetch-engine.mjs has populated
 // engine/chromium/. Windows-only (rcedit edits PE resources). Best-effort: a
@@ -26,13 +31,20 @@ if (!existsSync(ico)) {
 }
 
 const engineDir = join(root, 'engine', 'chromium')
-const targets = ['chrome.exe', 'chrome_proxy.exe']
+// chrome.dll first — it is the one that actually drives the window/taskbar icon.
+const targets = ['chrome.dll', 'chrome.exe', 'chrome_proxy.exe']
   .map((n) => join(engineDir, n))
   .filter((p) => existsSync(p))
 
 if (!targets.length) {
   console.warn('brand-engine: chưa thấy engine/chromium/chrome.exe — chạy fetch-engine trước. Bỏ qua.')
   process.exit(0)
+}
+
+// Branding chrome.exe alone is the bug this script previously shipped: the taskbar
+// icon comes from chrome.dll. Fail loudly rather than silently ship a stock logo.
+if (!targets.some((p) => p.endsWith('chrome.dll'))) {
+  console.warn('brand-engine: KHÔNG thấy engine/chromium/chrome.dll — icon taskbar sẽ vẫn là logo Chromium.')
 }
 
 let rcedit

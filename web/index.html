@@ -382,10 +382,10 @@
       function macUrl(v){ return DL_BASE + 'VGC-Browser-' + v + '-mac-arm64.dmg' }
       function readVer(t){ var m = t && t.match(/^version:\s*([0-9][^\s]*)/m); return m ? m[1] : null }
       function setHref(id, u){ var e = document.getElementById(id); if(e) e.href = u }
-      var DOWNLOAD_URL = winUrl('0.1.40') // dùng cho popup xác nhận email (mặc định Windows)
+      var DOWNLOAD_URL = winUrl('2.1.55') // dùng cho popup xác nhận email (mặc định Windows)
       // fallback trước, rồi cập nhật version thật từ feed.
-      setHref('dlWin', winUrl('0.1.32'))
-      setHref('dlMac', macUrl('0.1.35'))
+      setHref('dlWin', winUrl('2.1.55'))
+      setHref('dlMac', macUrl('2.1.44'))
       fetch(DL_BASE + 'latest.yml', { cache: 'no-store' })
         .then(function(r){ return r.ok ? r.text() : null })
         .then(function(t){ var v = readVer(t); if(v){ setHref('dlWin', winUrl(v)); DOWNLOAD_URL = winUrl(v) } })

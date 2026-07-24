@@ -157,6 +157,16 @@ const api = {
   // ── App version + auto-update (check → download → install) ──
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
 
+  // Forced-update gate: is this build still allowed to run?
+  versionGate: (): Promise<{
+    blocked: boolean
+    current: string
+    min: string
+    downloadUrl: string
+  }> => ipcRenderer.invoke('app:versionGate'),
+
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('app:openExternal', url),
+
   getUpdateStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:statusGet'),
 
   checkForUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),

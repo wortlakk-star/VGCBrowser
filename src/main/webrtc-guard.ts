@@ -29,20 +29,48 @@ const MANIFEST = JSON.stringify({
       js: ['guard.js'],
       run_at: 'document_start',
       world: 'MAIN',
-      all_frames: true
+      all_frames: true,
+      // all_frames alone only covers frames whose URL <all_urls> can match — i.e.
+      // http/https/ftp/file. An about:blank / about:srcdoc / data: / blob: iframe
+      // matched NOTHING, so the guard never ran there and the page could read the
+      // host's REAL screen, devicePixelRatio and WebRTC candidates out of a one-line
+      // iframe. That is the classic antidetect hole pixelscan/creepjs probe first.
+      match_about_blank: true,
+      match_origin_as_fallback: true
     }
   ]
 })
 
-// toString-masking preamble + def() helper — identical technique to fingerprint-script.ts,
-// so a detector reading getter.toString() sees "function get width() { [native code] }"
-// instead of our source. Shared by the screen + WebRTC blocks below via closure.
+// Native-identity preamble — identical technique to fingerprint-script.ts. Each override is
+// a Proxy over the ORIGINAL native function, so toString(), name, length, the absence of an
+// own .prototype and non-constructability all resolve against the native target, in EVERY
+// realm. The previous WeakMap version only worked in the realm that installed it, so
+// iframe.contentWindow.Function.prototype.toString.call(getter) printed our raw source.
+// Nothing patches Function.prototype.toString any more — that patch was itself a plain
+// function expression, i.e. the very tell it was meant to hide.
 const MASK_PREAMBLE = `
-  var _toString=Function.prototype.toString, _native=new WeakMap();
-  function mask(fn,name){try{_native.set(fn,'function '+name+'() { [native code] }');Object.defineProperty(fn,'name',{value:name,configurable:true});}catch(e){}return fn;}
-  var patchedToString=function toString(){if(_native.has(this))return _native.get(this);return _toString.call(this);};
-  Function.prototype.toString=mask(patchedToString,'toString');
-  function def(obj,prop,getter){try{Object.defineProperty(obj,prop,{get:mask(getter,'get '+prop),configurable:true,enumerable:true});}catch(e){}}
+  function nat(orig,impl){try{ if(typeof orig!=='function') return impl; return new Proxy(orig,{apply:function(t,self,a){return impl.apply(self,a);}}); }catch(e){ return impl; }}
+  function def(obj,prop,getter){try{var d=Object.getOwnPropertyDescriptor(obj,prop);if(!d||!d.get)return;Object.defineProperty(obj,prop,{get:nat(d.get,getter),set:d.set,configurable:d.configurable,enumerable:d.enumerable});}catch(e){}}
+  // Keep CSS resolution / device-pixel-ratio media queries consistent with the spoofed
+  // devicePixelRatio: matchMedia is evaluated against the REAL dpr in the compositor, so we
+  // shift each query threshold by (spoof-real) and let the native call answer.
+  function patchMatchMedia(realDpr,spoofDpr){try{
+    if(typeof window.matchMedia!=='function')return;
+    if(!(realDpr>0)||!(spoofDpr>0))return;
+    var delta=spoofDpr-realDpr; if(Math.abs(delta)<1e-9)return;
+    var native=window.matchMedia;
+    var RE=/(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
+    window.matchMedia=nat(native,function(q){try{
+      var rq=String(q).replace(RE,function(m,wk,mm,feat,colon,num,unit){
+        var v=parseFloat(num); if(!(v>=0))return m;
+        var isRes=/resolution/i.test(feat); var dppx=v;
+        if(isRes){ if(unit==='dpi')dppx=v/96; else if(unit==='dpcm')dppx=v*2.54/96; else dppx=v; }
+        var shifted=dppx-delta; if(shifted<0)shifted=0;
+        return (wk||'')+(mm||'')+feat+colon+shifted+(isRes?'dppx':'');
+      });
+      return native.call(this,rq);
+    }catch(e){return native.call(this,q);}});
+  }catch(e){}}
 `
 
 function screenScript(fp: Fingerprint): string {
@@ -57,13 +85,15 @@ function screenScript(fp: Fingerprint): string {
   return `
   try {
     var S=${cfg};
+    var _realDpr=window.devicePixelRatio;
     def(Screen.prototype,'width',function(){return S.width;});
     def(Screen.prototype,'height',function(){return S.height;});
     def(Screen.prototype,'availWidth',function(){return S.width;});
     def(Screen.prototype,'availHeight',function(){return S.height-40;});
     def(Screen.prototype,'colorDepth',function(){return S.colorDepth;});
     def(Screen.prototype,'pixelDepth',function(){return S.pixelDepth;});
-    Object.defineProperty(window,'devicePixelRatio',{get:mask(function(){return S.dpr;},'get devicePixelRatio'),configurable:true});
+    def(window,'devicePixelRatio',function(){return S.dpr;});
+    patchMatchMedia(_realDpr,S.dpr);
   } catch(e){}
 `
 }
@@ -79,7 +109,9 @@ function webrtcScript(webrtc: string, publicIp: string): string {
   try {
     var MODE=${JSON.stringify(webrtc)}, PUB=${JSON.stringify(publicIp || '')};
     if (MODE==='disabled'){
-      var kill=function(k){try{Object.defineProperty(window,k,{value:undefined,configurable:true});}catch(e){}};
+      // DELETE rather than define-as-undefined: the old form left ('RTCPeerConnection' in
+      // window) true while the value was undefined — a state no real Chrome is ever in.
+      var kill=function(k){try{delete window[k];}catch(e){}};
       kill('RTCPeerConnection');kill('webkitRTCPeerConnection');kill('RTCDataChannel');
     } else {
       var RTC=window.RTCPeerConnection||window.webkitRTCPeerConnection;
@@ -90,20 +122,58 @@ function webrtcScript(webrtc: string, publicIp: string): string {
         var synth=function(){ if(!PUB||PUB.indexOf(':')!==-1) return ''; var p=PUB.split('.'); var port=50000+(((+p[3]||0)*13+(+p[2]||0)*7)%15000); return 'candidate:1853896148 1 udp 1677729535 '+PUB+' '+port+' typ srflx raddr 0.0.0.0 rport 0 generation 0 network-cost 999'; };
         var mkIce=function(){ var s=synth(); if(!s) return null; try{ return new RTCIceCandidate({candidate:s,sdpMid:'0',sdpMLineIndex:0}); }catch(e){ return {candidate:s,sdpMid:'0',sdpMLineIndex:0,address:PUB,type:'srflx',protocol:'udp'}; } };
         var scrub=function(s){ if(!s) return s; var L=String(s).split('\\r\\n'),o=[],at=-1; for(var i=0;i<L.length;i++){ if(L[i].indexOf('a=candidate:')===0&&!safe(L[i])) continue; o.push(L[i]); if(L[i].indexOf('a=ice-pwd:')===0||L[i].indexOf('a=rtcp-mux')===0) at=o.length; } var sc=synth(); if(sc&&at>=0){ o.splice(at,0,'a='+sc); } return o.join('\\r\\n'); };
-        var wrap=function(pc){
-          var add=pc.addEventListener.bind(pc);
-          var rm=pc.removeEventListener.bind(pc);
-          var injected=false;
-          // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
-          var fwd=function(cb,ev){ try{ if(ev&&ev.candidate){ if(!safe(ev.candidate.candidate)) return; return cb.call(pc,ev); } if(PUB&&!injected){ injected=true; var ic=mkIce(); if(ic){ try{ cb.call(pc,{candidate:ic,target:pc,currentTarget:pc,type:'icecandidate'}); }catch(e){} } } return cb.call(pc,ev); }catch(e){ try{return cb.call(pc,ev);}catch(e2){} } };
-          pc.addEventListener=mask(function(t,cb,o){ if(t==='icecandidate'&&typeof cb==='function'){ return add(t,function(ev){return fwd(cb,ev);},o);} return add(t,cb,o); },'addEventListener');
-          try{Object.defineProperty(pc,'onicecandidate',{configurable:true,get:function(){return this.__o||null;},set:function(cb){if(this.__ol){try{rm('icecandidate',this.__ol);}catch(e){}this.__ol=null;}this.__o=(typeof cb==='function')?cb:null;if(this.__o){this.__ol=function(ev){return fwd(cb,ev);};add('icecandidate',this.__ol);}}});}catch(e){}
-          try{var ld=Object.getOwnPropertyDescriptor(RTC.prototype,'localDescription');if(ld&&ld.get){Object.defineProperty(pc,'localDescription',{configurable:true,get:function(){var d=ld.get.call(this);if(d&&d.sdp){try{return {type:d.type,sdp:scrub(d.sdp)};}catch(e){}}return d;}});}}catch(e){}
-          return pc;
-        };
-        var W=function(a,b){return wrap(new RTC(a,b));}; W.prototype=RTC.prototype; mask(W,'RTCPeerConnection');
-        try { window.RTCPeerConnection=W; } catch(e){}
-        try { window.webkitRTCPeerConnection=W; } catch(e){}
+        // Patch the PROTOTYPE, keep per-connection state in a WeakMap. Wrapping each
+        // instance left own properties a native RTCPeerConnection can never have —
+        // Object.keys(pc) returned ["__o","__ol"] (native: []) and pc.hasOwnProperty
+        // ('onicecandidate') was true (native: false) — and replacing the constructor made
+        // RTCPeerConnection.length 2 instead of 0, let it be called without "new", dropped
+        // the static generateCertificate and broke pc.constructor identity.
+        var pcState=new WeakMap();
+        var st=function(pc){var s=pcState.get(pc); if(!s){s={injected:false,map:new WeakMap(),oic:undefined};pcState.set(pc,s);} return s;};
+        // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
+        var fwd=function(pc,cb,ev){ try{ if(ev&&ev.candidate){ if(!safe(ev.candidate.candidate)) return; return cb.call(pc,ev); } var s=st(pc); if(PUB&&!s.injected){ s.injected=true; var ic=mkIce(); if(ic){ try{ cb.call(pc,{candidate:ic,target:pc,currentTarget:pc,type:'icecandidate'}); }catch(e){} } } return cb.call(pc,ev); }catch(e){ try{return cb.call(pc,ev);}catch(e2){} } };
+        try{
+          var _add=EventTarget.prototype.addEventListener;
+          EventTarget.prototype.addEventListener=nat(_add,function(t,cb,o){
+            if(t==='icecandidate'&&typeof cb==='function'&&(this instanceof RTC)){
+              var pc=this,s=st(pc),w=s.map.get(cb);
+              if(!w){ w=function(ev){return fwd(pc,cb,ev);}; s.map.set(cb,w); }
+              return _add.call(pc,t,w,o);
+            }
+            return _add.apply(this,arguments);
+          });
+          var _rm=EventTarget.prototype.removeEventListener;
+          EventTarget.prototype.removeEventListener=nat(_rm,function(t,cb,o){
+            if(t==='icecandidate'&&typeof cb==='function'&&(this instanceof RTC)){
+              var w=st(this).map.get(cb);
+              if(w) return _rm.call(this,t,w,o);
+            }
+            return _rm.apply(this,arguments);
+          });
+        }catch(e){}
+        try{
+          var oic=Object.getOwnPropertyDescriptor(RTC.prototype,'onicecandidate');
+          if(oic&&oic.get&&oic.set){
+            Object.defineProperty(RTC.prototype,'onicecandidate',{
+              configurable:oic.configurable,enumerable:oic.enumerable,
+              get:nat(oic.get,function(){var s=pcState.get(this);return (s&&s.oic!==undefined)?s.oic:oic.get.call(this);}),
+              set:nat(oic.set,function(cb){var pc=this,s=st(pc);s.oic=(typeof cb==='function')?cb:null;oic.set.call(pc,s.oic?function(ev){return fwd(pc,s.oic,ev);}:cb);})
+            });
+          }
+        }catch(e){}
+        try{
+          var scrubDesc=function(name){
+            var ld=Object.getOwnPropertyDescriptor(RTC.prototype,name);
+            if(!ld||!ld.get) return;
+            Object.defineProperty(RTC.prototype,name,{
+              configurable:ld.configurable,enumerable:ld.enumerable,
+              // Returns a REAL RTCSessionDescription — the old plain object failed
+              // (d instanceof RTCSessionDescription) and stringified as "[object Object]".
+              get:nat(ld.get,function(){var d=ld.get.call(this);if(d&&d.sdp){try{return new RTCSessionDescription({type:d.type,sdp:scrub(d.sdp)});}catch(e){return d;}}return d;})
+            });
+          };
+          scrubDesc('localDescription'); scrubDesc('currentLocalDescription');
+        }catch(e){}
       }
     }
   } catch(e){}

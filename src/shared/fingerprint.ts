@@ -55,10 +55,29 @@ interface OsPreset {
   mobile: boolean
 }
 
+// The full default Windows 10/11 font set. The universal fonts (also listed in
+// ALWAYS_KEEP below) are present on every install and are always exposed — real machines
+// all share them, so keeping them is not a cross-profile tell (dropping one WOULD be).
+// The rest are regional / language-pack / optional families whose presence varies by
+// install; fontSubset() keeps a random per-profile subset of them, and that variation —
+// on top of the engine's --vgc-fonts allowlist that HIDES everything else — is what makes
+// two profiles on one machine enumerate DIFFERENT font sets instead of the identical real
+// one (previously only ~13 fonts, identical across profiles → a same-machine correlator).
 const WIN_FONTS = [
-  'Arial', 'Calibri', 'Cambria', 'Cambria Math', 'Comic Sans MS', 'Consolas',
-  'Courier New', 'Georgia', 'Lucida Console', 'Segoe UI', 'Tahoma',
-  'Times New Roman', 'Trebuchet MS', 'Verdana'
+  // universal (always kept)
+  'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Cambria', 'Cambria Math',
+  'Comic Sans MS', 'Consolas', 'Courier New', 'Franklin Gothic Medium', 'Gabriola',
+  'Georgia', 'Impact', 'Lucida Console', 'Microsoft Sans Serif', 'MS Gothic',
+  'Palatino Linotype', 'Segoe Print', 'Segoe Script', 'Segoe UI', 'Segoe UI Emoji',
+  'Segoe UI Symbol', 'Sylfaen', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
+  'Webdings', 'Wingdings',
+  // optional / regional (varied per profile)
+  'Candara', 'Constantia', 'Corbel', 'Ebrima', 'Gadugi', 'Ink Free', 'Javanese Text',
+  'Leelawadee UI', 'Lucida Sans Unicode', 'Malgun Gothic', 'Microsoft Himalaya',
+  'Microsoft JhengHei', 'Microsoft New Tai Lue', 'Microsoft PhagsPa', 'Microsoft Tai Le',
+  'Microsoft YaHei', 'Microsoft Yi Baiti', 'MingLiU-ExtB', 'Mongolian Baiti', 'MV Boli',
+  'Myanmar Text', 'Nirmala UI', 'Segoe MDL2 Assets', 'Segoe UI Historic', 'SimSun',
+  'Sitka', 'Yu Gothic', 'Yu Gothic UI'
 ]
 const MAC_FONTS = [
   'Arial', 'Geneva', 'Helvetica', 'Helvetica Neue', 'Lucida Grande', 'Menlo',
@@ -79,9 +98,15 @@ const OS_PRESETS: Record<OsType, OsPreset> = {
     fonts: WIN_FONTS,
     gpus: [
       { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
       { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
       { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)' }
+      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)' }
     ],
     mobile: false
   },
@@ -127,15 +152,38 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
+// Fonts present on essentially EVERY install of their OS. These are always exposed: every
+// real machine of that OS has them (so they don't distinguish "same machine" from "two
+// different machines"), and a Windows profile missing e.g. "Segoe UI" would itself be a
+// tell. Only the OPTIONAL fonts (not in this set) vary per profile — that's where the
+// per-profile font entropy lives. Matched case-insensitively.
+const ALWAYS_KEEP_FONTS = new Set(
+  [
+    // Windows universal
+    'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Cambria', 'Cambria Math',
+    'Comic Sans MS', 'Consolas', 'Courier New', 'Franklin Gothic Medium', 'Gabriola',
+    'Georgia', 'Impact', 'Lucida Console', 'Microsoft Sans Serif', 'MS Gothic',
+    'Palatino Linotype', 'Segoe Print', 'Segoe Script', 'Segoe UI', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Sylfaen', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
+    'Webdings', 'Wingdings',
+    // macOS universal
+    'Helvetica', 'Helvetica Neue', 'Geneva', 'Lucida Grande', 'Menlo', 'Monaco', 'Times',
+    'Courier',
+    // Linux / Android common
+    'DejaVu Sans', 'DejaVu Serif', 'Liberation Sans', 'Liberation Serif', 'Roboto',
+    'Noto Sans', 'Noto Serif'
+  ].map((f) => f.toLowerCase())
+)
+
 /**
- * Each profile exposes a slightly different detectable font set so no two
- * "chromes" look identical. Keeps the core OS fonts, randomly drops a few of
- * the rest.
+ * Each profile exposes a different detectable font set so no two "chromes" look identical.
+ * Universal OS fonts are always kept; every OTHER (optional/regional) font is kept with
+ * ~65% probability, so two profiles differ in which optional fonts they expose. Paired with
+ * the engine's --vgc-fonts allowlist (which HIDES fonts outside this set), the width-probe /
+ * measureText / canvas / FontFaceSet.check all report this per-profile set.
  */
 function fontSubset(all: string[]): string[] {
-  const core = all.slice(0, 5)
-  const rest = all.slice(5).filter(() => Math.random() > 0.22)
-  return [...core, ...rest]
+  return all.filter((f) => ALWAYS_KEEP_FONTS.has(f.toLowerCase()) || Math.random() > 0.35)
 }
 
 // Map an ISO-3166 country code (from the proxy's IP geo) to the locale a real user

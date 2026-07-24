@@ -71,7 +71,20 @@ function normalizeProfiles(profiles: Profile[]): boolean {
         cfp.userAgent = cfp.userAgent.replace(/Chrome\/[\d.]+/, `Chrome/${CHROME_BUILD.major}.0.0.0`)
         cfp.uaFullVersion = CHROME_BUILD.full
         changed = true
+      } else if (cfp.uaFullVersion && cfp.uaFullVersion.split('.')[0] !== cm?.[1]) {
+        // The UA major already matched, so the branch above never fired — but an
+        // IMPORTED profile can carry a uaFullVersion from a different major (the engine
+        // derives the whole Sec-CH-UA brand list from this field, so UA would say 151
+        // while Sec-CH-UA said 126). Re-align it on its own.
+        cfp.uaFullVersion = CHROME_BUILD.full
+        changed = true
       }
+    }
+    // navigator.deviceMemory is quantised by Chrome to 0.25/0.5/1/2/4/8 and capped at 8.
+    // Older builds let the UI store 16, which no real Chrome can ever report.
+    if (cfp && typeof cfp.deviceMemory === 'number' && ![0.25, 0.5, 1, 2, 4, 8].includes(cfp.deviceMemory)) {
+      cfp.deviceMemory = cfp.deviceMemory > 8 ? 8 : 4
+      changed = true
     }
     if (!p.proxy || typeof p.proxy.type !== 'string') {
       p.proxy = { type: 'none' }; changed = true

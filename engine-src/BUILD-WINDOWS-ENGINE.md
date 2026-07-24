@@ -52,7 +52,18 @@ the old `01`–`05` files — it contains ALL of them plus the newer features):
 
 ```bat
 git apply --3way path\to\patches\vgc-native-all.patch
+git apply --3way path\to\patches\vgc-uach-chrome-brand.patch
 ```
+
+> ⚠️ BOTH patches are required. `vgc-uach-chrome-brand.patch` is what populates the
+> UA client hints (`navigator.userAgentData.getHighEntropyValues()` →
+> fullVersionList / platformVersion / architecture / bitness) and forces the
+> "Google Chrome" brand. WITHOUT it, stock Chromium blanks UA-CH whenever a custom
+> `--user-agent` is set — which every VGC profile does — so those hints come back
+> EMPTY, which real Chrome never does and Cloudflare/creepjs flag instantly. It edits
+> only `components/embedder_support/user_agent_utils.cc`, which `vgc-native-all.patch`
+> does not touch, so the two never conflict. (This step was historically missing, which
+> is why shipped engines advertised empty UA-CH.)
 
 `--3way` lets git auto-merge minor context drift. If a hunk still fails, apply the
 old individual `01`–`05` patches for the os_crypt/switch parts, then hand-apply the

@@ -43,15 +43,28 @@ export function extraSpoofBody(cfg: ExtraSpoofCfg): string {
 
 const EXTRA_BODY = `
 try {
-  // ── Self-contained toString masking (chains to the host's already-installed override) ──
-  // xmask registers a patched fn so its .toString() reports native code; _xToString captures
-  // whatever the host installed so the host's own masks still resolve through the chain.
-  var _xToString = Function.prototype.toString;
-  var _xNative = new WeakMap();
-  function xmask(fn, name){ try{ _xNative.set(fn, 'function ' + name + '() { [native code] }'); Object.defineProperty(fn, 'name', { value: name, configurable: true }); }catch(e){} return fn; }
-  var _xPatched = function toString(){ if(_xNative.has(this)) return _xNative.get(this); return _xToString.call(this); };
-  try { Function.prototype.toString = xmask(_xPatched, 'toString'); } catch(e){}
-  function xdef(obj, prop, getter){ try{ Object.defineProperty(obj, prop, { get: xmask(getter, 'get ' + prop), configurable:true, enumerable:true }); }catch(e){} }
+  // ── Native-identity masking (same technique as fingerprint-script.ts) ──────
+  // Each override is a Proxy over the ORIGINAL native function, so toString(), name,
+  // length, the absence of an own .prototype and non-constructability all resolve against
+  // the native target — including from another realm (an iframe's Function.prototype.
+  // toString previously bypassed the per-realm WeakMap and printed our source). Nothing
+  // patches Function.prototype.toString any more; that patch was itself a plain function
+  // expression and therefore a tell.
+  function xnat(orig, impl){
+    try {
+      if (typeof orig !== 'function') return impl;
+      return new Proxy(orig, { apply: function(t, self, a){ return impl.apply(self, a); } });
+    } catch(e){ return impl; }
+  }
+  // Redefines an EXISTING accessor only, reusing the native getter as the proxy target and
+  // preserving the native descriptor attributes.
+  function xdef(obj, prop, getter){
+    try {
+      var d = Object.getOwnPropertyDescriptor(obj, prop);
+      if (!d || !d.get) return;
+      Object.defineProperty(obj, prop, { get: xnat(d.get, getter), set: d.set, configurable: d.configurable, enumerable: d.enumerable });
+    } catch(e){}
+  }
 
   // Local PRNG so this block is self-contained (does not depend on the host's mulberry32).
   function xmul(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -86,10 +99,10 @@ try {
         } catch(e){ return r; }
       }
       var _gbcr = Element.prototype.getBoundingClientRect;
-      Element.prototype.getBoundingClientRect = xmask(function(){ return xrect(_gbcr.apply(this, arguments)); }, 'getBoundingClientRect');
+      Element.prototype.getBoundingClientRect = xnat(_gbcr, function(){ return xrect(_gbcr.apply(this, arguments)); });
       if (window.Range) {
         var _rr = Range.prototype.getBoundingClientRect;
-        Range.prototype.getBoundingClientRect = xmask(function(){ return xrect(_rr.apply(this, arguments)); }, 'getBoundingClientRect');
+        Range.prototype.getBoundingClientRect = xnat(_rr, function(){ return xrect(_rr.apply(this, arguments)); });
       }
     } catch(e){}
   }
@@ -112,11 +125,42 @@ try {
     var _conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     if (_conn) {
       var NI = Object.getPrototypeOf(_conn);
-      var _rtt = 50 + ((xmul((XCFG.seed ^ 0x27D4EB2F) >>> 0)() * 3) | 0) * 25; // 50 / 75 / 100
+      var _cr = xmul((XCFG.seed ^ 0x27D4EB2F) >>> 0);
+      // Wider seeded range so two profiles rarely collide (the old 3-value range made
+      // rtt=50 identical across profiles ~1/9 of the time — itself a correlator). All
+      // values stay in Chrome's rounded, plausible broadband range.
+      var _rtt = 25 + (((_cr() * 8) | 0) * 25);           // 25..200 step 25
+      var _dl = [10, 9, 8.5, 7.5, 6.5, 5.5, 4.5][(_cr() * 7) | 0]; // seeded downlink (Chrome caps at 10)
       xdef(NI, 'effectiveType', function(){ return '4g'; });
       xdef(NI, 'rtt', function(){ return _rtt; });
-      xdef(NI, 'downlink', function(){ return 10; });
+      xdef(NI, 'downlink', function(){ return _dl; });
       xdef(NI, 'saveData', function(){ return false; });
+    }
+  } catch(e){}
+
+  // ── 3b. speechSynthesis voices ────────────────────────────────────────────
+  // The OS TTS voice list (e.g. "Microsoft David/Mark/Zira") is identical across every
+  // profile on a machine → a same-machine correlator. Expose a per-seed SUBSET so the
+  // list differs per profile, keeping the decision DETERMINISTIC per voice index (so
+  // repeated getVoices() calls are stable — an unstable list is itself a tell) and always
+  // keeping at least the first voice (an empty list is a tell too).
+  try {
+    if (window.SpeechSynthesis && SpeechSynthesis.prototype && SpeechSynthesis.prototype.getVoices) {
+      var _keepVoice = function(i){
+        var s = (XCFG.seed ^ 0x5F356495 ^ Math.imul(i + 1, 0x9E3779B1)) >>> 0;
+        s ^= s >>> 15; s = Math.imul(s, 0x2C1B3C6D) >>> 0; s ^= s >>> 13;
+        return (s & 3) !== 0; // keep ~75% of the non-primary voices
+      };
+      var _gv = SpeechSynthesis.prototype.getVoices;
+      SpeechSynthesis.prototype.getVoices = xnat(_gv, function(){
+        var list = _gv.call(this);
+        try {
+          if (!list || list.length <= 1) return list;
+          var keep = [];
+          for (var i = 0; i < list.length; i++) { if (i === 0 || _keepVoice(i)) keep.push(list[i]); }
+          return keep.length ? keep : [list[0]];
+        } catch(e){ return list; }
+      });
     }
   } catch(e){}
 
@@ -134,9 +178,10 @@ try {
     if (_MDI && _MDI.prototype) {
       xdef(_MDI.prototype, 'label', function(){ return ''; });
       if (_MDI.prototype.toJSON) {
+        var _origToJSON = _MDI.prototype.toJSON;
         Object.defineProperty(_MDI.prototype, 'toJSON', {
           configurable: true, enumerable: true, writable: true,
-          value: xmask(function(){ return { deviceId: this.deviceId, kind: this.kind, label: '', groupId: this.groupId }; }, 'toJSON')
+          value: xnat(_origToJSON, function(){ return { deviceId: this.deviceId, kind: this.kind, label: '', groupId: this.groupId }; })
         });
       }
     }

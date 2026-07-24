@@ -83,15 +83,71 @@ try {
   // Seeded PRNG (mulberry32) — deterministic per profile.
   function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
-  // toString masking: make patched fns report as native code.
-  var _toString = Function.prototype.toString;
-  var _native = new WeakMap();
-  function mask(fn, name){ try{ _native.set(fn, 'function ' + name + '() { [native code] }'); Object.defineProperty(fn, 'name', { value: name, configurable: true }); }catch(e){} return fn; }
-  var patchedToString = function toString(){ if(_native.has(this)) return _native.get(this); return _toString.call(this); };
-  Function.prototype.toString = mask(patchedToString, 'toString');
+  // ── Native-identity masking ────────────────────────────────────────────────
+  // Every override is a Proxy whose TARGET is the original native function, so the
+  // disguise is structural instead of bookkeeping:
+  //   • Function.prototype.toString.call(fn) resolves against the native target in EVERY
+  //     realm. The old WeakMap only existed in the realm that installed it, so
+  //     iframe.contentWindow.Function.prototype.toString.call(patchedFn) fell through to
+  //     the real toString and dumped our raw source — the first check creepjs runs.
+  //   • fn.name, fn.length, the ABSENCE of an own .prototype, and non-constructability
+  //     all come from the target. Previously every override was a plain function
+  //     expression, so fn.hasOwnProperty('prototype') was true and "new fn()" succeeded
+  //     where a native method or WebIDL getter always throws — a one-line detector.
+  // Consequently we no longer patch Function.prototype.toString at all: that patch was
+  // itself a plain function expression, i.e. a tell that announced the whole layer.
+  function nat(orig, impl){
+    try {
+      if (typeof orig !== 'function') return impl;
+      return new Proxy(orig, { apply: function(t, self, a){ return impl.apply(self, a); } });
+    } catch(e){ return impl; }
+  }
 
+  // Redefine an EXISTING accessor, reusing the native getter as the proxy target and
+  // keeping the native descriptor attributes. Deliberately never CREATES a property:
+  // defining one Chrome does not have (navigator.doNotTrack was removed in M135 and this
+  // engine is 151) both invents the property and appends it to the end of
+  // getOwnPropertyNames(Navigator.prototype), changing the native key order.
   function def(obj, prop, getter){
-    try { Object.defineProperty(obj, prop, { get: mask(getter, 'get ' + prop), configurable: true, enumerable: true }); } catch(e){}
+    try {
+      var d = Object.getOwnPropertyDescriptor(obj, prop);
+      if (!d || !d.get) return;
+      Object.defineProperty(obj, prop, { get: nat(d.get, getter), set: d.set, configurable: d.configurable, enumerable: d.enumerable });
+    } catch(e){}
+  }
+
+  // Keep CSS resolution / device-pixel-ratio media queries consistent with the spoofed
+  // window.devicePixelRatio. matchMedia is evaluated in the compositor against the REAL
+  // dpr, so we rewrite the threshold in each query by (spoof - real) and let the native
+  // call answer — returning a genuine MediaQueryList. dpr features are unitless; resolution
+  // features carry dppx/dpi/dpcm, all normalised to dppx here.
+  function patchMatchMedia(realDpr, spoofDpr){
+    try {
+      if (typeof window.matchMedia !== 'function') return;
+      if (!(realDpr > 0) || !(spoofDpr > 0)) return;
+      var delta = spoofDpr - realDpr;
+      if (Math.abs(delta) < 1e-9) return; // dpr already matches → no tell to hide
+      var native = window.matchMedia;
+      var RE = /(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
+      window.matchMedia = nat(native, function(q){
+        try {
+          var rq = String(q).replace(RE, function(m, wk, mm, feat, colon, num, unit){
+            var v = parseFloat(num); if (!(v >= 0)) return m;
+            var isRes = /resolution/i.test(feat);
+            var dppx = v;
+            if (isRes) {
+              if (unit === 'dpi') dppx = v / 96;
+              else if (unit === 'dpcm') dppx = v * 2.54 / 96;
+              else dppx = v; // dppx | x
+            }
+            var shifted = dppx - delta;
+            if (shifted < 0) shifted = 0;
+            return (wk || '') + (mm || '') + feat + colon + shifted + (isRes ? 'dppx' : '');
+          });
+          return native.call(this, rq);
+        } catch(e){ return native.call(this, q); }
+      });
+    } catch(e){}
   }
 
   // ── navigator ──
@@ -108,13 +164,25 @@ try {
   // ── screen ──
   try {
     var s = CFG.screen;
+    // Capture the REAL device-pixel-ratio BEFORE overriding the getter — the compositor
+    // still evaluates CSS media queries against it, so we need it to keep matchMedia in
+    // step with the spoofed value (see patchMatchMedia below).
+    var _realDpr = window.devicePixelRatio;
     def(Screen.prototype, 'width', function(){ return s.width; });
     def(Screen.prototype, 'height', function(){ return s.height; });
     def(Screen.prototype, 'availWidth', function(){ return s.width; });
     def(Screen.prototype, 'availHeight', function(){ return s.height - 40; });
     def(Screen.prototype, 'colorDepth', function(){ return s.colorDepth; });
     def(Screen.prototype, 'pixelDepth', function(){ return s.pixelDepth; });
-    Object.defineProperty(window, 'devicePixelRatio', { get: mask(function(){ return CFG.devicePixelRatio; }, 'get devicePixelRatio'), configurable: true });
+    def(window, 'devicePixelRatio', function(){ return CFG.devicePixelRatio; });
+    // matchMedia is evaluated in the compositor against the REAL dpr, so
+    // matchMedia('(resolution: <spoofDpr>dppx)') would say false while
+    // window.devicePixelRatio says <spoofDpr> — a direct self-contradiction creepjs/
+    // pixelscan report as "resolution spoofing detected". Rewrite the resolution /
+    // device-pixel-ratio threshold in every query by the (spoof - real) delta so the
+    // native evaluation against the real dpr yields the SPOOFED answer. Returns a genuine
+    // MediaQueryList (native call), so addListener/matches/etc. stay real.
+    patchMatchMedia(_realDpr, CFG.devicePixelRatio);
   } catch(e){}
 
   // ── WebGL vendor/renderer (UNMASKED) ──
@@ -127,11 +195,11 @@ try {
       function patchGetParam(proto){
         if(!proto) return;
         var orig = proto.getParameter;
-        proto.getParameter = mask(function(p){
+        proto.getParameter = nat(orig, function(p){
           if(p === GL_VENDOR) return CFG.webglVendor;
           if(p === GL_RENDERER) return CFG.webglRenderer;
           return orig.call(this, p);
-        }, 'getParameter');
+        });
       }
       patchGetParam(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
       patchGetParam(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
@@ -156,13 +224,25 @@ try {
           d[i+2] = Math.min(255, Math.max(0, d[i+2] + n));
         }
       }
+      // Captured BEFORE the getImageData override below is installed. noisify() runs at
+      // call time, i.e. AFTER that patch exists, so calling ctx.getImageData() here would
+      // resolve to the PATCHED one and apply noiseInto once already — then line "noiseInto
+      // (img.data)" applied it a second time. Net effect: toDataURL/toBlob returned
+      // original+2·noise while getImageData returned original+1·noise, so the two read
+      // paths DISAGREED — the exact contradiction this block claims to prevent. Reading
+      // through the pristine function keeps both paths at exactly one noise pass.
+      var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
       function noisify(canvas){
         try {
-          var ctx = canvas.getContext('2d');
+          // Do NOT call getContext('2d') on a context-less canvas: that permanently binds it
+          // to 2D, so a later getContext('webgl') returns null — a functional break and an
+          // observable anomaly. Bail out instead; a canvas with no 2D context has no 2D
+          // pixels worth farbling.
+          var ctx = canvas.getContext && canvas.getContext('2d', { willReadFrequently: true });
           if(!ctx) return canvas;
           var w = canvas.width, h = canvas.height;
           if(!w || !h) return canvas;
-          var img = ctx.getImageData(0, 0, w, h);
+          var img = origGetImageData.call(ctx, 0, 0, w, h);
           noiseInto(img.data);
           var off = document.createElement('canvas'); off.width = w; off.height = h;
           var octx = off.getContext('2d'); if(!octx) return canvas;
@@ -171,32 +251,71 @@ try {
         } catch(e){ return canvas; }
       }
       var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-      HTMLCanvasElement.prototype.toDataURL = mask(function(){ return origToDataURL.apply(noisify(this), arguments); }, 'toDataURL');
+      HTMLCanvasElement.prototype.toDataURL = nat(origToDataURL, function(){ return origToDataURL.apply(noisify(this), arguments); });
       var origToBlob = HTMLCanvasElement.prototype.toBlob;
-      if (origToBlob) HTMLCanvasElement.prototype.toBlob = mask(function(){ return origToBlob.apply(noisify(this), arguments); }, 'toBlob');
-      var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-      CanvasRenderingContext2D.prototype.getImageData = mask(function(){
+      if (origToBlob) HTMLCanvasElement.prototype.toBlob = nat(origToBlob, function(){ return origToBlob.apply(noisify(this), arguments); });
+      CanvasRenderingContext2D.prototype.getImageData = nat(origGetImageData, function(){
         var r = origGetImageData.apply(this, arguments);
-        // Same noise routine as toDataURL/toBlob so the two read paths agree (they mutate only the
-        // returned COPY, never the canvas). Previously getImageData noised the R channel only with
-        // a different step, so its hash disagreed with toDataURL's.
+        // Same single noise pass as toDataURL/toBlob, applied only to the returned COPY,
+        // so both read paths now yield identical pixels.
         try { noiseInto(r.data); } catch(e){}
         return r;
-      }, 'getImageData');
+      });
+
+      // OffscreenCanvas: the same drawing transferred to an OffscreenCanvas and read via
+      // convertToBlob() / getImageData() would otherwise return the UN-noised hash,
+      // contradicting the HTMLCanvas one. Cover both readback paths with the identical
+      // single noise pass. (Native mode gets this in C++; this is the CDP/JS path only.)
+      var OC = window.OffscreenCanvas;
+      var OCtx = window.OffscreenCanvasRenderingContext2D;
+      var origOffGID = OCtx && OCtx.prototype && OCtx.prototype.getImageData;
+      if (OC && OC.prototype && OC.prototype.convertToBlob && origOffGID) {
+        function noisifyOff(canvas){
+          try {
+            var ctx = canvas.getContext && canvas.getContext('2d');
+            if(!ctx || typeof ctx.getImageData !== 'function') return canvas;
+            var w = canvas.width, h = canvas.height;
+            if(!w || !h) return canvas;
+            var img = origOffGID.call(ctx, 0, 0, w, h);
+            noiseInto(img.data);
+            var off = new OC(w, h); var octx = off.getContext('2d');
+            if(!octx) return canvas;
+            octx.putImageData(img, 0, 0);
+            return off;
+          } catch(e){ return canvas; }
+        }
+        var origConvert = OC.prototype.convertToBlob;
+        OC.prototype.convertToBlob = nat(origConvert, function(){ return origConvert.apply(noisifyOff(this), arguments); });
+        OCtx.prototype.getImageData = nat(origOffGID, function(){
+          var r = origOffGID.apply(this, arguments);
+          try { noiseInto(r.data); } catch(e){}
+          return r;
+        });
+      }
     } catch(e){}
   }
 
   // ── AudioContext noise (on the fingerprinting read path) ──
   if (CFG.audioNoise) {
     try {
-      var aRng = mulberry32(CFG.seed ^ 0x9E3779B9);
+      // The RNG must be re-seeded INSIDE the wrapper. A single stream created out here
+      // advanced across calls, so two consecutive getFloatFrequencyData() reads of the
+      // SAME audio returned different values — the "unstable ⇒ spoofed" tell the seeded
+      // canvas noise is carefully written to avoid. Deriving the offset from the bin index
+      // instead of stream order also makes it position-stable across differing array sizes.
+      function aNoise(seed, i){
+        var s = (seed ^ Math.imul(i + 1, 0x9E3779B1)) >>> 0;
+        s ^= s>>>15; s = Math.imul(s, 0x2C1B3C6D)>>>0; s ^= s>>>12; s = Math.imul(s, 0x297A2D39)>>>0; s ^= s>>>15;
+        return ((s & 0xffff)/0xffff) * 0.0002 - 0.0001;
+      }
       var AP = window.AnalyserNode && AnalyserNode.prototype;
       if (AP && AP.getFloatFrequencyData) {
         var origFFD = AP.getFloatFrequencyData;
-        AP.getFloatFrequencyData = mask(function(arr){
+        AP.getFloatFrequencyData = nat(origFFD, function(arr){
           origFFD.call(this, arr);
-          for (var i=0;i<arr.length;i+=Math.max(1, arr.length>>6)) { arr[i] = arr[i] + (aRng() * 0.0002 - 0.0001); }
-        }, 'getFloatFrequencyData');
+          var seed = (CFG.seed ^ 0x9E3779B9) >>> 0;
+          for (var i=0;i<arr.length;i+=Math.max(1, arr.length>>6)) { arr[i] = arr[i] + aNoise(seed, i); }
+        });
       }
     } catch(e){}
   }
@@ -204,7 +323,10 @@ try {
   // ── WebRTC leak handling ──
   try {
     if (CFG.webrtc === 'disabled') {
-      var kill = function(k){ try { Object.defineProperty(window, k, { value: undefined, configurable: true }); } catch(e){} };
+      // DELETE, don't define-as-undefined. The old version left the key present, so
+      // ('RTCPeerConnection' in window) was true while window.RTCPeerConnection was
+      // undefined — a state no real Chrome build is ever in, and trivially probed.
+      var kill = function(k){ try { delete window[k]; } catch(e){} };
       kill('RTCPeerConnection'); kill('webkitRTCPeerConnection'); kill('RTCDataChannel');
     } else if (CFG.webrtc === 'proxy') {
       var RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
@@ -243,47 +365,86 @@ try {
           var sc = synth(); if (sc && at >= 0) out.splice(at, 0, 'a=' + sc);
           return out.join('\\r\\n');
         };
-        var wrapPc = function(pc){
-          var origAdd = pc.addEventListener.bind(pc);
-          var origRm = pc.removeEventListener.bind(pc);
-          var injected = false;
-          // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
-          var fwd = function(cb, ev){ try { if (ev && ev.candidate) { if (!safeCand(ev.candidate.candidate)) return; return cb.call(pc, ev); } if (PUB && !injected) { injected = true; var ic = mkIce(); if (ic) { try { cb.call(pc, { candidate: ic, target: pc, currentTarget: pc, type: 'icecandidate' }); } catch(e){} } } return cb.call(pc, ev); } catch(e){ try { return cb.call(pc, ev); } catch(e2){} } };
-          pc.addEventListener = mask(function(type, cb, opts){
-            if (type === 'icecandidate' && typeof cb === 'function') {
-              return origAdd(type, function(ev){ return fwd(cb, ev); }, opts);
-            }
-            return origAdd(type, cb, opts);
-          }, 'addEventListener');
+        // Everything below patches the PROTOTYPE and keeps per-connection state in a
+        // WeakMap. The previous design wrapped each instance, which left a native-looking
+        // RTCPeerConnection carrying own properties it can never have:
+        //   Object.keys(pc)                    → ["__vgcOic","__vgcOicL"]   (native: [])
+        //   pc.hasOwnProperty('onicecandidate')→ true                       (native: false)
+        //   pc.addEventListener.length         → 3                          (native: 2)
+        // and it replaced the constructor with a plain function, so RTCPeerConnection.length
+        // was 2 instead of 0, calling it without "new" returned an object instead of throwing,
+        // the static generateCertificate vanished, and pc.constructor !== RTCPeerConnection.
+        // Patching the prototype removes that entire class of tell, so no constructor
+        // replacement is needed at all.
+        var pcState = new WeakMap();
+        var st = function(pc){ var s = pcState.get(pc); if (!s) { s = { injected: false, map: new WeakMap(), oic: undefined }; pcState.set(pc, s); } return s; };
+        // Filter real IPs; when gathering ends (candidate===null) inject the proxy candidate first.
+        var fwd = function(pc, cb, ev){
           try {
-            Object.defineProperty(pc, 'onicecandidate', {
-              configurable: true,
-              get: function(){ return this.__vgcOic || null; },
-              set: function(cb){
-                // Replace, don't stack: remove the previous wrapper listener before adding a new
-                // one (and add none when cb isn't a function), so onicecandidate is a single
-                // assignable handler and setting it to null actually detaches the listener.
-                if (this.__vgcOicL) { try { origRm('icecandidate', this.__vgcOicL); } catch(e){} this.__vgcOicL = null; }
-                this.__vgcOic = (typeof cb === 'function') ? cb : null;
-                if (this.__vgcOic) {
-                  this.__vgcOicL = function(ev){ return fwd(cb, ev); };
-                  origAdd('icecandidate', this.__vgcOicL);
-                }
-              }
-            });
-          } catch(e){}
-          try {
-            var ld = Object.getOwnPropertyDescriptor(RTC.prototype, 'localDescription');
-            if (ld && ld.get) {
-              Object.defineProperty(pc, 'localDescription', { configurable: true, get: function(){ var d = ld.get.call(this); if (d && d.sdp) { try { return { type: d.type, sdp: scrubSdp(d.sdp) }; } catch(e){} } return d; } });
-            }
-          } catch(e){}
-          return pc;
+            if (ev && ev.candidate) { if (!safeCand(ev.candidate.candidate)) return; return cb.call(pc, ev); }
+            var s = st(pc);
+            if (PUB && !s.injected) { s.injected = true; var ic = mkIce(); if (ic) { try { cb.call(pc, { candidate: ic, target: pc, currentTarget: pc, type: 'icecandidate' }); } catch(e){} } }
+            return cb.call(pc, ev);
+          } catch(e){ try { return cb.call(pc, ev); } catch(e2){} }
         };
-        var Wrapped = function(cfg2, con){ return wrapPc(new RTC(cfg2, con)); };
-        Wrapped.prototype = RTC.prototype;
-        try { window.RTCPeerConnection = mask(Wrapped, 'RTCPeerConnection'); } catch(e){}
-        try { window.webkitRTCPeerConnection = window.RTCPeerConnection; } catch(e){}
+        // addEventListener/removeEventListener live on EventTarget.prototype natively, so we
+        // patch them there (proxied over the native fn) rather than adding an own property to
+        // RTCPeerConnection.prototype, which would itself change its key list.
+        try {
+          var origAdd = EventTarget.prototype.addEventListener;
+          EventTarget.prototype.addEventListener = nat(origAdd, function(type, cb, opts){
+            if (type === 'icecandidate' && typeof cb === 'function' && (this instanceof RTC)) {
+              var pc = this, s = st(pc), w = s.map.get(cb);
+              if (!w) { w = function(ev){ return fwd(pc, cb, ev); }; s.map.set(cb, w); }
+              return origAdd.call(pc, type, w, opts);
+            }
+            return origAdd.apply(this, arguments);
+          });
+          var origRm = EventTarget.prototype.removeEventListener;
+          EventTarget.prototype.removeEventListener = nat(origRm, function(type, cb, opts){
+            if (type === 'icecandidate' && typeof cb === 'function' && (this instanceof RTC)) {
+              var w = st(this).map.get(cb);
+              if (w) return origRm.call(this, type, w, opts);
+            }
+            return origRm.apply(this, arguments);
+          });
+        } catch(e){}
+        // onicecandidate is a real accessor on RTCPeerConnection.prototype — redefine it there.
+        try {
+          var oic = Object.getOwnPropertyDescriptor(RTC.prototype, 'onicecandidate');
+          if (oic && oic.get && oic.set) {
+            Object.defineProperty(RTC.prototype, 'onicecandidate', {
+              configurable: oic.configurable, enumerable: oic.enumerable,
+              get: nat(oic.get, function(){ var s = pcState.get(this); return (s && s.oic !== undefined) ? s.oic : oic.get.call(this); }),
+              set: nat(oic.set, function(cb){
+                var pc = this, s = st(pc);
+                s.oic = (typeof cb === 'function') ? cb : null;
+                oic.set.call(pc, s.oic ? function(ev){ return fwd(pc, s.oic, ev); } : cb);
+              })
+            });
+          }
+        } catch(e){}
+        // localDescription / currentLocalDescription both carry the SDP candidate lines.
+        try {
+          var scrubDesc = function(name){
+            var ld = Object.getOwnPropertyDescriptor(RTC.prototype, name);
+            if (!ld || !ld.get) return;
+            Object.defineProperty(RTC.prototype, name, {
+              configurable: ld.configurable, enumerable: ld.enumerable,
+              get: nat(ld.get, function(){
+                var d = ld.get.call(this);
+                if (d && d.sdp) {
+                  // Return a REAL RTCSessionDescription. The old code returned a plain object,
+                  // so (d instanceof RTCSessionDescription) was false and
+                  // Object.prototype.toString.call(d) said "[object Object]".
+                  try { return new RTCSessionDescription({ type: d.type, sdp: scrubSdp(d.sdp) }); } catch(e){ return d; }
+                }
+                return d;
+              })
+            });
+          };
+          scrubDesc('localDescription'); scrubDesc('currentLocalDescription');
+        } catch(e){}
       }
     }
   } catch(e){}
@@ -299,12 +460,18 @@ try {
     for (var fi = 0; fi < fl.length; fi++) { ALLOWED[String(fl[fi]).toLowerCase()] = 1; }
     var famName = function(spec){ return String(spec || '').replace(/^.*?\\d+(?:px|pt|em|rem|%)\\s+/i, '').split(',')[0].trim().replace(/^["']|["']$/g, ''); };
     var familyAllowed = function(fam){ var n = String(fam || '').trim().replace(/^["']|["']$/g, '').toLowerCase(); return GENERIC[n] === 1 || ALLOWED[n] === 1; };
-    if (document.fonts && document.fonts.check) {
-      var origCheck = document.fonts.check.bind(document.fonts);
-      document.fonts.check = mask(function(font, text){ try { if (!familyAllowed(famName(font))) return false; } catch(e){} return origCheck(font, text); }, 'check');
+    // Patch FontFaceSet.prototype, not the document.fonts INSTANCE. Assigning to the
+    // instance left getOwnPropertyNames(document.fonts) === ["check"] where native is [],
+    // and document.fonts.hasOwnProperty('check') === true where native is false.
+    if (window.FontFaceSet && FontFaceSet.prototype && FontFaceSet.prototype.check) {
+      var origCheck = FontFaceSet.prototype.check;
+      FontFaceSet.prototype.check = nat(origCheck, function(font, text){
+        try { if (!familyAllowed(famName(font))) return false; } catch(e){}
+        return origCheck.apply(this, arguments);
+      });
     }
     var MT = CanvasRenderingContext2D.prototype.measureText;
-    CanvasRenderingContext2D.prototype.measureText = mask(function(t){
+    CanvasRenderingContext2D.prototype.measureText = nat(MT, function(t){
       try {
         var fam = famName(this.font);
         if (fam && !familyAllowed(fam)) {
@@ -316,7 +483,7 @@ try {
         }
       } catch(e){}
       return MT.call(this, t);
-    }, 'measureText');
+    });
   } catch(e){}
 } catch(e){ /* never throw into the page */ }
 `

@@ -13,3 +13,7 @@ test/relay.cjs
 test/api.cjs
 test/engine.cjs
 test/guard.cjs
+test/scan.cjs
+test/tells.cjs
+test/correlation.cjs
+test/tells.cjs

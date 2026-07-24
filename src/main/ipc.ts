@@ -3,7 +3,8 @@
 // is invoke/handle (request/response); status changes are pushed separately via
 // 'profile:status' from the profile manager.
 
-import { ipcMain, dialog, BrowserWindow, app } from 'electron'
+import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
+import { checkVersionGate } from './version-gate'
 import { randomUUID } from 'crypto'
 import { promises as fs } from 'fs'
 import { join } from 'path'
@@ -469,6 +470,12 @@ export function registerIpc(): void {
 
   // ── App version + auto-update ──
   ipcMain.handle('app:getVersion', () => app.getVersion())
+  // Forced-update gate: renderer asks whether this build is still allowed.
+  ipcMain.handle('app:versionGate', () => checkVersionGate())
+  // Open an external https link (the "download the new version" button).
+  ipcMain.handle('app:openExternal', (_e, url: string) => {
+    if (typeof url === 'string' && /^https:\/\//.test(url)) void shell.openExternal(url)
+  })
   ipcMain.handle('update:statusGet', () => getUpdateStatus())
   ipcMain.handle('update:check', () => checkForUpdates())
   ipcMain.handle('update:install', () => installUpdate())

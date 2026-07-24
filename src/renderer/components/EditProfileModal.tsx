@@ -55,8 +55,12 @@ const GPUS = [
 
 const OS_OPTIONS: OsType[] = ['windows', 'macos', 'linux', 'android']
 const PROXY_TYPES: ProxyType[] = ['none', 'http', 'https', 'socks5']
-const CORES = [2, 4, 6, 8, 12, 16]
-const MEMORY = [2, 4, 8, 16]
+// Must stay in step with the generator's lists in src/shared/fingerprint.ts.
+// navigator.deviceMemory is QUANTISED by Chrome to 0.25/0.5/1/2/4/8 and capped at 8 —
+// it can never report 16. Offering 16 here let a hand-edited profile emit a value no
+// real Chrome ever produces, which is a harder tell than any mismatch.
+const CORES = [4, 6, 8, 12, 16]
+const MEMORY = [4, 8]
 
 export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Element {
   const [name, setName] = useState(profile.name)

@@ -1,5 +1,5 @@
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index 608bea5cb3..890f115afe 100644
+index 608bea5cb3..79d24dd131 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
 @@ -181,10 +181,30 @@ const blink::UserAgentBrandList GetUserAgentBrandList(
@@ -66,7 +66,7 @@ index 608bea5cb3..890f115afe 100644
  std::string GetPlatformVersion() {
 +  // VGC: report the profile's spoofed OS version (--vgc-ua-platform-version) so the
 +  // Sec-CH-UA-Platform-Version high-entropy hint matches the claimed OS instead of the
-+  // host Mac's version (26.5.2), which contradicts a Windows/Linux UA.
++  // host's version, which would contradict a Windows/Linux UA.
 +  {
 +    std::string v = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
 +        "vgc-ua-platform-version");
@@ -83,8 +83,8 @@ index 608bea5cb3..890f115afe 100644
  std::string GetPlatformForUAMetadata() {
 +  // VGC: report the profile's spoofed OS (--vgc-ua-platform, e.g. "Windows") so the
 +  // UA-CH platform (navigator.userAgentData.platform + the Sec-CH-UA-Platform header)
-+  // matches the UA STRING's OS. Without this a Windows-UA profile running on this Mac
-+  // leaks "macOS" here → a blatant OS mismatch that anti-bot (Cloudflare) flags → loop.
++  // matches the UA STRING's OS. Without this a Windows-UA profile leaks the host OS here
++  // → a blatant OS mismatch that anti-bot (Cloudflare) flags → loop.
 +  {
 +    std::string p = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
 +        "vgc-ua-platform");
@@ -137,7 +137,7 @@ index 608bea5cb3..890f115afe 100644
  // on Android or if unknown.
  std::string GetCpuArchitecture() {
 +  // VGC: spoof the UA-CH architecture (--vgc-ua-arch, e.g. "x86") to match the profile's
-+  // claimed OS instead of the host Mac's real "arm".
++  // claimed OS instead of the host machine's real architecture.
 +  {
 +    std::string a = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
 +        "vgc-ua-arch");
