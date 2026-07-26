@@ -19,3 +19,4 @@ test/correlation.cjs
 test/tells.cjs
 test/rectbase.ts
 test/rectbase.cjs
+test/deep.cjs

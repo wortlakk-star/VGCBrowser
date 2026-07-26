@@ -72,7 +72,7 @@ export function buildStealthScript(
     JSON.stringify(cfg) +
     ';' +
     STEALTH_BODY +
-    extraSpoofBody({ seed, clientRectsNoise: fp.clientRectsNoise === true }) +
+    extraSpoofBody({ seed, clientRectsNoise: fp.clientRectsNoise === true, deviceMemory: fp.deviceMemory }) +
     '})();'
   )
 }
@@ -116,22 +116,31 @@ try {
     } catch(e){}
   }
 
-  // Keep CSS resolution / device-pixel-ratio media queries consistent with the spoofed
-  // window.devicePixelRatio. matchMedia is evaluated in the compositor against the REAL
-  // dpr, so we rewrite the threshold in each query by (spoof - real) and let the native
-  // call answer — returning a genuine MediaQueryList. dpr features are unitless; resolution
-  // features carry dppx/dpi/dpcm, all normalised to dppx here.
-  function patchMatchMedia(realDpr, spoofDpr){
+  // Keep CSS resolution / device-pixel-ratio AND device-width/device-height media queries
+  // consistent with the spoofed screen. matchMedia is evaluated in the compositor against the
+  // REAL display (neither the JS Screen.width getter nor the native spoof reaches the
+  // media-query source), so window.devicePixelRatio / screen.width could disagree with
+  // (resolution:…) / (device-width:…) — a self-contradiction creepjs/pixelscan flag. We
+  // rewrite the threshold in each query and let the native call answer (a genuine
+  // MediaQueryList): dpr by (spoof-real); device-width/height by (real-spoof), where the real
+  // px is discovered via a binary search on the native evaluator.
+  function patchMatchMedia(realDpr, spoofDpr, spoofW, spoofH){
     try {
       if (typeof window.matchMedia !== 'function') return;
-      if (!(realDpr > 0) || !(spoofDpr > 0)) return;
-      var delta = spoofDpr - realDpr;
-      if (Math.abs(delta) < 1e-9) return; // dpr already matches → no tell to hide
       var native = window.matchMedia;
-      var RE = /(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
+      var dprDelta = (realDpr > 0 && spoofDpr > 0) ? (spoofDpr - realDpr) : 0;
+      function realDim(feat){ try { var lo = 0, hi = 32768; for (var i = 0; i < 16; i++){ var mid = (lo + hi + 1) >> 1; if (native.call(window, '(min-' + feat + ': ' + mid + 'px)').matches) lo = mid; else hi = mid - 1; } return lo; } catch(e){ return 0; } }
+      var realW = (spoofW > 0) ? realDim('device-width') : 0;
+      var realH = (spoofH > 0) ? realDim('device-height') : 0;
+      var wDelta = (realW > 0) ? (realW - spoofW) : 0;
+      var hDelta = (realH > 0) ? (realH - spoofH) : 0;
+      if (Math.abs(dprDelta) < 1e-9 && wDelta === 0 && hDelta === 0) return; // nothing to hide
+      var RES = /(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
+      var DIM = /(min-|max-)?(device-width|device-height)(\\s*:\\s*)([0-9.]+)px/gi;
       window.matchMedia = nat(native, function(q){
         try {
-          var rq = String(q).replace(RE, function(m, wk, mm, feat, colon, num, unit){
+          var rq = String(q);
+          if (Math.abs(dprDelta) >= 1e-9) rq = rq.replace(RES, function(m, wk, mm, feat, colon, num, unit){
             var v = parseFloat(num); if (!(v >= 0)) return m;
             var isRes = /resolution/i.test(feat);
             var dppx = v;
@@ -140,9 +149,15 @@ try {
               else if (unit === 'dpcm') dppx = v * 2.54 / 96;
               else dppx = v; // dppx | x
             }
-            var shifted = dppx - delta;
+            var shifted = dppx - dprDelta;
             if (shifted < 0) shifted = 0;
             return (wk || '') + (mm || '') + feat + colon + shifted + (isRes ? 'dppx' : '');
+          });
+          if (wDelta || hDelta) rq = rq.replace(DIM, function(m, mm, feat, colon, num){
+            var v = parseFloat(num); if (!(v >= 0)) return m;
+            var sh = v + (feat === 'device-width' ? wDelta : hDelta);
+            if (sh < 0) sh = 0;
+            return (mm || '') + feat + colon + sh + 'px';
           });
           return native.call(this, rq);
         } catch(e){ return native.call(this, q); }
@@ -182,7 +197,7 @@ try {
     // device-pixel-ratio threshold in every query by the (spoof - real) delta so the
     // native evaluation against the real dpr yields the SPOOFED answer. Returns a genuine
     // MediaQueryList (native call), so addListener/matches/etc. stay real.
-    patchMatchMedia(_realDpr, CFG.devicePixelRatio);
+    patchMatchMedia(_realDpr, CFG.devicePixelRatio, s.width, s.height);
   } catch(e){}
 
   // ── WebGL vendor/renderer (UNMASKED) ──

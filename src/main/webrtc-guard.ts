@@ -51,22 +51,40 @@ const MANIFEST = JSON.stringify({
 const MASK_PREAMBLE = `
   function nat(orig,impl){try{ if(typeof orig!=='function') return impl; return new Proxy(orig,{apply:function(t,self,a){return impl.apply(self,a);}}); }catch(e){ return impl; }}
   function def(obj,prop,getter){try{var d=Object.getOwnPropertyDescriptor(obj,prop);if(!d||!d.get)return;Object.defineProperty(obj,prop,{get:nat(d.get,getter),set:d.set,configurable:d.configurable,enumerable:d.enumerable});}catch(e){}}
-  // Keep CSS resolution / device-pixel-ratio media queries consistent with the spoofed
-  // devicePixelRatio: matchMedia is evaluated against the REAL dpr in the compositor, so we
-  // shift each query threshold by (spoof-real) and let the native call answer.
-  function patchMatchMedia(realDpr,spoofDpr){try{
+  // Keep CSS resolution / device-pixel-ratio AND device-width/device-height media queries
+  // consistent with the spoofed screen: matchMedia is evaluated against the REAL display in
+  // the compositor (the native Screen.width spoof does NOT reach the media-query source), so
+  // screen.width could say 1920 while (device-width:1920px) says false — a self-contradiction
+  // creepjs/pixelscan flag. We shift each query threshold and let the native call answer:
+  //   • dpr/resolution → shift by (spoof-real) dpr (dpr is unknown to the compositor spoof).
+  //   • device-width/height → discover the REAL px via a binary search on the native evaluator,
+  //     then rewrite each queried value X to X+(real-spoof). The native compare against the real
+  //     px then yields the SAME boolean as a compare against the spoofed px (exact/min/max).
+  function patchMatchMedia(realDpr,spoofDpr,spoofW,spoofH){try{
     if(typeof window.matchMedia!=='function')return;
-    if(!(realDpr>0)||!(spoofDpr>0))return;
-    var delta=spoofDpr-realDpr; if(Math.abs(delta)<1e-9)return;
     var native=window.matchMedia;
-    var RE=/(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
+    var dprDelta=(realDpr>0&&spoofDpr>0)?(spoofDpr-realDpr):0;
+    function realDim(feat){try{var lo=0,hi=32768;for(var i=0;i<16;i++){var mid=(lo+hi+1)>>1;if(native.call(window,'(min-'+feat+': '+mid+'px)').matches)lo=mid;else hi=mid-1;}return lo;}catch(e){return 0;}}
+    var realW=(spoofW>0)?realDim('device-width'):0;
+    var realH=(spoofH>0)?realDim('device-height'):0;
+    var wDelta=(realW>0)?(realW-spoofW):0;
+    var hDelta=(realH>0)?(realH-spoofH):0;
+    if(Math.abs(dprDelta)<1e-9&&wDelta===0&&hDelta===0)return;
+    var RES=/(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
+    var DIM=/(min-|max-)?(device-width|device-height)(\\s*:\\s*)([0-9.]+)px/gi;
     window.matchMedia=nat(native,function(q){try{
-      var rq=String(q).replace(RE,function(m,wk,mm,feat,colon,num,unit){
+      var rq=String(q);
+      if(Math.abs(dprDelta)>=1e-9)rq=rq.replace(RES,function(m,wk,mm,feat,colon,num,unit){
         var v=parseFloat(num); if(!(v>=0))return m;
         var isRes=/resolution/i.test(feat); var dppx=v;
         if(isRes){ if(unit==='dpi')dppx=v/96; else if(unit==='dpcm')dppx=v*2.54/96; else dppx=v; }
-        var shifted=dppx-delta; if(shifted<0)shifted=0;
+        var shifted=dppx-dprDelta; if(shifted<0)shifted=0;
         return (wk||'')+(mm||'')+feat+colon+shifted+(isRes?'dppx':'');
+      });
+      if(wDelta||hDelta)rq=rq.replace(DIM,function(m,mm,feat,colon,num){
+        var v=parseFloat(num); if(!(v>=0))return m;
+        var sh=v+(feat==='device-width'?wDelta:hDelta); if(sh<0)sh=0;
+        return (mm||'')+feat+colon+sh+'px';
       });
       return native.call(this,rq);
     }catch(e){return native.call(this,q);}});
@@ -106,7 +124,7 @@ function screenScript(fp: Fingerprint): string {
       def(Screen.prototype,'pixelDepth',function(){return S.pixelDepth;});
     }
     def(window,'devicePixelRatio',function(){return S.dpr;});
-    patchMatchMedia(_realDpr,S.dpr);
+    patchMatchMedia(_realDpr,S.dpr,S.width,S.height);
   } catch(e){}
 `
 }
@@ -219,7 +237,7 @@ export function ensureNativeGuardExtension(
       MASK_PREAMBLE +
       screenScript(fp) +
       (fp.webrtc !== 'real' ? webrtcScript(fp.webrtc, fp.webrtcPublicIp ?? '') : '') +
-      extraSpoofBody({ seed, clientRectsNoise: fp.clientRectsNoise === true }) +
+      extraSpoofBody({ seed, clientRectsNoise: fp.clientRectsNoise === true, deviceMemory: fp.deviceMemory }) +
       '})();'
     writeFileSync(join(dir, 'guard.js'), body)
     return dir

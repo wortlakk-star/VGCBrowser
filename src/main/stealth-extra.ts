@@ -34,10 +34,17 @@ export interface ExtraSpoofCfg {
   seed: number
   /** Gate for the client-rects farbling (the profile's fingerprint.clientRectsNoise). */
   clientRectsNoise: boolean
+  /** The profile's navigator.deviceMemory (GB). Used to keep performance.memory's
+   *  jsHeapSizeLimit coherent with the claimed RAM class (see the memory block below). */
+  deviceMemory: number
 }
 
 export function extraSpoofBody(cfg: ExtraSpoofCfg): string {
-  const xcfg = { seed: cfg.seed >>> 0, clientRects: cfg.clientRectsNoise === true }
+  const xcfg = {
+    seed: cfg.seed >>> 0,
+    clientRects: cfg.clientRectsNoise === true,
+    deviceMemory: cfg.deviceMemory > 0 ? cfg.deviceMemory : 8
+  }
   return 'var XCFG=' + JSON.stringify(xcfg) + ';' + EXTRA_BODY
 }
 
@@ -118,6 +125,28 @@ try {
   try {
     xdef(Screen.prototype, 'availLeft', function(){ return 0; });
     xdef(Screen.prototype, 'availTop', function(){ return 0; });
+  } catch(e){}
+
+  // ── 2b. performance.memory.jsHeapSizeLimit ────────────────────────────────
+  // Chrome's V8 heap limit scales with PHYSICAL RAM, not with navigator.deviceMemory:
+  // an 8GB+ machine reports 4,395,630,592 (~4.09 GB) while a 4GB machine reports
+  // 2,172,649,472 (~2.02 GB). We spoof deviceMemory (capped at 8) but left jsHeapSizeLimit
+  // at the host's real value — so a profile claiming deviceMemory:4 on a big rig exposed a
+  // 4.4GB heap limit, an internal contradiction creepjs/pixelscan flag ("device 4GB but V8
+  // heap says ≥8GB"). Pin jsHeapSizeLimit to the canonical value for the claimed RAM class.
+  // Only jsHeapSizeLimit is touched: used/total are page-runtime values that leak nothing
+  // about hardware and fluctuate naturally, so faking them (constant) would be the bigger tell.
+  try {
+    if (window.performance && performance.memory && typeof performance.memory.jsHeapSizeLimit === 'number') {
+      var _mproto = Object.getPrototypeOf(performance.memory);
+      var _dm = XCFG.deviceMemory;
+      var _limit = _dm <= 2 ? 1090519040 : (_dm <= 4 ? 2172649472 : 4395630592);
+      // Match the host: never claim a HIGHER limit than the machine actually has (that
+      // would be impossible), only cap it down to stay coherent with the small-RAM claim.
+      if (_limit < performance.memory.jsHeapSizeLimit) {
+        xdef(_mproto, 'jsHeapSizeLimit', function(){ return _limit; });
+      }
+    }
   } catch(e){}
 
   // ── 3. navigator.connection ───────────────────────────────────────────────
