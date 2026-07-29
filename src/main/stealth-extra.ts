@@ -91,18 +91,17 @@ try {
   // not constructable, and returning a plain Array is a stronger '[object Array]' tell than the
   // farbling is worth — the native patch 07-client-rects-native.patch farbles getClientRects at
   // the C++ level (real DOMRectList) once the engine is rebuilt.
-  // Detect NATIVE client-rects farbling (07-client-rects-native.patch, element.cc): a DETACHED
-  // element's getBoundingClientRect is all-zero in stock Chrome, but the native farble shifts it
-  // by ~1e-4 — so a non-zero coordinate means the ENGINE already farbles at the source. Then we
-  // skip the JS override (which would both double-noise AND re-add the very JS getter tell the
-  // native patch removes). Detected per-vector (independent of __vgcNative, which gates only the
-  // still-JS connection). On the system-Chrome fallback / old engines the probe is 0 → JS runs.
-  var __vgcRectsNative = false;
-  try {
-    var _probe = document.createElement('div').getBoundingClientRect();
-    __vgcRectsNative = (_probe.x !== 0 || _probe.y !== 0 || _probe.width !== 0 || _probe.height !== 0);
-  } catch(e){}
-  if (XCFG.clientRects && !__vgcRectsNative) {
+  // The VGC Core ENGINE farbles getClientRects + getBoundingClientRect natively (element.cc,
+  // UNION approach: getBoundingClientRect == union(getClientRects), and a DETACHED element stays
+  // all-zero exactly like stock Chrome — no invariant broken, so it must NOT be used as a probe).
+  // When the engine is present we MUST skip this JS override: it only touches getBoundingClientRect,
+  // so on top of the native farble it yields getBoundingClientRect != getClientRects — the exact
+  // bcr!=cr tell (confirmed [false,false,false] in verify:correlation when this ran). The reliable
+  // "VGC engine present" signal is __vgcScreenNative (screen.cc spoofed screen.width, read from the
+  // RAW value before any JS screen getter). It exists ONLY in the native guard; in CDP mode it is
+  // undefined and the engine still farbles natively (switches are always forwarded) so we skip there
+  // too. JS runs ONLY on the system-Chrome fallback (engine blocked → screen NOT native).
+  if (XCFG.clientRects && typeof __vgcScreenNative !== 'undefined' && !__vgcScreenNative) {
     try {
       function xrn(v, salt){
         var s = (XCFG.seed ^ (salt>>>0) ^ ((Math.round(v*1000))>>>0)) >>> 0;
@@ -163,11 +162,13 @@ try {
   // profile so they are not all identical). downlink is capped at 10 like real Chrome.
   // Skip when the VGC Core engine spoofs navigator.connection natively (network_information.cc,
   // which covers window AND workers consistently) — a JS override here would only touch the
-  // window, so the worker's rtt/downlink would disagree. Still runs in CDP / on the fallback.
+  // window, so the worker's rtt/downlink would disagree (a window/worker mismatch tell). Same gate
+  // as client-rects: skip whenever the engine is present (__vgcScreenNative true, OR CDP where it
+  // is undefined and the switches are still forwarded); run ONLY on the system-Chrome fallback.
   try {
-    var _conn = (typeof __vgcNative !== 'undefined' && __vgcNative === true)
-      ? null
-      : (navigator.connection || navigator.mozConnection || navigator.webkitConnection);
+    var _conn = (typeof __vgcScreenNative !== 'undefined' && !__vgcScreenNative)
+      ? (navigator.connection || navigator.mozConnection || navigator.webkitConnection)
+      : null;
     if (_conn) {
       var NI = Object.getPrototypeOf(_conn);
       var _cr = xmul((XCFG.seed ^ 0x27D4EB2F) >>> 0);

@@ -1,27 +1,37 @@
 # VGC Core — native client-rects farbling (getBoundingClientRect / getClientRects)
-# STATUS: ✅ VERIFIED — real, git-apply-able diff (built + validated on M151). getBoundingClientRect
-# returns a farbled rect from a NATIVE getter (no JS override); a DETACHED element's rect is non-zero
-# (0,0,0,0 farbled), which the JS layer uses to auto-detect native and skip its own client-rects
-# spoof (stealth-extra __vgcRectsNative). Reuses --vgc-seed (already in kVgcSwitches, patch 02).
-# Same algorithm shape as the JS (stealth-extra.ts): deterministic ~±1e-4 px per-metric offset.
+# STATUS: ✅ VERIFIED — real, git-apply-able diff (built + validated on M151). UNION approach:
+# getClientRects() farbles each rect (~±1e-4 px, deterministic per --vgc-seed); getBoundingClientRect()
+# is built from the SAME per-rect farbling and then unioned, so union(getClientRects) == getBoundingClientRect
+# EXACTLY (a detector comparing them finds no discrepancy) and a DETACHED element stays all-zero exactly
+# like stock Chrome — no invariant is broken. The JS layer (stealth-extra.ts) SKIPS its own client-rects
+# override whenever the VGC engine is present (signal __vgcScreenNative from screen.cc), NOT via a
+# detached-element probe — a direct VgcNoiseRectF(bcr) that made detached non-zero would itself be a tell
+# (stock detached bcr == 0) and could split bcr from union(getClientRects) on multi-line inline elements.
+# Reuses --vgc-seed (already in kVgcSwitches, patch 02).
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
-index eb0e6f4157..3fe893124c 100644
+index aa3d9236fd..855a8dd744 100644
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@ -184,6 +184,8 @@
- #include "third_party/blink/renderer/core/frame/settings.h"
- #include "third_party/blink/renderer/core/frame/visual_viewport.h"
- #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
-+#include <cmath>
+@@ -32,6 +32,7 @@
+ #include <memory>
+ #include <utility>
+ 
 +#include "base/command_line.h"
- #include "third_party/blink/renderer/core/geometry/dom_rect.h"
- #include "third_party/blink/renderer/core/geometry/dom_rect_list.h"
- #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
-@@ -322,6 +324,44 @@ namespace blink {
+ #include "base/containers/adapters.h"
+ #include "base/feature_list.h"
+ #include "cc/input/snap_selection_strategy.h"
+@@ -3442,6 +3443,52 @@ void Element::ClientQuads(Vector<gfx::QuadF>& quads) const {
+   }
+ }
  
- namespace {
- 
-+// VGC Core: per-profile FNV-1a seed from --vgc-seed. 0 => absent => no-op (stock).
++namespace {
++
++// VGC Core: per-profile client-rect farbling seeded from --vgc-seed (reuses the existing
++// switch, already forwarded to the renderer). Native so there is no JS Element.prototype
++// override to lie-detect, AND it farbles getClientRects + getBoundingClientRect
++// CONSISTENTLY — the old JS half-measure only touched getBoundingClientRect, so
++// getBoundingClientRect(el).width != getClientRects(el)[0].width was itself a tell. Same
++// (seed, rounded value) ⇒ same ±~1e-4 delta ⇒ stable across reads.
 +uint32_t VgcRectSeed() {
 +  static const uint32_t seed = [] {
 +    const std::string s =
@@ -37,21 +47,20 @@ index eb0e6f4157..3fe893124c 100644
 +  }();
 +  return seed;
 +}
-+
-+// Deterministic sub-pixel offset for one metric (salt separates x/y/w/h).
 +double VgcRectNoise(double v, uint32_t salt) {
 +  const uint32_t seed = VgcRectSeed();
 +  if (seed == 0)
 +    return v;
-+  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(std::llround(v * 1000.0));
-+  s ^= s >> 15;
-+  s *= 0x2C1B3C6Du;
-+  s ^= s >> 12;
-+  s *= 0x297A2D39u;
-+  s ^= s >> 15;
++  // Seed the delta from the value rounded to the NEAREST PIXEL (not *1000): the raw layout
++  // value jitters at the sub-pixel level between separate getBoundingClientRect /
++  // getClientRects queries, and a fine quantization straddled the boundary → different
++  // delta → bcr != cr[0] (a tell). Integer-pixel quantization is stable across that jitter,
++  // so the same metric gets the same delta everywhere and the two APIs stay consistent.
++  const int64_t q = static_cast<int64_t>(v < 0 ? v - 0.5 : v + 0.5);
++  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(q);
++  s ^= s >> 15; s *= 0x2C1B3C6Du; s ^= s >> 12; s *= 0x297A2D39u; s ^= s >> 15;
 +  return v + ((static_cast<double>(s & 0xFFFFu) / 65535.0) - 0.5) * 0.0002;
 +}
-+
 +gfx::RectF VgcNoiseRectF(const gfx::RectF& r) {
 +  if (VgcRectSeed() == 0)
 +    return r;
@@ -59,25 +68,49 @@ index eb0e6f4157..3fe893124c 100644
 +                    VgcRectNoise(r.width(), 0x3003u), VgcRectNoise(r.height(), 0x4004u));
 +}
 +
- class DisplayLockStyleScope {
-   STACK_ALLOCATED();
- 
-@@ -3455,6 +3495,7 @@ DOMRectList* Element::getClientRects() {
++}  // namespace
++
+ DOMRectList* Element::getClientRects() {
+   Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
+   if (rects.empty()) {
+@@ -3452,6 +3499,7 @@ DOMRectList* Element::getClientRects() {
    for (auto& rect : rects) {
      GetDocument().AdjustRectForScrollAndAbsoluteZoom(rect,
                                                       *element_layout_object);
-+    rect = VgcNoiseRectF(rect);  // VGC Core: farble each client rect (per-profile seed)
++    rect = VgcNoiseRectF(rect);  // VGC: farble so getClientRects hashing differs per profile
    }
    return MakeGarbageCollected<DOMRectList>(rects);
  }
-@@ -3508,7 +3549,9 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
+@@ -3505,7 +3553,31 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
  DOMRect* Element::GetBoundingClientRect() {
    GetDocument().EnsurePaintLocationDataValidForNode(
        this, DocumentUpdateReason::kJavaScript);
 -  return DOMRect::FromRectF(GetBoundingClientRectNoLifecycleUpdate());
-+  // VGC Core: farble the bounding rect at the source (per-profile --vgc-seed).
-+  return DOMRect::FromRectF(
-+      VgcNoiseRectF(GetBoundingClientRectNoLifecycleUpdate()));
++  gfx::RectF bounds = GetBoundingClientRectNoLifecycleUpdate();
++  // VGC: build the bounding rect from the SAME per-rect farbling getClientRects() applies,
++  // then union — so union(getClientRects) == getBoundingClientRect exactly (a detector that
++  // cross-checks the two sees no discrepancy). Internal callers use the raw NoLifecycleUpdate
++  // path above, so layout/hit-testing are unaffected. Single-rect elements ⇒ bcr == cr[0].
++  if (VgcRectSeed() != 0) {
++    Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
++    LayoutObject* lo = GetLayoutObject();
++    if (!rects.empty() && lo) {
++      gfx::RectF u;
++      bool first = true;
++      for (auto& r : rects) {
++        GetDocument().AdjustRectForScrollAndAbsoluteZoom(r, *lo);
++        r = VgcNoiseRectF(r);
++        if (first) {
++          u = r;
++          first = false;
++        } else {
++          u.Union(r);
++        }
++      }
++      bounds = u;
++    }
++  }
++  return DOMRect::FromRectF(bounds);
  }
  
  DOMRect* Element::GetBoundingClientRectForBinding() {

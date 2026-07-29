@@ -100,23 +100,19 @@ function screenScript(fp: Fingerprint): string {
     pixelDepth: s.pixelDepth ?? s.colorDepth,
     dpr: fp.devicePixelRatio
   })
-  // __vgcNative: does the VGC Core ENGINE already spoof screen natively (screen.cc)? If the
-  // width/height already equal the target, yes — then we SKIP the JS Screen.prototype
-  // overrides (the native accessor is undetectable; a JS getter on top would re-introduce
-  // the very tell the native patch removes) and also skip the JS connection + client-rects
-  // spoofs below (also native now), avoiding a window↔worker mismatch. On the system-Chrome
-  // FALLBACK (engine blocked → stock Chrome, which ignores --vgc-*), the values DON'T match,
-  // so __vgcNative is false and the full JS spoof applies as before. Same var gates
-  // stealth-extra's connection/client-rects (see extraSpoofBody). devicePixelRatio +
-  // matchMedia are still JS-only (no native dpr patch), so those always apply.
-  // __vgcNative gates the connection + client-rects JS spoofs in stealth-extra. Those vectors
-  // have NO native engine patch yet (only SCREEN does — screen.cc), so __vgcNative MUST stay
-  // false or their JS spoof would be wrongly skipped, leaving them unspoofed (a cross-profile
-  // correlator). Screen-native is detected SEPARATELY (__vgcScreenNative) and gates ONLY the JS
-  // Screen getters, so when the engine spoofs screen natively we drop the JS half (pure native,
-  // no lie) without disabling the still-JS connection/client-rects.
+  // __vgcScreenNative: is the VGC Core ENGINE running (vs a system-Chrome fallback)? screen.cc
+  // spoofs screen.width/height natively, so if the RAW screen.width already equals the target the
+  // engine is present. This ONE signal gates every vector the engine ALSO spoofs natively:
+  //   • screen   → skip the JS Screen.prototype getters (the native accessor is undetectable; a JS
+  //                getter on top would re-introduce the exact tell the native patch removes).
+  //   • client rects + connection → skipped in stealth-extra on the same signal. The deployed
+  //     engine (vgc-core-156) farbles getClientRects/getBoundingClientRect (element.cc, UNION) AND
+  //     spoofs NetworkInformation (network_information.cc) for window+workers. Running the JS half
+  //     on top produced bcr!=cr and a window↔worker rtt mismatch — so it MUST be skipped when
+  //     __vgcScreenNative is true. It runs ONLY on the system-Chrome FALLBACK (engine blocked →
+  //     stock Chrome ignores --vgc-*, screen.width != target → __vgcScreenNative false → JS applies).
+  // devicePixelRatio + matchMedia have no native patch, so they always apply.
   return `
-  var __vgcNative=false;
   try {
     var S=${cfg};
     var _realDpr=window.devicePixelRatio;
