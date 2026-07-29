@@ -7,7 +7,19 @@ encryption key from `--vgc-crypt-secret`, so data encrypted on one machine decry
 on the other).
 
 > Do this **on the Windows machine**. It's a large build (~100 GB disk, 1–3 hours on
-> a fast PC). You only redo it when the Chromium version is bumped or a patch changes.
+> a fast PC) the FIRST time. You only redo it when the Chromium version is bumped or a
+> patch changes.
+
+> ## ⚡ Fast path (already built once before)
+> If this machine has built the engine before (`out\vgc` + gn args exist), just run
+> **`scripts\build-win-engine.bat`** — it does `git pull` → reset the Chromium tree →
+> apply `vgc-native-all.patch` + `vgc-uach-chrome-brand.patch` → `autoninja` (only the
+> changed `.cc` recompile, ~10–20 min) → package a branded `release\vgc-core-win-x64-<ver>.zip`.
+> Edit the 3 paths at the top of the .bat if yours differ. Then upload the zip + point
+> `settings.engineUrl` at it (step 7). The rest of this doc is the first-time setup.
+>
+> `vgc-native-all.patch` is kept **current** — it now includes the native **screen (06)**,
+> **client-rects (07)** and **fonts (08)** spoofs, verified against the Mac engine 0.1.106.
 
 Pinned Chromium version: **151.0.7902.0** (must match the macOS engine for the
 fingerprint/UA to line up — check `chrome/VERSION` on the Mac build).

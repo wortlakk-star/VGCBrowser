@@ -2,7 +2,7 @@ diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controlle
 index 442f1d3308..3b7bb3f6b9 100644
 --- a/chrome/browser/app_controller_mac.mm
 +++ b/chrome/browser/app_controller_mac.mm
-@@ -1352,6 +1352,88 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -1352,6 +1352,88 @@ - (void)applicationDidFinishLaunching:(NSNotification*)notify {
  
    [MenuControllerCocoa
        initializeWithNewMenuIconScheme:features::IsMenuSimplificationEnabled()];
@@ -127,10 +127,10 @@ index bcd4118f88..9df5fe4ce2 100644
  
  #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index faf8c2e79b..2d44d12ac4 100644
+index faf8c2e79b..230dba7e0f 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2854,6 +2854,34 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2854,6 +2854,29 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
    };
    command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
  
@@ -145,20 +145,15 @@ index faf8c2e79b..2d44d12ac4 100644
 +      "vgc-timezone",
 +      "vgc-seed",
 +      "vgc-crypt-secret",
-+      // navigator.languages is spoofed in the RENDERER (navigator_language.cc reads this),
-+      // so the switch must reach the child process or the spoof silently no-ops and
-+      // navigator.languages falls back to a single-entry ["en-US"] (missing the "en" base
-+      // that real Chrome always includes). The UA-CH --vgc-ua-* switches are NOT here on
-+      // purpose: they are consumed browser-side in user_agent_utils.cc.
 +      "vgc-accept-languages",
-+      // Per-profile font allowlist (font_cache.cc filters system fonts to this set).
-+      // Font matching runs in the renderer, so the switch must be forwarded or every
-+      // profile enumerates the identical real font set — a same-machine correlator.
-+      "vgc-fonts",
-+      // Native screen spoof (screen.cc) — spoofs screen.width/height/avail*/colorDepth in
-+      // the renderer so there is no JS Screen.prototype tell.
++      "vgc-ua-full-version",
++      "vgc-ua-platform",
++      "vgc-ua-platform-version",
++      "vgc-ua-arch",
++      "vgc-ua-bitness",
 +      "vgc-screen",
 +      "vgc-color-depth",
++      "vgc-fonts",
 +  };
 +  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
 +
@@ -166,10 +161,10 @@ index faf8c2e79b..2d44d12ac4 100644
        error_page::switches::kDisableDinosaurEasterEgg,
        error_page::switches::kEnableDinosaurEasterEggAltGameImages,
 diff --git a/chrome/browser/ui/views/frame/contents_web_view.cc b/chrome/browser/ui/views/frame/contents_web_view.cc
-index a831bfd4ff..f4b13be205 100644
+index a831bfd4ff..09e31736af 100644
 --- a/chrome/browser/ui/views/frame/contents_web_view.cc
 +++ b/chrome/browser/ui/views/frame/contents_web_view.cc
-@@ -4,11 +4,17 @@
+@@ -4,7 +4,11 @@
  
  #include "chrome/browser/ui/views/frame/contents_web_view.h"
  
@@ -180,129 +175,59 @@ index a831bfd4ff..f4b13be205 100644
 +#include "base/strings/utf_string_conversions.h"
  #include "build/build_config.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
-+#include "chrome/browser/ui/views/chrome_widget_sublevel.h"
  #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
- #include "chrome/browser/ui/views/status_bubble_views.h"
-+#include "chrome/grit/theme_resources.h"
- #include "components/search/ntp_features.h"
- #include "components/tabs/public/tab_interface.h"
- #include "components/web_modal/web_contents_modal_dialog_manager.h"
-@@ -17,10 +23,21 @@
- #include "third_party/blink/public/common/input/web_input_event.h"
- #include "third_party/skia/include/core/SkColor.h"
- #include "ui/base/metadata/metadata_impl_macros.h"
-+#include "ui/base/models/image_model.h"
-+#include "ui/base/resource/resource_bundle.h"
- #include "ui/color/color_provider.h"
+@@ -21,6 +25,10 @@
  #include "ui/compositor/layer.h"
  #include "ui/compositor/layer_tree_owner.h"
  #include "ui/compositor/layer_type.h"
 +#include "ui/gfx/geometry/insets.h"
-+#include "ui/gfx/geometry/point.h"
-+#include "ui/gfx/geometry/rect.h"
-+#include "ui/gfx/image/image_skia.h"
 +#include "ui/views/background.h"
 +#include "ui/views/border.h"
-+#include "ui/views/controls/image_view.h"
 +#include "ui/views/controls/label.h"
-+#include "ui/views/layout/box_layout.h"
  #include "ui/views/view_class_properties.h"
  #include "ui/views/widget/widget.h"
  
-@@ -40,6 +57,75 @@ ContentsWebView::ContentsWebView(content::BrowserContext* browser_context)
+@@ -40,6 +48,27 @@ ContentsWebView::ContentsWebView(content::BrowserContext* browser_context)
    status_bubble_ = std::make_unique<StatusBubbleViews>(this);
    status_bubble_->Reposition();
    web_contents_close_handler_ = std::make_unique<WebContentsCloseHandler>(this);
 +
-+  // VGC Core: cache the profile name from --vgc-profile-name. The badge itself is a
-+  // separate overlay Widget created in AddedToWidget() (once a parent Widget
-+  // exists). It's browser chrome — NOT page DOM — so a web page can't read it.
-+  vgc_name_ = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-+      "vgc-profile-name");
-+}
-+
-+void ContentsWebView::EnsureVgcBadge() {
-+  if (vgc_name_.empty() || vgc_badge_widget_) {
-+    return;
++  // VGC Core: bottom-left profile-name badge (GoLogin-style) from --vgc-profile-name.
++  // It's browser chrome layered over the web contents — NOT page DOM — so a web page
++  // can't read it (no fingerprint leak). Absent switch ⇒ no badge (stock behaviour).
++  const std::string vgc_name =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-profile-name");
++  if (!vgc_name.empty()) {
++    auto badge = std::make_unique<views::Label>(base::UTF8ToUTF16(vgc_name));
++    badge->SetProperty(views::kViewIgnoredByLayoutKey, true);
++    badge->SetAutoColorReadabilityEnabled(false);
++    badge->SetEnabledColor(SK_ColorWHITE);
++    badge->SetBackground(views::CreateRoundedRectBackground(
++        SkColorSetARGB(0xDA, 0x0f, 0x9e, 0x8d), 8));
++    badge->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(3, 10)));
++    badge->SetElideBehavior(gfx::ELIDE_TAIL);
++    // Own layer so the badge composites ABOVE the web contents' layer.
++    badge->SetPaintToLayer();
++    badge->layer()->SetFillsBoundsOpaquely(false);
++    vgc_badge_ = AddChildView(std::move(badge));
 +  }
-+  views::Widget* parent = GetWidget();
-+  if (!parent) {
-+    return;
-+  }
-+
-+  // Contents: [VGC logo] [profile name] on a teal rounded pill.
-+  auto contents = std::make_unique<views::View>();
-+  auto* layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(4, 10),
-+      /*between_child_spacing=*/6));
-+  layout->set_cross_axis_alignment(
-+      views::BoxLayout::CrossAxisAlignment::kCenter);
-+  contents->SetBackground(views::CreateRoundedRectBackground(
-+      SkColorSetARGB(0xF0, 0x0f, 0x9e, 0x8d), 9));
-+
-+  const gfx::ImageSkia* logo =
-+      ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-+          IDR_PRODUCT_LOGO_16);
-+  if (logo && !logo->isNull()) {
-+    auto image = std::make_unique<views::ImageView>();
-+    image->SetImage(ui::ImageModel::FromImageSkia(*logo));
-+    image->SetImageSize(gfx::Size(16, 16));
-+    contents->AddChildView(std::move(image));
-+  }
-+  auto label = std::make_unique<views::Label>(base::UTF8ToUTF16(vgc_name_));
-+  label->SetAutoColorReadabilityEnabled(false);
-+  label->SetEnabledColor(SK_ColorWHITE);
-+  label->SetElideBehavior(gfx::ELIDE_TAIL);
-+  contents->AddChildView(std::move(label));
-+
-+  // Separate translucent, click-through child widget so it paints ABOVE the
-+  // page's GPU surface (a plain child view cannot, on Windows). Modeled on
-+  // StatusBubbleViews.
-+  vgc_badge_widget_ = std::make_unique<views::Widget>();
-+  views::Widget::InitParams params(
-+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
-+#if BUILDFLAG(IS_MAC)
-+      views::Widget::InitParams::TYPE_TOOLTIP);
-+#else
-+      views::Widget::InitParams::TYPE_POPUP);
-+#endif
-+#if BUILDFLAG(IS_WIN)
-+  params.force_software_compositing = true;
-+#endif
-+  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-+  params.accept_events = false;  // click-through
-+  params.parent = parent->GetNativeView();
-+  params.context = parent->GetNativeWindow();
-+  params.name = "VgcProfileBadge";
-+  vgc_badge_widget_->Init(std::move(params));
-+  vgc_badge_widget_->SetVisibilityChangedAnimationsEnabled(false);
-+  vgc_badge_ = vgc_badge_widget_->SetContentsView(std::move(contents));
-+#if !BUILDFLAG(IS_MAC)
-+  vgc_badge_widget_->SetZOrderSublevel(ChromeWidgetSublevel::kSublevelHoverable);
-+#endif
-+  vgc_badge_widget_->ShowInactive();
-+  UpdateVgcBadgeBounds();
  }
  
  ContentsWebView::~ContentsWebView() = default;
-@@ -115,12 +201,29 @@ bool ContentsWebView::GetNeedsNotificationWhenVisibleBoundsChange() const {
+@@ -115,12 +144,24 @@ bool ContentsWebView::GetNeedsNotificationWhenVisibleBoundsChange() const {
    return true;
  }
  
 +void ContentsWebView::UpdateVgcBadgeBounds() {
-+  if (!vgc_badge_widget_ || !vgc_badge_) {
++  if (!vgc_badge_) {
 +    return;
 +  }
 +  const gfx::Size pref = vgc_badge_->GetPreferredSize();
-+  constexpr int kMargin = 12;
-+  // Position the overlay widget in SCREEN coordinates, pinned to the bottom-left
-+  // of this view (the content area).
-+  gfx::Point origin;
-+  views::View::ConvertPointToScreen(this, &origin);
++  constexpr int kMargin = 10;
 +  const int w = std::min(pref.width(), std::max(0, width() - 2 * kMargin));
-+  const int x = origin.x() + kMargin;
-+  const int y = origin.y() + std::max(0, height() - pref.height() - kMargin);
-+  vgc_badge_widget_->SetBounds(gfx::Rect(x, y, w, pref.height()));
++  const int y = std::max(0, height() - pref.height() - kMargin);
++  vgc_badge_->SetBounds(kMargin, y, w, pref.height());
 +}
 +
  void ContentsWebView::OnVisibleBoundsChanged() {
@@ -315,88 +240,31 @@ index a831bfd4ff..f4b13be205 100644
  
    // Reset using default deadline once animation is completed after the final
    // bounds changes are made.
-@@ -169,6 +272,10 @@ void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
-   if (dialog_manager) {
-     dialog_manager->UpdateDialogHost();
-   }
-+
-+  // VGC Core: a freshly-attached web-contents layer stacks above the badge, so
-+  // re-position and re-stack the badge on top after every tab attach.
-+  UpdateVgcBadgeBounds();
- }
- 
- #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-@@ -277,5 +384,17 @@ void ContentsWebView::RenderViewReady() {
-   WebView::RenderViewReady();
- }
- 
-+void ContentsWebView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-+  views::WebView::OnBoundsChanged(previous_bounds);
-+  // Keep the profile badge pinned to the bottom-left as the window resizes.
-+  UpdateVgcBadgeBounds();
-+}
-+
-+void ContentsWebView::AddedToWidget() {
-+  views::WebView::AddedToWidget();
-+  // Now that a parent Widget exists, create the badge overlay widget.
-+  EnsureVgcBadge();
-+}
-+
- BEGIN_METADATA(ContentsWebView)
- END_METADATA
 diff --git a/chrome/browser/ui/views/frame/contents_web_view.h b/chrome/browser/ui/views/frame/contents_web_view.h
-index dba4f324e7..02b664da77 100644
+index dba4f324e7..4c30549cb3 100644
 --- a/chrome/browser/ui/views/frame/contents_web_view.h
 +++ b/chrome/browser/ui/views/frame/contents_web_view.h
-@@ -6,6 +6,7 @@
- #define CHROME_BROWSER_UI_VIEWS_FRAME_CONTENTS_WEB_VIEW_H_
- 
- #include <memory>
-+#include <string>
- 
- #include "base/memory/raw_ptr.h"
- #include "build/build_config.h"
-@@ -23,6 +24,11 @@ namespace ui {
+@@ -23,6 +23,10 @@ namespace ui {
  class LayerTreeOwner;
  }  // namespace ui
  
 +namespace views {
 +class Label;
-+class Widget;
 +}  // namespace views
 +
  // ContentsWebView is used to present the WebContents of the active tab.
  class ContentsWebView : public views::WebView,
                          public WebContentsCloseHandlerDelegate {
-@@ -74,6 +80,11 @@ class ContentsWebView : public views::WebView,
- 
-   // ui::View overrides:
-   std::unique_ptr<ui::Layer> RecreateLayer() override;
-+  // VGC Core: reposition the profile badge whenever the view is resized (the
-+  // reliable hook — OnVisibleBoundsChanged only fires while scrolling a viewport).
-+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
-+  // VGC Core: create the badge widget once this view is attached to a Widget.
-+  void AddedToWidget() override;
- 
-   // WebContentsCloseHandlerDelegate overrides:
-   void CloneWebContentsLayer() override;
-@@ -81,7 +92,19 @@ class ContentsWebView : public views::WebView,
+@@ -81,7 +85,12 @@ class ContentsWebView : public views::WebView,
  
   private:
    void UpdateBackgroundColor();
-+  // VGC Core: create the profile-badge overlay widget (idempotent; no-op without
-+  // --vgc-profile-name or before this view has a parent Widget).
-+  void EnsureVgcBadge();
-+  // VGC Core: keep the bottom-left profile badge pinned as the view resizes.
++  // VGC Core: keep the bottom-left profile-name badge pinned as the view resizes.
 +  void UpdateVgcBadgeBounds();
    std::unique_ptr<StatusBubbleViews> status_bubble_;
-+  // VGC Core: GoLogin-style profile badge shown bottom-left OVER the web contents.
-+  // It's a separate translucent, click-through child Widget (like the status
-+  // bubble) because on Windows the page's GPU surface paints above any in-view
-+  // layer, so a child view can't overlay it. Empty name ⇒ no badge (stock).
-+  std::string vgc_name_;
-+  std::unique_ptr<views::Widget> vgc_badge_widget_;
-+  raw_ptr<views::View> vgc_badge_ = nullptr;  // contents view, owned by the widget
++  // VGC Core: GoLogin-style profile-name badge (browser chrome, not page DOM), or
++  // null when --vgc-profile-name is absent. Owned by the view hierarchy.
++  raw_ptr<views::Label> vgc_badge_ = nullptr;
    std::unique_ptr<WebContentsCloseHandler> web_contents_close_handler_;
  
    bool background_visible_ = true;
@@ -459,14 +327,15 @@ index a5c18b6c19..0d124d33fd 100644
  
  std::u16string WindowMetadataController::GetWindowTitleForTab(
 diff --git a/components/os_crypt/async/browser/dpapi_key_provider.cc b/components/os_crypt/async/browser/dpapi_key_provider.cc
-index 0bfbac71af..6c131a93eb 100644
+index 0bfbac71af..f8d0adf00b 100644
 --- a/components/os_crypt/async/browser/dpapi_key_provider.cc
 +++ b/components/os_crypt/async/browser/dpapi_key_provider.cc
-@@ -9,8 +9,12 @@
+@@ -9,8 +9,13 @@
  
  #include <wincrypt.h>
  
 +#include <array>
++#include <cstdlib>
 +
  #include "base/base64.h"
 +#include "base/command_line.h"
@@ -475,7 +344,7 @@ index 0bfbac71af..6c131a93eb 100644
  #include "base/logging.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/notreached.h"
-@@ -18,6 +22,8 @@
+@@ -18,6 +23,8 @@
  #include "base/win/scoped_localalloc.h"
  #include "components/os_crypt/async/common/algorithm.mojom.h"
  #include "components/prefs/pref_service.h"
@@ -484,7 +353,7 @@ index 0bfbac71af..6c131a93eb 100644
  
  namespace os_crypt_async {
  
-@@ -65,6 +71,27 @@ DPAPIKeyProvider::~DPAPIKeyProvider() = default;
+@@ -65,6 +72,34 @@ DPAPIKeyProvider::~DPAPIKeyProvider() = default;
  
  base::expected<Encryptor::Key, DPAPIKeyProvider::KeyStatus>
  DPAPIKeyProvider::GetKeyInternal() {
@@ -495,16 +364,23 @@ index 0bfbac71af..6c131a93eb 100644
 +  // not registered when this switch is present (browser_process_impl.cc), so this
 +  // DPAPI provider is the primary encryptor.
 +  {
-+    const std::string vgc_secret =
-+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-+            "vgc-crypt-secret");
++    // Prefer the env var (not exposed in argv via `ps`/Task Manager) and fall back
++    // to the --vgc-crypt-secret switch for backward compatibility.
++    std::string vgc_secret;
++    if (const char* env_secret = std::getenv("VGC_CRYPT_SECRET")) {
++      vgc_secret = env_secret;
++    }
++    if (vgc_secret.empty()) {
++      vgc_secret = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-crypt-secret");
++    }
 +    if (!vgc_secret.empty()) {
 +      static constexpr auto kVgcSalt =
 +          std::to_array<uint8_t>({'s', 'a', 'l', 't', 'y', 's', 'a', 'l', 't'});
 +      std::array<uint8_t, 16> key_bytes;
 +      crypto::kdf::Pbkdf2HmacSha1({.iterations = 1003},
 +                                  base::as_byte_span(vgc_secret), kVgcSalt,
-+                                  key_bytes, crypto::SubtlePassKey::ForTesting());
++                                  key_bytes, crypto::SubtlePassKey{});
 +      return Encryptor::Key(key_bytes, mojom::Algorithm::kAES128CBC);
 +    }
 +  }
@@ -513,10 +389,15 @@ index 0bfbac71af..6c131a93eb 100644
      return base::unexpected(KeyStatus::kKeyNotFound);
    }
 diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
-index f240dc22ee..b9403a1b87 100644
+index f240dc22ee..09844a18d5 100644
 --- a/components/os_crypt/common/keychain_password_mac.mm
 +++ b/components/os_crypt/common/keychain_password_mac.mm
-@@ -11,6 +11,7 @@
+@@ -7,10 +7,12 @@
+ #import <Security/Security.h>
+ 
+ #include <atomic>
++#include <cstdlib>
+ 
  #include "base/apple/osstatus_logging.h"
  #include "base/apple/scoped_cftyperef.h"
  #include "base/base64.h"
@@ -524,7 +405,7 @@ index f240dc22ee..b9403a1b87 100644
  #include "base/containers/span.h"
  #include "base/metrics/histogram_functions.h"
  #include "base/no_destructor.h"
-@@ -126,6 +127,21 @@ KeychainPassword::KeychainPassword(KeychainV2& keychain)
+@@ -126,6 +128,29 @@
  KeychainPassword::~KeychainPassword() = default;
  
  std::string KeychainPassword::GetPassword() const {
@@ -535,9 +416,17 @@ index f240dc22ee..b9403a1b87 100644
 +  // "saltysalt" → AES-128-CBC, tag "v10") is identical on every platform, so the
 +  // ciphertext is cross-compatible. Falls back to the real Keychain when absent.
 +  {
-+    const std::string vgc_secret =
-+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-+            "vgc-crypt-secret");
++    // Prefer the environment variable (NOT visible in `ps` argv to other local
++    // users, unlike the --vgc-crypt-secret switch) and fall back to the switch for
++    // backward compatibility with older app builds.
++    std::string vgc_secret;
++    if (const char* env_secret = std::getenv("VGC_CRYPT_SECRET")) {
++      vgc_secret = env_secret;
++    }
++    if (vgc_secret.empty()) {
++      vgc_secret = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "vgc-crypt-secret");
++    }
 +    if (!vgc_secret.empty()) {
 +      return vgc_secret;
 +    }
@@ -564,29 +453,23 @@ index ea1b977331..a13f832fb3 100644
  // static
  void TranslateManager::SetIgnoreMissingKeyForTesting(bool ignore) {
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
-index aa3d9236fd..855a8dd744 100644
+index eb0e6f4157..3fe893124c 100644
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@ -32,6 +32,7 @@
- #include <memory>
- #include <utility>
- 
+@@ -184,6 +184,8 @@
+ #include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/frame/visual_viewport.h"
+ #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
++#include <cmath>
 +#include "base/command_line.h"
- #include "base/containers/adapters.h"
- #include "base/feature_list.h"
- #include "cc/input/snap_selection_strategy.h"
-@@ -3442,6 +3443,52 @@ void Element::ClientQuads(Vector<gfx::QuadF>& quads) const {
-   }
- }
+ #include "third_party/blink/renderer/core/geometry/dom_rect.h"
+ #include "third_party/blink/renderer/core/geometry/dom_rect_list.h"
+ #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+@@ -322,6 +324,44 @@ namespace blink {
  
-+namespace {
-+
-+// VGC Core: per-profile client-rect farbling seeded from --vgc-seed (reuses the existing
-+// switch, already forwarded to the renderer). Native so there is no JS Element.prototype
-+// override to lie-detect, AND it farbles getClientRects + getBoundingClientRect
-+// CONSISTENTLY — the old JS half-measure only touched getBoundingClientRect, so
-+// getBoundingClientRect(el).width != getClientRects(el)[0].width was itself a tell. Same
-+// (seed, rounded value) ⇒ same ±~1e-4 delta ⇒ stable across reads.
+ namespace {
+ 
++// VGC Core: per-profile FNV-1a seed from --vgc-seed. 0 => absent => no-op (stock).
 +uint32_t VgcRectSeed() {
 +  static const uint32_t seed = [] {
 +    const std::string s =
@@ -602,20 +485,21 @@ index aa3d9236fd..855a8dd744 100644
 +  }();
 +  return seed;
 +}
++
++// Deterministic sub-pixel offset for one metric (salt separates x/y/w/h).
 +double VgcRectNoise(double v, uint32_t salt) {
 +  const uint32_t seed = VgcRectSeed();
 +  if (seed == 0)
 +    return v;
-+  // Seed the delta from the value rounded to the NEAREST PIXEL (not *1000): the raw layout
-+  // value jitters at the sub-pixel level between separate getBoundingClientRect /
-+  // getClientRects queries, and a fine quantization straddled the boundary → different
-+  // delta → bcr != cr[0] (a tell). Integer-pixel quantization is stable across that jitter,
-+  // so the same metric gets the same delta everywhere and the two APIs stay consistent.
-+  const int64_t q = static_cast<int64_t>(v < 0 ? v - 0.5 : v + 0.5);
-+  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(q);
-+  s ^= s >> 15; s *= 0x2C1B3C6Du; s ^= s >> 12; s *= 0x297A2D39u; s ^= s >> 15;
++  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(std::llround(v * 1000.0));
++  s ^= s >> 15;
++  s *= 0x2C1B3C6Du;
++  s ^= s >> 12;
++  s *= 0x297A2D39u;
++  s ^= s >> 15;
 +  return v + ((static_cast<double>(s & 0xFFFFu) / 65535.0) - 0.5) * 0.0002;
 +}
++
 +gfx::RectF VgcNoiseRectF(const gfx::RectF& r) {
 +  if (VgcRectSeed() == 0)
 +    return r;
@@ -623,49 +507,25 @@ index aa3d9236fd..855a8dd744 100644
 +                    VgcRectNoise(r.width(), 0x3003u), VgcRectNoise(r.height(), 0x4004u));
 +}
 +
-+}  // namespace
-+
- DOMRectList* Element::getClientRects() {
-   Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
-   if (rects.empty()) {
-@@ -3452,6 +3499,7 @@ DOMRectList* Element::getClientRects() {
+ class DisplayLockStyleScope {
+   STACK_ALLOCATED();
+ 
+@@ -3455,6 +3495,7 @@ DOMRectList* Element::getClientRects() {
    for (auto& rect : rects) {
      GetDocument().AdjustRectForScrollAndAbsoluteZoom(rect,
                                                       *element_layout_object);
-+    rect = VgcNoiseRectF(rect);  // VGC: farble so getClientRects hashing differs per profile
++    rect = VgcNoiseRectF(rect);  // VGC Core: farble each client rect (per-profile seed)
    }
    return MakeGarbageCollected<DOMRectList>(rects);
  }
-@@ -3505,7 +3553,31 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
+@@ -3508,7 +3549,9 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
  DOMRect* Element::GetBoundingClientRect() {
    GetDocument().EnsurePaintLocationDataValidForNode(
        this, DocumentUpdateReason::kJavaScript);
 -  return DOMRect::FromRectF(GetBoundingClientRectNoLifecycleUpdate());
-+  gfx::RectF bounds = GetBoundingClientRectNoLifecycleUpdate();
-+  // VGC: build the bounding rect from the SAME per-rect farbling getClientRects() applies,
-+  // then union — so union(getClientRects) == getBoundingClientRect exactly (a detector that
-+  // cross-checks the two sees no discrepancy). Internal callers use the raw NoLifecycleUpdate
-+  // path above, so layout/hit-testing are unaffected. Single-rect elements ⇒ bcr == cr[0].
-+  if (VgcRectSeed() != 0) {
-+    Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
-+    LayoutObject* lo = GetLayoutObject();
-+    if (!rects.empty() && lo) {
-+      gfx::RectF u;
-+      bool first = true;
-+      for (auto& r : rects) {
-+        GetDocument().AdjustRectForScrollAndAbsoluteZoom(r, *lo);
-+        r = VgcNoiseRectF(r);
-+        if (first) {
-+          u = r;
-+          first = false;
-+        } else {
-+          u.Union(r);
-+        }
-+      }
-+      bounds = u;
-+    }
-+  }
-+  return DOMRect::FromRectF(bounds);
++  // VGC Core: farble the bounding rect at the source (per-profile --vgc-seed).
++  return DOMRect::FromRectF(
++      VgcNoiseRectF(GetBoundingClientRectNoLifecycleUpdate()));
  }
  
  DOMRect* Element::GetBoundingClientRectForBinding() {
@@ -782,7 +642,7 @@ index 22243ebf5e..ad14d501af 100644
    // Match Safari and Mozilla on Mac x86.
    return "MacIntel";
 diff --git a/third_party/blink/renderer/core/frame/navigator_language.cc b/third_party/blink/renderer/core/frame/navigator_language.cc
-index 75cd346131..2b7c247ee6 100644
+index 75cd346131..58d02ecfab 100644
 --- a/third_party/blink/renderer/core/frame/navigator_language.cc
 +++ b/third_party/blink/renderer/core/frame/navigator_language.cc
 @@ -69,6 +69,19 @@ void NavigatorLanguage::SetLanguagesForTesting(const String& languages) {
@@ -792,7 +652,7 @@ index 75cd346131..2b7c247ee6 100644
 +  // VGC Core: native navigator.languages / navigator.language override from
 +  // --vgc-accept-languages, so a profile reports the proxy country's locale (e.g.
 +  // "en-US,en") instead of the host OS locale (which leaked identically across every
-+  // profile, and which stock --lang truncated to a single entry).
++  // profile). On macOS the stock --lang plumbing is a no-op — this is the real lever.
 +  const std::string vgc_langs =
 +      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
 +          "vgc-accept-languages");
@@ -806,7 +666,7 @@ index 75cd346131..2b7c247ee6 100644
    probe::ApplyAcceptLanguageOverride(execution_context_,
                                       &accept_languages_override);
 diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
-index 69ffc2b05f..359e572ba6 100644
+index 69ffc2b05f..88f25d7763 100644
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
 @@ -28,7 +28,10 @@
@@ -820,17 +680,13 @@ index 69ffc2b05f..359e572ba6 100644
  #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
  #include "third_party/blink/renderer/core/event_target_names.h"
  #include "third_party/blink/renderer/core/frame/local_dom_window.h"
-@@ -40,6 +43,50 @@
+@@ -40,6 +43,47 @@
  
  namespace blink {
  
 +namespace {
 +
-+// VGC Core: parse --vgc-screen=WIDTHxHEIGHT and --vgc-color-depth once. Absent ⇒ no-op.
-+// Moves the screen spoof off the JS Screen.prototype getters (the most lie-detectable
-+// surface left) into the C++ accessor, so there is no JS tell. availLeft/availTop become
-+// 0 (primary monitor) and availHeight is height minus a taskbar inset (mirrors the JS
-+// "height - 40"). The switch is forwarded to the renderer via kVgcSwitches.
++// VGC Core: parse --vgc-screen=WIDTHxHEIGHT and --vgc-color-depth once. Absent => no-op.
 +struct VgcScreenCfg {
 +  int width = 0;
 +  int height = 0;
@@ -864,6 +720,7 @@ index 69ffc2b05f..359e572ba6 100644
 +  }();
 +  return cfg;
 +}
++// Menubar/taskbar inset removed from the reported avail height (mirrors JS "height - 40").
 +constexpr int kVgcTaskbarInset = 40;
 +
 +}  // namespace
@@ -871,7 +728,7 @@ index 69ffc2b05f..359e572ba6 100644
  Screen::Screen(LocalDOMWindow* window, int64_t display_id)
      : ExecutionContextClient(window), display_id_(display_id) {}
  
-@@ -79,12 +126,16 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+@@ -79,12 +123,16 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
  }
  
  int Screen::height() const {
@@ -888,7 +745,7 @@ index 69ffc2b05f..359e572ba6 100644
    if (!DomWindow())
      return 0;
    return GetRect(/*available=*/false).width();
-@@ -97,6 +148,8 @@ unsigned Screen::colorDepth() const {
+@@ -97,6 +145,8 @@ unsigned Screen::colorDepth() const {
    // https://drafts.csswg.org/cssom-view/#dom-screen-colordepth
    unsigned unknown_color_depth = 24u;
  
@@ -897,7 +754,7 @@ index 69ffc2b05f..359e572ba6 100644
    if (!DomWindow()) {
      return unknown_color_depth;
    }
-@@ -110,24 +163,32 @@ unsigned Screen::pixelDepth() const {
+@@ -110,24 +160,32 @@ unsigned Screen::pixelDepth() const {
  }
  
  int Screen::availLeft() const {
@@ -1061,90 +918,8 @@ index cac05bfc5b..722e51a35f 100644
      }
    }
  
-diff --git a/third_party/blink/renderer/modules/netinfo/network_information.cc b/third_party/blink/renderer/modules/netinfo/network_information.cc
-index 976a3c8c36..f857903b8a 100644
---- a/third_party/blink/renderer/modules/netinfo/network_information.cc
-+++ b/third_party/blink/renderer/modules/netinfo/network_information.cc
-@@ -6,6 +6,7 @@
- 
- #include <algorithm>
- 
-+#include "base/command_line.h"
- #include "base/time/time.h"
- #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
- #include "third_party/blink/public/platform/task_type.h"
-@@ -27,6 +28,31 @@ namespace blink {
- 
- namespace {
- 
-+// VGC Core: per-profile navigator.connection spoof seeded from --vgc-seed. NetworkInformation
-+// is the SAME class for window and WorkerNavigator, so this covers BOTH — the old JS guard
-+// only spoofed the window (a worker leaked the real, per-session rtt/downlink, and disagreed
-+// with the window). Values are stable per profile and in Chrome's rounded, plausible range.
-+uint32_t VgcNetSeed() {
-+  static const uint32_t seed = [] {
-+    const std::string s =
-+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
-+    if (s.empty())
-+      return 0u;
-+    uint32_t h = 2166136261u;
-+    for (char c : s) {
-+      h ^= static_cast<uint8_t>(c);
-+      h *= 16777619u;
-+    }
-+    return h == 0u ? 1u : h;
-+  }();
-+  return seed;
-+}
-+uint32_t VgcNetHash(uint32_t salt) {
-+  uint32_t s = VgcNetSeed() ^ salt;
-+  s ^= s >> 16; s *= 0x85EBCA6Bu; s ^= s >> 13; s *= 0xC2B2AE35u; s ^= s >> 16;
-+  return s;
-+}
-+
- V8ConnectionType::Enum ConnectionTypeToEnum(WebConnectionType type) {
-   switch (type) {
-     case kWebConnectionTypeCellular2G:
-@@ -111,6 +137,8 @@ double NetworkInformation::downlinkMax() const {
- }
- 
- V8EffectiveConnectionType NetworkInformation::effectiveType() {
-+  if (VgcNetSeed() != 0)
-+    return V8EffectiveConnectionType(V8EffectiveConnectionType::Enum::k4G);
-   MaybeShowWebHoldbackConsoleMsg();
-   std::optional<WebEffectiveConnectionType> override_ect =
-       GetNetworkStateNotifier().GetWebHoldbackEffectiveType();
-@@ -132,6 +160,8 @@ V8EffectiveConnectionType NetworkInformation::effectiveType() {
- }
- 
- uint32_t NetworkInformation::rtt() {
-+  if (VgcNetSeed() != 0)
-+    return 25u + (VgcNetHash(0x2717u) % 8u) * 25u;  // 25..200 ms, seeded, stable
-   MaybeShowWebHoldbackConsoleMsg();
-   std::optional<base::TimeDelta> override_rtt =
-       GetNetworkStateNotifier().GetWebHoldbackHttpRtt();
-@@ -148,6 +178,10 @@ uint32_t NetworkInformation::rtt() {
- }
- 
- double NetworkInformation::downlink() {
-+  if (VgcNetSeed() != 0) {
-+    static const double kDl[] = {10.0, 9.0, 8.5, 7.5, 6.5, 5.5, 4.5};
-+    return kDl[VgcNetHash(0x5171u) % 7u];  // seeded, stable per profile
-+  }
-   MaybeShowWebHoldbackConsoleMsg();
-   std::optional<double> override_downlink_mbps =
-       GetNetworkStateNotifier().GetWebHoldbackDownlinkThroughputMbps();
-@@ -165,6 +199,8 @@ double NetworkInformation::downlink() {
- }
- 
- bool NetworkInformation::saveData() const {
-+  if (VgcNetSeed() != 0)
-+    return false;
-   bool save_data =
-       IsObserving() ? save_data_ : GetNetworkStateNotifier().SaveDataEnabled();
- 
 diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
-index fcac660801..4cadc6d00a 100644
+index fcac660801..6492112be9 100644
 --- a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 @@ -25,6 +25,9 @@
@@ -1165,7 +940,7 @@ index fcac660801..4cadc6d00a 100644
  #include "third_party/blink/renderer/modules/webaudio/audio_listener.h"
  #include "third_party/blink/renderer/modules/webaudio/deferred_task_handler.h"
  #include "third_party/blink/renderer/modules/webaudio/offline_audio_completion_event.h"
-@@ -53,6 +57,68 @@ namespace blink {
+@@ -53,6 +57,57 @@ namespace blink {
  
  namespace {
  
@@ -1189,35 +964,22 @@ index fcac660801..4cadc6d00a 100644
 +  return seed;
 +}
 +
-+// Deterministic per-(seed,index) value in [-1, 1).
-+inline float VgcNoiseFloat(uint32_t seed, uint64_t index) {
++inline uint8_t VgcNoiseBit(uint32_t seed, uint64_t index) {
 +  uint32_t x = seed ^ (static_cast<uint32_t>(index) * 0x9E3779B9u);
 +  x ^= x >> 16;
 +  x *= 0x85EBCA6Bu;
 +  x ^= x >> 13;
 +  x *= 0xC2B2AE35u;
 +  x ^= x >> 16;
-+  return (static_cast<float>(x) / 2147483648.0f) - 1.0f;  // [0,2) - 1 = [-1,1)
++  return static_cast<uint8_t>(x & 1u);
 +}
 +
-+// Per-profile audio farble. The OLD version only flipped the mantissa LSB (~1 ULP,
-+// ~1e-7): a fingerprinter that SUMS the render and rounds to a few decimals saw
-+// identical audio across profiles (a same-machine correlator). We now:
-+//   1. add a per-sample deterministic noise of ±~1e-5 (breaks any max-normalised hash,
-+//      shifts sums by ~1e-4..1e-3 → survives rounding), and
-+//   2. apply a per-seed uniform fudge factor 1±~1.5e-4 (shifts any sum/hash of the whole
-+//      render proportionally and robustly, even one that ignores per-sample noise).
-+// Both are deterministic per profile (stable across reads) and ~-100 dB (inaudible).
++// Flip the mantissa LSB of every sample (~1 ULP, ~1e-7 for unit-scale audio —
++// inaudible) so any sum/hash of the samples shifts deterministically per profile.
 +void VgcFarbleAudioBuffer(AudioBuffer* buffer) {
 +  const uint32_t seed = VgcAudioSeed();
 +  if (seed == 0 || !buffer)
 +    return;
-+  uint32_t fx = seed;
-+  fx ^= fx >> 16;
-+  fx *= 0x85EBCA6Bu;
-+  fx ^= fx >> 13;
-+  const double ffrac = static_cast<double>(fx & 0xFFFFFFu) / 16777216.0;  // [0,1)
-+  const float fudge = static_cast<float>(1.0 + (ffrac - 0.5) * 3.0e-4);   // 1 ± 1.5e-4
 +  uint64_t idx = 1;
 +  const unsigned channels = buffer->numberOfChannels();
 +  for (unsigned c = 0; c < channels; ++c) {
@@ -1226,7 +988,9 @@ index fcac660801..4cadc6d00a 100644
 +      continue;
 +    base::span<float> samples = array->AsSpan();
 +    for (float& sample : samples) {
-+      sample = sample * fudge + VgcNoiseFloat(seed, idx++) * 1.0e-5f;
++      uint32_t bits = base::bit_cast<uint32_t>(sample);
++      bits ^= VgcNoiseBit(seed, idx++);
++      sample = base::bit_cast<float>(bits);
 +    }
 +  }
 +}
@@ -1234,7 +998,7 @@ index fcac660801..4cadc6d00a 100644
  OfflineAudioContext* CreateOfflineAudioContext(
      ExecutionContext* context,
      unsigned number_of_channels,
-@@ -432,6 +498,10 @@ void OfflineAudioContext::FireCompletionEvent() {
+@@ -432,6 +487,10 @@ void OfflineAudioContext::FireCompletionEvent() {
        return;
      }
  
@@ -1354,104 +1118,90 @@ index 867f4bfb2a..0f586ba417 100644
  
  void WebGLRenderingContextBase::RenderbufferStorageImpl(
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 506b181809..69ce11bf5a 100644
+index 506b181809..d64aa755ad 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
-@@ -31,8 +31,15 @@
+@@ -31,10 +31,15 @@
  
  #include <limits>
  #include <memory>
-+#include <optional>
 +#include <string>
 +#include <unordered_set>
  
  #include "base/byte_size.h"
 +#include "base/command_line.h"
-+#include "base/no_destructor.h"
-+#include "base/strings/string_split.h"
-+#include "base/strings/string_util.h"
  #include "base/debug/alias.h"
  #include "base/feature_list.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
  #include "base/notreached.h"
-@@ -146,10 +153,66 @@ void FontCache::AcceptLanguagesChanged(const String& accept_languages) {
-   LayoutLocale::AcceptLanguagesChanged(accept_languages);
- }
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/escape.h"
+@@ -75,6 +80,49 @@
+ 
+ namespace blink {
  
 +namespace {
-+// VGC: per-profile font allowlist. --vgc-fonts is a comma-separated list of the family
-+// names this profile is allowed to expose. Every OTHER installed family resolves to
-+// nullptr (→ CSS fallback), so the width probe (offsetWidth of a styled span),
-+// canvas measureText, and FontFaceSet.check all agree that a non-allowlisted font is
-+// "not installed". Without this, every profile on one machine enumerates the IDENTICAL
-+// real Windows font set — a high-entropy same-machine correlator Google/creepjs use to
-+// link "different" browsers. The allowlist is a SUBSET of the machine's real fonts
-+// (the app never invents fonts), so everything reported still renders for real; the
-+// per-profile variation lives in which OPTIONAL fonts are exposed, exactly mirroring how
-+// real machines differ by their installed software.
++
++// VGC Core: is this font family exposable to the page? A page fingerprints the installed font
++// set by measuring text width per family (and via document.fonts.check()); on one machine every
++// profile enumerates the SAME real fonts — a same-machine correlator. We restrict the visible set
++// to the per-profile --vgc-fonts allowlist so each profile advertises its own list. Generics,
++// system fonts (empty / '.'-prefixed / system-ui) and emoji/symbol families ALWAYS pass so
++// rendering and generic fallbacks are unaffected. No switch => empty set => no filtering (stock).
 +bool VgcFontAllowed(const AtomicString& family) {
-+  // std types (not WTF::String) so the parsed set can be read from font-matching on
-+  // worker threads (OffscreenCanvas) without WTF string refcount races.
-+  static const base::NoDestructor<std::optional<std::unordered_set<std::string>>> allow(
-+      [] {
-+        std::optional<std::unordered_set<std::string>> set;
-+        std::string raw =
-+            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-fonts");
-+        if (!raw.empty()) {
-+          std::unordered_set<std::string> s;
-+          for (const auto& piece : base::SplitString(
-+                   raw, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-+            s.insert(base::ToLowerASCII(piece));
-+          }
-+          set = std::move(s);
-+        }
-+        return set;
-+      }());
-+  if (!allow->has_value()) {
-+    return true;  // switch absent → do not restrict anything
-+  }
-+  if (family.empty()) {
-+    return true;
-+  }
-+  const std::string lower = base::ToLowerASCII(String(family).Utf8());
-+  // Generic keywords + a minimal set of always-present Windows fonts, so page/UI
-+  // rendering and the default fallback chain never break regardless of the allowlist.
-+  static const char* const kAlways[] = {
-+      "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui",
-+      "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math",
-+      "-webkit-standard", "-webkit-body", "segoe ui", "arial", "times new roman",
-+      "courier new", "tahoma", "verdana", "ms shell dlg", "ms shell dlg 2"};
-+  for (const char* g : kAlways) {
-+    if (lower == g) {
-+      return true;
++  static const std::unordered_set<std::string>* const allow = [] {
++    auto* s = new std::unordered_set<std::string>();
++    const std::string v =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-fonts");
++    for (const auto& f : base::SplitString(v, ",", base::TRIM_WHITESPACE,
++                                           base::SPLIT_WANT_NONEMPTY)) {
++      s->insert(base::ToLowerASCII(f));
 +    }
++    return s;
++  }();
++  if (allow->empty())
++    return true;  // no --vgc-fonts => do not filter
++  if (family.empty())
++    return true;
++  const std::string fam = base::ToLowerASCII(std::string(family.Utf8()));
++  if (fam.empty() || fam[0] == '.')
++    return true;  // system UI fonts (.AppleSystemUIFont, .SF NS, …) — never hide
++  static const char* const kGeneric[] = {
++      "serif",     "sans-serif",     "monospace",      "cursive",
++      "fantasy",   "system-ui",      "-apple-system",  "-webkit-body",
++      "-webkit-standard", "ui-serif", "ui-sans-serif", "ui-monospace",
++      "ui-rounded", "math",          "emoji",          "fangsong"};
++  for (const char* g : kGeneric) {
++    if (fam == g)
++      return true;
 +  }
-+  return (*allow)->count(lower) > 0;
++  if (fam.find("emoji") != std::string::npos ||
++      fam.find("symbol") != std::string::npos)
++    return true;  // color-emoji / symbol fonts must always resolve
++  return allow->count(fam) > 0;
 +}
++
 +}  // namespace
 +
- const SimpleFontData* FontCache::GetFontData(
-     const FontDescription& font_description,
-     const AtomicString& family,
-     AlternateFontName altername_font_name) {
-+  // VGC: hide fonts outside this profile's allowlist (see VgcFontAllowed).
-+  if (!VgcFontAllowed(family)) {
+ const char kColorEmojiLocale[] = "und-Zsye";
+ const char kMonoEmojiLocale[] = "und-Zsym";
+ 
+@@ -131,6 +179,14 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+     AlternateFontName alternate_font_name) {
+   TRACE_EVENT0("fonts", "FontCache::GetFontPlatformData");
+ 
++  // VGC Core: hide fonts outside the per-profile --vgc-fonts allowlist. Returning nullptr makes
++  // the family unavailable, so measureText falls back (width == fallback => "not installed") and
++  // document.fonts.check() returns false — both driven through this one path.
++  if (creation_params.CreationType() == kCreateFontByFamily &&
++      !VgcFontAllowed(creation_params.Family())) {
 +    return nullptr;
 +  }
-   if (const FontPlatformData* platform_data = GetFontPlatformData(
-           font_description,
-           FontFaceCreationParams(
-@@ -171,6 +234,11 @@ const SimpleFontData* FontCache::FontDataFromFontPlatformData(
- bool FontCache::IsPlatformFamilyMatchAvailable(
-     const FontDescription& font_description,
-     const AtomicString& family) {
-+  // VGC: a non-allowlisted family must report as unavailable here too, so
-+  // FontFaceSet.check() / document.fonts.check() agree with the layout path.
-+  if (!VgcFontAllowed(family)) {
-+    return false;
-+  }
-   return GetFontPlatformData(
-       font_description,
-       FontFaceCreationParams(AdjustFamilyNameToAvoidUnsupportedFonts(family)),
++
+ #if !BUILDFLAG(IS_MAC)
+   if (creation_params.CreationType() == kCreateFontByFamily &&
+       creation_params.Family() == font_family_names::kSystemUi) {
 diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
 index c76f6553e1..a3d69ffa72 100644
 --- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
