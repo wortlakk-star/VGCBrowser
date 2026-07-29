@@ -1,0 +1,85 @@
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index 506b181809..d64aa755ad 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -31,10 +31,15 @@
+ 
+ #include <limits>
+ #include <memory>
++#include <string>
++#include <unordered_set>
+ 
+ #include "base/byte_size.h"
++#include "base/command_line.h"
+ #include "base/debug/alias.h"
+ #include "base/feature_list.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
+ #include "base/notreached.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/escape.h"
+@@ -75,6 +80,49 @@
+ 
+ namespace blink {
+ 
++namespace {
++
++// VGC Core: is this font family exposable to the page? A page fingerprints the installed font
++// set by measuring text width per family (and via document.fonts.check()); on one machine every
++// profile enumerates the SAME real fonts — a same-machine correlator. We restrict the visible set
++// to the per-profile --vgc-fonts allowlist so each profile advertises its own list. Generics,
++// system fonts (empty / '.'-prefixed / system-ui) and emoji/symbol families ALWAYS pass so
++// rendering and generic fallbacks are unaffected. No switch => empty set => no filtering (stock).
++bool VgcFontAllowed(const AtomicString& family) {
++  static const std::unordered_set<std::string>* const allow = [] {
++    auto* s = new std::unordered_set<std::string>();
++    const std::string v =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-fonts");
++    for (const auto& f : base::SplitString(v, ",", base::TRIM_WHITESPACE,
++                                           base::SPLIT_WANT_NONEMPTY)) {
++      s->insert(base::ToLowerASCII(f));
++    }
++    return s;
++  }();
++  if (allow->empty())
++    return true;  // no --vgc-fonts => do not filter
++  if (family.empty())
++    return true;
++  const std::string fam = base::ToLowerASCII(std::string(family.Utf8()));
++  if (fam.empty() || fam[0] == '.')
++    return true;  // system UI fonts (.AppleSystemUIFont, .SF NS, …) — never hide
++  static const char* const kGeneric[] = {
++      "serif",     "sans-serif",     "monospace",      "cursive",
++      "fantasy",   "system-ui",      "-apple-system",  "-webkit-body",
++      "-webkit-standard", "ui-serif", "ui-sans-serif", "ui-monospace",
++      "ui-rounded", "math",          "emoji",          "fangsong"};
++  for (const char* g : kGeneric) {
++    if (fam == g)
++      return true;
++  }
++  if (fam.find("emoji") != std::string::npos ||
++      fam.find("symbol") != std::string::npos)
++    return true;  // color-emoji / symbol fonts must always resolve
++  return allow->count(fam) > 0;
++}
++
++}  // namespace
++
+ const char kColorEmojiLocale[] = "und-Zsye";
+ const char kMonoEmojiLocale[] = "und-Zsym";
+ 
+@@ -131,6 +179,14 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+     AlternateFontName alternate_font_name) {
+   TRACE_EVENT0("fonts", "FontCache::GetFontPlatformData");
+ 
++  // VGC Core: hide fonts outside the per-profile --vgc-fonts allowlist. Returning nullptr makes
++  // the family unavailable, so measureText falls back (width == fallback => "not installed") and
++  // document.fonts.check() returns false — both driven through this one path.
++  if (creation_params.CreationType() == kCreateFontByFamily &&
++      !VgcFontAllowed(creation_params.Family())) {
++    return nullptr;
++  }
++
+ #if !BUILDFLAG(IS_MAC)
+   if (creation_params.CreationType() == kCreateFontByFamily &&
+       creation_params.Family() == font_family_names::kSystemUi) {
