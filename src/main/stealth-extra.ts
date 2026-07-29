@@ -91,11 +91,18 @@ try {
   // not constructable, and returning a plain Array is a stronger '[object Array]' tell than the
   // farbling is worth — the native patch 07-client-rects-native.patch farbles getClientRects at
   // the C++ level (real DOMRectList) once the engine is rebuilt.
-  // __vgcNative (set by the guard's screenScript) = the VGC Core engine already farbles BOTH
-  // getBoundingClientRect AND getClientRects natively — so skip the JS half-measure (which
-  // only touched getBoundingClientRect → a getBoundingClientRect≠getClientRects mismatch).
-  // Undefined in CDP mode / on the system-Chrome fallback → the JS path still runs.
-  if (XCFG.clientRects && (typeof __vgcNative === 'undefined' || __vgcNative !== true)) {
+  // Detect NATIVE client-rects farbling (07-client-rects-native.patch, element.cc): a DETACHED
+  // element's getBoundingClientRect is all-zero in stock Chrome, but the native farble shifts it
+  // by ~1e-4 — so a non-zero coordinate means the ENGINE already farbles at the source. Then we
+  // skip the JS override (which would both double-noise AND re-add the very JS getter tell the
+  // native patch removes). Detected per-vector (independent of __vgcNative, which gates only the
+  // still-JS connection). On the system-Chrome fallback / old engines the probe is 0 → JS runs.
+  var __vgcRectsNative = false;
+  try {
+    var _probe = document.createElement('div').getBoundingClientRect();
+    __vgcRectsNative = (_probe.x !== 0 || _probe.y !== 0 || _probe.width !== 0 || _probe.height !== 0);
+  } catch(e){}
+  if (XCFG.clientRects && !__vgcRectsNative) {
     try {
       function xrn(v, salt){
         var s = (XCFG.seed ^ (salt>>>0) ^ ((Math.round(v*1000))>>>0)) >>> 0;

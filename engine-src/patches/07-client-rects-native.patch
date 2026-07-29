@@ -1,35 +1,27 @@
 # VGC Core — native client-rects farbling (getBoundingClientRect / getClientRects)
-#
-# STATUS: DRAFT — a HAND-APPLICATION GUIDE, not a git-apply-able diff (bare `@@ method {`
-# markers, anchored by METHOD NAME — see README). Locate Element::getBoundingClientRect and
-# Element::getClientRects in a real M151 checkout, add the anonymous-namespace helpers, insert
-# the marked `+` lines, then rebuild `chrome`. Regenerate as a real `git diff` before committing
-# it as a "verified" patch. Reuses the EXISTING --vgc-seed switch — already passed by
-# profile-manager.ts AND already in patch 02's kVgcSwitches allowlist (forwarded to the
-# renderer), so NO new switch or forwarding change is needed.
-#
-# WHY NATIVE: the JS version (src/main/stealth-extra.ts) overrides Element.prototype
-# getters, which a lie-detector can flag via toString/descriptor probing. This C++ patch
-# perturbs the rect at the source, so there is no JS tell. After this lands + verifies,
-# set XCFG.clientRects to false for the native engine so the JS path stops double-noising.
-#
-# ALGORITHM: same shape as the JS farbling — a deterministic per-metric sub-pixel offset
-# (~±1e-4 px) seeded from --vgc-seed. Same (seed, rounded-value) ⇒ same delta ⇒ stable
-# across reads; different values ⇒ different deltas ⇒ ratios shift too.
-
+# STATUS: ✅ VERIFIED — real, git-apply-able diff (built + validated on M151). getBoundingClientRect
+# returns a farbled rect from a NATIVE getter (no JS override); a DETACHED element's rect is non-zero
+# (0,0,0,0 farbled), which the JS layer uses to auto-detect native and skip its own client-rects
+# spoof (stealth-extra __vgcRectsNative). Reuses --vgc-seed (already in kVgcSwitches, patch 02).
+# Same algorithm shape as the JS (stealth-extra.ts): deterministic ~±1e-4 px per-metric offset.
+diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
+index eb0e6f4157..3fe893124c 100644
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@
- #include "base/auto_reset.h"
+@@ -184,6 +184,8 @@
+ #include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/frame/visual_viewport.h"
+ #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
++#include <cmath>
 +#include "base/command_line.h"
-+#include "base/strings/string_number_conversions.h"
  #include "third_party/blink/renderer/core/geometry/dom_rect.h"
  #include "third_party/blink/renderer/core/geometry/dom_rect_list.h"
-@@ namespace blink {
-
-+namespace {
-+
-+// VGC Core: per-profile FNV-1a seed from --vgc-seed. 0 ⇒ absent ⇒ no-op (stock).
+ #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+@@ -322,6 +324,44 @@ namespace blink {
+ 
+ namespace {
+ 
++// VGC Core: per-profile FNV-1a seed from --vgc-seed. 0 => absent => no-op (stock).
 +uint32_t VgcRectSeed() {
 +  static const uint32_t seed = [] {
 +    const std::string s =
@@ -46,14 +38,17 @@
 +  return seed;
 +}
 +
-+// Deterministic sub-pixel offset for one metric. salt separates x/y/w/h so a value
-+// that appears as both (e.g. an element at x==width) still gets independent deltas.
++// Deterministic sub-pixel offset for one metric (salt separates x/y/w/h).
 +double VgcRectNoise(double v, uint32_t salt) {
 +  const uint32_t seed = VgcRectSeed();
 +  if (seed == 0)
 +    return v;
-+  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(llround(v * 1000.0));
-+  s ^= s >> 15; s *= 0x2C1B3C6Du; s ^= s >> 12; s *= 0x297A2D39u; s ^= s >> 15;
++  uint32_t s = seed ^ salt ^ static_cast<uint32_t>(std::llround(v * 1000.0));
++  s ^= s >> 15;
++  s *= 0x2C1B3C6Du;
++  s ^= s >> 12;
++  s *= 0x297A2D39u;
++  s ^= s >> 15;
 +  return v + ((static_cast<double>(s & 0xFFFFu) / 65535.0) - 0.5) * 0.0002;
 +}
 +
@@ -64,26 +59,25 @@
 +                    VgcRectNoise(r.width(), 0x3003u), VgcRectNoise(r.height(), 0x4004u));
 +}
 +
-+}  // namespace
-+
-@@ DOMRectList* Element::getClientRects() {
-   Vector<gfx::QuadF> quads;
-   element_layout_object->AbsoluteQuads(quads);
-   AdjustForAbsoluteZoom::AdjustQuads(quads, *element_layout_object);
-+  // VGC Core: farble each quad point so getClientRects hashing differs per profile.
-+  if (VgcRectSeed() != 0) {
-+    for (auto& q : quads) {
-+      q.set_p1(gfx::PointF(VgcRectNoise(q.p1().x(), 0x11u), VgcRectNoise(q.p1().y(), 0x12u)));
-+      q.set_p2(gfx::PointF(VgcRectNoise(q.p2().x(), 0x21u), VgcRectNoise(q.p2().y(), 0x22u)));
-+      q.set_p3(gfx::PointF(VgcRectNoise(q.p3().x(), 0x31u), VgcRectNoise(q.p3().y(), 0x32u)));
-+      q.set_p4(gfx::PointF(VgcRectNoise(q.p4().x(), 0x41u), VgcRectNoise(q.p4().y(), 0x42u)));
-+    }
-+  }
-   return MakeGarbageCollected<DOMRectList>(quads);
+ class DisplayLockStyleScope {
+   STACK_ALLOCATED();
+ 
+@@ -3455,6 +3495,7 @@ DOMRectList* Element::getClientRects() {
+   for (auto& rect : rects) {
+     GetDocument().AdjustRectForScrollAndAbsoluteZoom(rect,
+                                                      *element_layout_object);
++    rect = VgcNoiseRectF(rect);  // VGC Core: farble each client rect (per-profile seed)
+   }
+   return MakeGarbageCollected<DOMRectList>(rects);
  }
-@@ DOMRect* Element::getBoundingClientRect() {
+@@ -3508,7 +3549,9 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
+ DOMRect* Element::GetBoundingClientRect() {
    GetDocument().EnsurePaintLocationDataValidForNode(
        this, DocumentUpdateReason::kJavaScript);
 -  return DOMRect::FromRectF(GetBoundingClientRectNoLifecycleUpdate());
-+  return DOMRect::FromRectF(VgcNoiseRectF(GetBoundingClientRectNoLifecycleUpdate()));
++  // VGC Core: farble the bounding rect at the source (per-profile --vgc-seed).
++  return DOMRect::FromRectF(
++      VgcNoiseRectF(GetBoundingClientRectNoLifecycleUpdate()));
  }
+ 
+ DOMRect* Element::GetBoundingClientRectForBinding() {
