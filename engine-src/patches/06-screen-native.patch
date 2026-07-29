@@ -1,49 +1,32 @@
 # VGC Core — native screen spoof (screen.width/height/avail*/colorDepth/pixelDepth)
-#
-# STATUS: DRAFT — a HAND-APPLICATION GUIDE, not a git-apply-able diff. The hunks are anchored
-# by METHOD NAME (Chromium drifts per version — see README) with bare `@@ method {` markers, so
-# `git apply` / `patch --fuzz` will NOT apply them cleanly. Locate each named Screen::* accessor
-# in a real M151 checkout, add the anonymous-namespace helper, insert the marked `+` lines at the
-# top of each method, then rebuild `chrome`. Regenerate as a real `git diff` against your checkout
-# before committing it as a "verified" patch (as 01/02 are).
-#
-# NEW SWITCH: --vgc-screen=WIDTHxHEIGHT  (+ optional --vgc-color-depth=24)
-#   1. Wire in src/main/profile-manager.ts (native switches block, alongside --vgc-seed):
-#         `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
-#         `--vgc-color-depth=${fp.screen.colorDepth}`,
-#   2. ⚠️ FORWARD TO THE RENDERER: Screen lives in Blink (renderer), and patch 02 forwards only
-#      an ALLOWLIST (kVgcSwitches) — it does NOT include these. You MUST add "vgc-screen" and
-#      "vgc-color-depth" to kVgcSwitches in 02-forward-vgc-switches.patch AND vgc-native-all.patch,
-#      or the accessors below never see the switch and silently return the REAL display.
-#
-# WHY NATIVE: screen is currently spoofed in JS (webrtc-guard.ts screenScript +
-# stealth-extra.ts availLeft/availTop). JS getters on Screen.prototype are the single most
-# lie-detectable surface left. Overriding at the C++ accessor removes the tell entirely.
-#
-# ⚠️ AFTER THIS LANDS + VERIFIES: delete screenScript() from webrtc-guard.ts and the screen
-#   block + availLeft/availTop from the JS injectors, so native and JS do not double-spoof
-#   (double-spoofing re-introduces a JS tell on top of the now-native value). Keep the JS
-#   screen spoof ONLY on the system-Chrome / CDP fallback path, which has no native engine.
-#
-# NOTE: availHeight is width/height minus a taskbar inset (kVgcTaskbarInset), mirroring the
-#   JS "height - 40". availLeft/availTop = 0 (primary monitor). Adjust the inset per target OS
-#   if you later run non-Windows profiles.
-
+# STATUS: ✅ VERIFIED — real, git-apply-able diff (built + validated on M151, screen.width
+# returns the spoofed value from a NATIVE getter — no JS override, isNativeGetter=true).
+# Reads --vgc-screen=WIDTHxHEIGHT (+ optional --vgc-color-depth). REQUIRES "vgc-screen" and
+# "vgc-color-depth" in kVgcSwitches (02-forward-vgc-switches.patch) so the RENDERER sees them.
+# App wires the switches in profile-manager.ts; the native-mode guard (webrtc-guard.ts) then
+# auto-detects native screen (__vgcScreenNative) and drops its JS Screen getters.
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+index 69ffc2b05f..88f25d7763 100644
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
-@@
+@@ -28,7 +28,10 @@
+ 
  #include "third_party/blink/renderer/core/frame/screen.h"
-
+ 
 +#include "base/command_line.h"
+ #include "base/numerics/safe_conversions.h"
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/string_split.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/event_target_names.h"
  #include "third_party/blink/renderer/core/frame/local_dom_window.h"
- #include "third_party/blink/renderer/core/frame/local_frame.h"
-@@ namespace blink {
-
+@@ -40,6 +43,47 @@
+ 
+ namespace blink {
+ 
 +namespace {
 +
-+// VGC Core: parse --vgc-screen=WIDTHxHEIGHT and --vgc-color-depth once. Absent ⇒ no-op.
++// VGC Core: parse --vgc-screen=WIDTHxHEIGHT and --vgc-color-depth once. Absent => no-op.
 +struct VgcScreenCfg {
 +  int width = 0;
 +  int height = 0;
@@ -77,48 +60,70 @@
 +  }();
 +  return cfg;
 +}
-+// Taskbar/menubar inset removed from the reported avail height (mirrors JS "height - 40").
++// Menubar/taskbar inset removed from the reported avail height (mirrors JS "height - 40").
 +constexpr int kVgcTaskbarInset = 40;
 +
 +}  // namespace
 +
-@@ int Screen::height() const {
+ Screen::Screen(LocalDOMWindow* window, int64_t display_id)
+     : ExecutionContextClient(window), display_id_(display_id) {}
+ 
+@@ -79,12 +123,16 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+ }
+ 
+ int Screen::height() const {
 +  if (VgcScreen().has_size)
 +    return VgcScreen().height;
    if (!DomWindow())
      return 0;
-@@ int Screen::width() const {
+   return GetRect(/*available=*/false).height();
+ }
+ 
+ int Screen::width() const {
 +  if (VgcScreen().has_size)
 +    return VgcScreen().width;
    if (!DomWindow())
      return 0;
-@@ unsigned Screen::colorDepth() const {
+   return GetRect(/*available=*/false).width();
+@@ -97,6 +145,8 @@ unsigned Screen::colorDepth() const {
+   // https://drafts.csswg.org/cssom-view/#dom-screen-colordepth
+   unsigned unknown_color_depth = 24u;
+ 
 +  if (VgcScreen().has_depth)
 +    return static_cast<unsigned>(VgcScreen().depth);
-   if (!DomWindow())
-     return 0;
-@@ unsigned Screen::pixelDepth() const {
-+  if (VgcScreen().has_depth)
-+    return static_cast<unsigned>(VgcScreen().depth);
-   if (!DomWindow())
-     return 0;
-@@ int Screen::availLeft() const {
+   if (!DomWindow()) {
+     return unknown_color_depth;
+   }
+@@ -110,24 +160,32 @@ unsigned Screen::pixelDepth() const {
+ }
+ 
+ int Screen::availLeft() const {
 +  if (VgcScreen().has_size)
 +    return 0;
    if (!DomWindow())
      return 0;
-@@ int Screen::availTop() const {
+   return GetRect(/*available=*/true).x();
+ }
+ 
+ int Screen::availTop() const {
 +  if (VgcScreen().has_size)
 +    return 0;
    if (!DomWindow())
      return 0;
-@@ int Screen::availHeight() const {
+   return GetRect(/*available=*/true).y();
+ }
+ 
+ int Screen::availHeight() const {
 +  if (VgcScreen().has_size)
 +    return VgcScreen().height - kVgcTaskbarInset;
    if (!DomWindow())
      return 0;
-@@ int Screen::availWidth() const {
+   return GetRect(/*available=*/true).height();
+ }
+ 
+ int Screen::availWidth() const {
 +  if (VgcScreen().has_size)
 +    return VgcScreen().width;
    if (!DomWindow())
      return 0;
+   return GetRect(/*available=*/true).width();

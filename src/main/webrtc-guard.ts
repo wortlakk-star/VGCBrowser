@@ -109,13 +109,19 @@ function screenScript(fp: Fingerprint): string {
   // so __vgcNative is false and the full JS spoof applies as before. Same var gates
   // stealth-extra's connection/client-rects (see extraSpoofBody). devicePixelRatio +
   // matchMedia are still JS-only (no native dpr patch), so those always apply.
+  // __vgcNative gates the connection + client-rects JS spoofs in stealth-extra. Those vectors
+  // have NO native engine patch yet (only SCREEN does — screen.cc), so __vgcNative MUST stay
+  // false or their JS spoof would be wrongly skipped, leaving them unspoofed (a cross-profile
+  // correlator). Screen-native is detected SEPARATELY (__vgcScreenNative) and gates ONLY the JS
+  // Screen getters, so when the engine spoofs screen natively we drop the JS half (pure native,
+  // no lie) without disabling the still-JS connection/client-rects.
   return `
   var __vgcNative=false;
   try {
     var S=${cfg};
     var _realDpr=window.devicePixelRatio;
-    __vgcNative=(screen.width===S.width&&screen.height===S.height&&S.width>0);
-    if(!__vgcNative){
+    var __vgcScreenNative=(screen.width===S.width&&screen.height===S.height&&S.width>0);
+    if(!__vgcScreenNative){
       def(Screen.prototype,'width',function(){return S.width;});
       def(Screen.prototype,'height',function(){return S.height;});
       def(Screen.prototype,'availWidth',function(){return S.width;});

@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index faf8c2e79b..397b10e559 100644
+index faf8c2e79b..b9e187e6d9 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2854,6 +2854,19 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2854,6 +2854,28 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
    };
    command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
  
@@ -14,8 +14,17 @@ index faf8c2e79b..397b10e559 100644
 +      "vgc-hardware-concurrency",
 +      "vgc-device-memory",
 +      "vgc-platform",
++      "vgc-timezone",
 +      "vgc-seed",
 +      "vgc-crypt-secret",
++      "vgc-accept-languages",
++      "vgc-ua-full-version",
++      "vgc-ua-platform",
++      "vgc-ua-platform-version",
++      "vgc-ua-arch",
++      "vgc-ua-bitness",
++      "vgc-screen",
++      "vgc-color-depth",
 +  };
 +  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
 +
