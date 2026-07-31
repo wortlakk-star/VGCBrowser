@@ -28,6 +28,20 @@
 // every override here throw silently.) Only XCFG is interpolated; everything is wrapped in
 // try/catch so it can never throw into the page.
 
+// CAPTCHA challenge frames (Cloudflare Turnstile → challenges.cloudflare.com, hCaptcha) run
+// their OWN integrity checks and are extremely sensitive to page-script tampering — an injected
+// getter/Proxy that throws (or even just LOOKS wrong) inside the challenge iframe makes the widget
+// fail to load: "Lỗi cổng xoay 600010 — Captcha không tải được". So the JS guard BAILS OUT the moment
+// it finds itself running inside such a frame (a bare `return` from the wrapping IIFE). It costs
+// nothing: the VGC Core ENGINE spoofs (screen/UA-CH/canvas/webgl/audio/fonts/timezone/connection/
+// client-rects/deviceMemory/cores) are C++ and STILL apply inside the iframe, so the challenge sees a
+// perfectly consistent, normal Chrome — just without the extra JS overrides that were breaking it.
+// Prepended to BOTH injected bodies (native guard + CDP), so it must be self-contained (no helpers).
+// String-compare only (no regex) to keep template-literal embedding trivial. '.hcaptcha.com' = 13 chars.
+export const CAPTCHA_FRAME_BAILOUT =
+  "try{var _vh=(self.location&&self.location.hostname)||'';" +
+  "if(_vh==='challenges.cloudflare.com'||_vh==='hcaptcha.com'||_vh.slice(-13)==='.hcaptcha.com'){return;}}catch(_e){}"
+
 export interface ExtraSpoofCfg {
   /** Per-profile noise seed (FNV-1a of the profile id) — same value the engine gets
    *  via --vgc-seed, so JS-mode and native-mode noise are derived identically. */

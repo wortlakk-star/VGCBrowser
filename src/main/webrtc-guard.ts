@@ -17,7 +17,7 @@
 import { writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import type { Fingerprint } from '../shared/types'
-import { extraSpoofBody } from './stealth-extra'
+import { extraSpoofBody, CAPTCHA_FRAME_BAILOUT } from './stealth-extra'
 
 const MANIFEST = JSON.stringify({
   manifest_version: 3,
@@ -236,6 +236,7 @@ export function ensureNativeGuardExtension(
     writeFileSync(join(dir, 'manifest.json'), MANIFEST)
     const body =
       '(function(){' +
+      CAPTCHA_FRAME_BAILOUT +
       MASK_PREAMBLE +
       screenScript(fp) +
       (fp.webrtc !== 'real' ? webrtcScript(fp.webrtc, fp.webrtcPublicIp ?? '') : '') +

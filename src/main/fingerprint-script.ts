@@ -14,7 +14,7 @@
 // Hints/timezone/geo are already done natively via CDP (see cdp-injector.ts).
 
 import type { Fingerprint } from '../shared/types'
-import { extraSpoofBody } from './stealth-extra'
+import { extraSpoofBody, CAPTCHA_FRAME_BAILOUT } from './stealth-extra'
 
 /** Stable 32-bit FNV-1a hash of a string → noise seed. */
 export function seedFromString(s: string): number {
@@ -68,6 +68,7 @@ export function buildStealthScript(
   return (
     '(function(){' +
     '"use strict";' +
+    CAPTCHA_FRAME_BAILOUT +
     'var CFG = ' +
     JSON.stringify(cfg) +
     ';' +
