@@ -142,9 +142,18 @@ try {
   // A nonzero availLeft/availTop is the tell of a multi-monitor rig (the browser sitting
   // on a secondary display). Force the primary-monitor value 0 so every profile looks like
   // a single-display machine and no two profiles share the same odd offset.
+  // The VGC Core ENGINE (screen.cc) ALREADY returns availLeft/availTop = 0 natively when
+  // --vgc-screen is set — so wrapping the JS getter on top is pure redundancy that only ADDS a
+  // tell: the xdef Proxy makes the getter's toString anonymous ("function () { [native code] }"
+  // instead of "function get availLeft() { [native code] }"). Gate on __vgcScreenNative (same as
+  // client-rects/connection): run the JS override ONLY on the system-Chrome fallback where the
+  // engine is absent; on the native engine (and in CDP, where it is undefined) leave the native
+  // getter untouched — pure native, no name tell.
   try {
-    xdef(Screen.prototype, 'availLeft', function(){ return 0; });
-    xdef(Screen.prototype, 'availTop', function(){ return 0; });
+    if (typeof __vgcScreenNative !== 'undefined' && !__vgcScreenNative) {
+      xdef(Screen.prototype, 'availLeft', function(){ return 0; });
+      xdef(Screen.prototype, 'availTop', function(){ return 0; });
+    }
   } catch(e){}
 
   // ── 2b. performance.memory.jsHeapSizeLimit ────────────────────────────────
