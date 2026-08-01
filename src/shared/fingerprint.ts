@@ -80,8 +80,23 @@ const WIN_FONTS = [
   'Sitka', 'Yu Gothic', 'Yu Gothic UI'
 ]
 const MAC_FONTS = [
+  // Universal (in ALWAYS_KEEP → every macOS profile exposes these; real Macs all share them).
   'Arial', 'Geneva', 'Helvetica', 'Helvetica Neue', 'Lucida Grande', 'Menlo',
-  'Monaco', 'Times', 'Times New Roman', 'Verdana', 'Courier', 'Courier New'
+  'Monaco', 'Times', 'Times New Roman', 'Verdana', 'Courier', 'Courier New',
+  // Optional pool — all ship with stock macOS (so they ARE installed and the --vgc-fonts
+  // allowlist can actually expose them), but NOT in ALWAYS_KEEP, so fontSubset() keeps each
+  // with ~65% probability → two profiles on the same Mac enumerate DIFFERENT font sets.
+  // Without this the 12 universal fonts were identical across every profile (a same-machine
+  // correlator) and too few for a realistic Mac. A real Mac detects ~35-45 of these.
+  'American Typewriter', 'Andale Mono', 'Apple Chancery', 'Arial Black', 'Arial Narrow',
+  'Arial Rounded MT Bold', 'Avenir', 'Avenir Next', 'Avenir Next Condensed', 'Baskerville',
+  'Big Caslon', 'Bodoni 72', 'Bodoni 72 Oldstyle', 'Bradley Hand', 'Brush Script MT',
+  'Chalkboard', 'Chalkboard SE', 'Chalkduster', 'Charter', 'Cochin', 'Comic Sans MS',
+  'Copperplate', 'Didot', 'DIN Alternate', 'DIN Condensed', 'Futura', 'Georgia', 'Gill Sans',
+  'Herculanum', 'Hoefler Text', 'Impact', 'Kefa', 'Luminari', 'Marker Felt', 'Noteworthy',
+  'Optima', 'Palatino', 'Papyrus', 'Phosphate', 'PT Mono', 'PT Sans', 'PT Serif', 'Rockwell',
+  'Savoye LET', 'SignPainter', 'Silom', 'Skia', 'Snell Roundhand', 'Superclarendon',
+  'Tahoma', 'Trattatello', 'Trebuchet MS', 'Zapfino'
 ]
 const LINUX_FONTS = [
   'DejaVu Sans', 'DejaVu Serif', 'Liberation Sans', 'Liberation Serif',

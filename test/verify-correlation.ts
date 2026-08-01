@@ -22,6 +22,13 @@ import type { Fingerprint } from '../src/shared/types'
 const ENGINE =
   process.argv[2] ||
   join(process.env.APPDATA || '', 'vgc-browser', 'engine', 'chromium', 'chrome.exe')
+// Profile OS to simulate. MUST match the engine's HOST OS for the font vector to be valid:
+// a Windows profile on a Mac engine can't expose Windows fonts (they aren't installed), so it
+// collapses to the ~10 cross-platform core-web fonts and false-flags a font correlator. Run
+// `VGC_OS=macos npm run verify:correlation -- <mac engine>` on a Mac.
+const OS = process.env.VGC_OS === 'macos' || process.env.VGC_OS === 'linux' ? process.env.VGC_OS : 'windows'
+const UA_PLATFORM = OS === 'macos' ? 'macOS' : OS === 'linux' ? 'Linux' : 'Windows'
+const UA_ARCH = OS === 'macos' ? 'arm' : 'x86'
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 async function evaluate(conn: CdpConnection, sid: string, expr: string): Promise<unknown> {
@@ -50,7 +57,15 @@ const PROBE = `(async () => {
     'MingLiU','MS Gothic','MS PGothic','MV Boli','Myanmar Text','Nirmala UI','Palatino Linotype',
     'Segoe Print','Segoe UI','Segoe UI Emoji','SimSun','Sitka','Sylfaen','Tahoma','Times New Roman',
     'Trebuchet MS','Verdana','Wingdings','Yu Gothic','MesloLGS NF','JetBrains Mono','Fira Code',
-    'Cascadia Code','SF Pro','Helvetica Neue','Roboto','Open Sans','Ubuntu','Noto Sans'];
+    'Cascadia Code','SF Pro','Helvetica Neue','Roboto','Open Sans','Ubuntu','Noto Sans',
+    // macOS discriminating fonts (real fingerprinters probe these; needed to SEE per-profile
+    // variation on a Mac engine — a Windows-only probe list can't and false-flags fonts as a
+    // correlator because every Mac profile shares only the ~10 universal core-web fonts).
+    'American Typewriter','Andale Mono','Apple Chancery','Avenir','Avenir Next','Baskerville',
+    'Big Caslon','Bodoni 72','Bradley Hand','Brush Script MT','Chalkboard','Chalkduster','Cochin',
+    'Copperplate','Didot','Futura','Gill Sans','Herculanum','Hoefler Text','Luminari','Marker Felt',
+    'Noteworthy','Optima','Palatino','Papyrus','Phosphate','Rockwell','Savoye LET','SignPainter',
+    'Skia','Snell Roundhand','Superclarendon','Trattatello','Zapfino'];
   const span = document.createElement('span');
   span.style.cssText = 'position:absolute;left:-9999px;font-size:72px';
   span.textContent = 'mmmmmmmmmmlli WwGg09';
@@ -226,9 +241,9 @@ async function launchAndProbe(fp: Fingerprint, id: string, port: number): Promis
     `--window-size=${fp.screen.width},${fp.screen.height - 40}`,
     `--user-agent=${fp.userAgent}`,
     `--vgc-ua-full-version=${fp.uaFullVersion || ''}`,
-    '--vgc-ua-platform=Windows',
+    `--vgc-ua-platform=${UA_PLATFORM}`,
     `--vgc-ua-platform-version=${fp.uaPlatformVersion || '15.0.0'}`,
-    '--vgc-ua-arch=x86',
+    `--vgc-ua-arch=${UA_ARCH}`,
     '--vgc-ua-bitness=64',
     `--vgc-hardware-concurrency=${fp.hardwareConcurrency}`,
     `--vgc-device-memory=${fp.deviceMemory}`,
@@ -285,7 +300,7 @@ async function main(): Promise<void> {
   console.log('engine:', ENGINE)
   console.log(`real host: ${REAL_CORES || '?'} cores / ${REAL_MEM || '?'} GB / LAN ${REAL_LAN.join(',') || '?'}`)
   const N = 3
-  const fps = Array.from({ length: N }, () => generateFingerprint('windows'))
+  const fps = Array.from({ length: N }, () => generateFingerprint(OS as Parameters<typeof generateFingerprint>[0]))
   fps.forEach((f, i) =>
     console.log(`profile ${i}: ${f.hardwareConcurrency}c/${f.deviceMemory}GB ${f.webgl.renderer.slice(0, 42)}`)
   )
