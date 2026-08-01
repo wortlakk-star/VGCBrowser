@@ -143,7 +143,16 @@ const PROBE = `(async () => {
       minBelow: matchMedia('(min-resolution: ' + (dpr - 0.4) + 'dppx)').matches, // should be true
       minAbove: matchMedia('(min-resolution: ' + (dpr + 0.4) + 'dppx)').matches, // should be false
       // an unrelated query must be unaffected
-      colorOk: matchMedia('(min-width: 1px)').matches
+      colorOk: matchMedia('(min-width: 1px)').matches,
+      // window.matchMedia MUST stay the native function — a JS Proxy wrapper makes toString()
+      // anonymous ("function () { [native code] }") which Cloudflare Turnstile rejects (600010).
+      tostr: window.matchMedia.toString(),
+      // string checks (a regex literal here would be mangled by template-literal escaping):
+      // native form is "function matchMedia() { [native code] }" — a Proxy wrapper drops the NAME
+      // ("function () { [native code] }"), which is the Turnstile-breaking tell.
+      isNative:
+        window.matchMedia.toString().indexOf('function matchMedia(') === 0 &&
+        window.matchMedia.toString().indexOf('[native code]') !== -1
     };
   } catch (e) { o.mm = 'ERR:' + e; }
 
@@ -197,8 +206,12 @@ async function main(): Promise<void> {
   const fp = generateFingerprint('windows')
   fp.clientRectsNoise = true
   fp.webrtc = 'proxy'
-  // Force dpr != the headless real dpr (1) so the matchMedia shift is actually exercised.
-  fp.devicePixelRatio = 1.5
+  // Desktop Windows profiles report devicePixelRatio 1 (the generator's value) — the SAME as the
+  // headless real dpr — so matchMedia(resolution:1dppx) matches natively with NO JS wrapper. We no
+  // longer wrap window.matchMedia at all: a Proxy there made matchMedia.toString() anonymous, which
+  // Cloudflare Turnstile rejects (600010). The H5 checks below now verify matchMedia is native AND
+  // naturally consistent at dpr 1, and guard against the wrapper ever being reintroduced.
+  fp.devicePixelRatio = 1
   const udd = mkdtempSync(join(tmpdir(), 'vgc-tells-'))
   const proc = spawn(CHROME, [
     `--user-data-dir=${udd}`,
@@ -276,9 +289,11 @@ async function main(): Promise<void> {
       minBelow: boolean
       minAbove: boolean
       colorOk: boolean
+      isNative: boolean
     }
-    ck('matchMedia resolution matches spoofed dpr', mm.exact === true, mm)
-    ck('matchMedia -webkit-device-pixel-ratio matches', mm.webkitExact === true, mm)
+    ck('matchMedia is NATIVE (no JS wrapper) — Turnstile 600010 guard', mm.isNative === true, mm)
+    ck('matchMedia resolution consistent with dpr', mm.exact === true, mm)
+    ck('matchMedia -webkit-device-pixel-ratio consistent', mm.webkitExact === true, mm)
     ck('matchMedia min-resolution below dpr = true', mm.minBelow === true, mm)
     ck('matchMedia min-resolution above dpr = false', mm.minAbove === false, mm)
     ck('matchMedia unrelated query unaffected', mm.colorOk === true, mm)

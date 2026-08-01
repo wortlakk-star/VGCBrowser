@@ -117,54 +117,15 @@ try {
     } catch(e){}
   }
 
-  // Keep CSS resolution / device-pixel-ratio AND device-width/device-height media queries
-  // consistent with the spoofed screen. matchMedia is evaluated in the compositor against the
-  // REAL display (neither the JS Screen.width getter nor the native spoof reaches the
-  // media-query source), so window.devicePixelRatio / screen.width could disagree with
-  // (resolution:…) / (device-width:…) — a self-contradiction creepjs/pixelscan flag. We
-  // rewrite the threshold in each query and let the native call answer (a genuine
-  // MediaQueryList): dpr by (spoof-real); device-width/height by (real-spoof), where the real
-  // px is discovered via a binary search on the native evaluator.
-  function patchMatchMedia(realDpr, spoofDpr, spoofW, spoofH){
-    try {
-      if (typeof window.matchMedia !== 'function') return;
-      var native = window.matchMedia;
-      var dprDelta = (realDpr > 0 && spoofDpr > 0) ? (spoofDpr - realDpr) : 0;
-      function realDim(feat){ try { var lo = 0, hi = 32768; for (var i = 0; i < 16; i++){ var mid = (lo + hi + 1) >> 1; if (native.call(window, '(min-' + feat + ': ' + mid + 'px)').matches) lo = mid; else hi = mid - 1; } return lo; } catch(e){ return 0; } }
-      var realW = (spoofW > 0) ? realDim('device-width') : 0;
-      var realH = (spoofH > 0) ? realDim('device-height') : 0;
-      var wDelta = (realW > 0) ? (realW - spoofW) : 0;
-      var hDelta = (realH > 0) ? (realH - spoofH) : 0;
-      if (Math.abs(dprDelta) < 1e-9 && wDelta === 0 && hDelta === 0) return; // nothing to hide
-      var RES = /(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
-      var DIM = /(min-|max-)?(device-width|device-height)(\\s*:\\s*)([0-9.]+)px/gi;
-      window.matchMedia = nat(native, function(q){
-        try {
-          var rq = String(q);
-          if (Math.abs(dprDelta) >= 1e-9) rq = rq.replace(RES, function(m, wk, mm, feat, colon, num, unit){
-            var v = parseFloat(num); if (!(v >= 0)) return m;
-            var isRes = /resolution/i.test(feat);
-            var dppx = v;
-            if (isRes) {
-              if (unit === 'dpi') dppx = v / 96;
-              else if (unit === 'dpcm') dppx = v * 2.54 / 96;
-              else dppx = v; // dppx | x
-            }
-            var shifted = dppx - dprDelta;
-            if (shifted < 0) shifted = 0;
-            return (wk || '') + (mm || '') + feat + colon + shifted + (isRes ? 'dppx' : '');
-          });
-          if (wDelta || hDelta) rq = rq.replace(DIM, function(m, mm, feat, colon, num){
-            var v = parseFloat(num); if (!(v >= 0)) return m;
-            var sh = v + (feat === 'device-width' ? wDelta : hDelta);
-            if (sh < 0) sh = 0;
-            return (mm || '') + feat + colon + sh + 'px';
-          });
-          return native.call(this, rq);
-        } catch(e){ return native.call(this, q); }
-      });
-    } catch(e){}
-  }
+  // patchMatchMedia is DISABLED — it must NOT wrap window.matchMedia. Replacing matchMedia with a
+  // Proxy (to shift resolution / device-width queries in step with the spoofed dpr/screen) makes
+  // Function.prototype.toString.call(matchMedia) return the anonymous "function () { [native code] }"
+  // instead of the native "function matchMedia() { [native code] }". Cloudflare Turnstile's
+  // function-integrity check sees the tampered matchMedia and REFUSES to load (600010 — "Captcha
+  // không tải được", e.g. Wise login). Verified VGC-specific: the same residential proxy passes
+  // Turnstile in stock Chrome. The lost coherence is a MINOR tell; a broken Turnstile is not. Do the
+  // resolution / device-width coherence in the ENGINE instead — do NOT reinstate this JS wrapper.
+  function patchMatchMedia(){ /* intentionally a no-op — see comment above */ }
 
   // ── navigator ──
   try { def(Navigator.prototype, 'hardwareConcurrency', function(){ return CFG.hardwareConcurrency; }); } catch(e){}

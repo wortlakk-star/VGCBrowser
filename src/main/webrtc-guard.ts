@@ -51,44 +51,18 @@ const MANIFEST = JSON.stringify({
 const MASK_PREAMBLE = `
   function nat(orig,impl){try{ if(typeof orig!=='function') return impl; return new Proxy(orig,{apply:function(t,self,a){return impl.apply(self,a);}}); }catch(e){ return impl; }}
   function def(obj,prop,getter){try{var d=Object.getOwnPropertyDescriptor(obj,prop);if(!d||!d.get)return;Object.defineProperty(obj,prop,{get:nat(d.get,getter),set:d.set,configurable:d.configurable,enumerable:d.enumerable});}catch(e){}}
-  // Keep CSS resolution / device-pixel-ratio AND device-width/device-height media queries
-  // consistent with the spoofed screen: matchMedia is evaluated against the REAL display in
-  // the compositor (the native Screen.width spoof does NOT reach the media-query source), so
-  // screen.width could say 1920 while (device-width:1920px) says false — a self-contradiction
-  // creepjs/pixelscan flag. We shift each query threshold and let the native call answer:
-  //   • dpr/resolution → shift by (spoof-real) dpr (dpr is unknown to the compositor spoof).
-  //   • device-width/height → discover the REAL px via a binary search on the native evaluator,
-  //     then rewrite each queried value X to X+(real-spoof). The native compare against the real
-  //     px then yields the SAME boolean as a compare against the spoofed px (exact/min/max).
-  function patchMatchMedia(realDpr,spoofDpr,spoofW,spoofH){try{
-    if(typeof window.matchMedia!=='function')return;
-    var native=window.matchMedia;
-    var dprDelta=(realDpr>0&&spoofDpr>0)?(spoofDpr-realDpr):0;
-    function realDim(feat){try{var lo=0,hi=32768;for(var i=0;i<16;i++){var mid=(lo+hi+1)>>1;if(native.call(window,'(min-'+feat+': '+mid+'px)').matches)lo=mid;else hi=mid-1;}return lo;}catch(e){return 0;}}
-    var realW=(spoofW>0)?realDim('device-width'):0;
-    var realH=(spoofH>0)?realDim('device-height'):0;
-    var wDelta=(realW>0)?(realW-spoofW):0;
-    var hDelta=(realH>0)?(realH-spoofH):0;
-    if(Math.abs(dprDelta)<1e-9&&wDelta===0&&hDelta===0)return;
-    var RES=/(-webkit-)?(min-|max-)?(device-pixel-ratio|resolution)(\\s*:\\s*)([0-9.]+)(dppx|dpi|dpcm|x)?/gi;
-    var DIM=/(min-|max-)?(device-width|device-height)(\\s*:\\s*)([0-9.]+)px/gi;
-    window.matchMedia=nat(native,function(q){try{
-      var rq=String(q);
-      if(Math.abs(dprDelta)>=1e-9)rq=rq.replace(RES,function(m,wk,mm,feat,colon,num,unit){
-        var v=parseFloat(num); if(!(v>=0))return m;
-        var isRes=/resolution/i.test(feat); var dppx=v;
-        if(isRes){ if(unit==='dpi')dppx=v/96; else if(unit==='dpcm')dppx=v*2.54/96; else dppx=v; }
-        var shifted=dppx-dprDelta; if(shifted<0)shifted=0;
-        return (wk||'')+(mm||'')+feat+colon+shifted+(isRes?'dppx':'');
-      });
-      if(wDelta||hDelta)rq=rq.replace(DIM,function(m,mm,feat,colon,num){
-        var v=parseFloat(num); if(!(v>=0))return m;
-        var sh=v+(feat==='device-width'?wDelta:hDelta); if(sh<0)sh=0;
-        return (mm||'')+feat+colon+sh+'px';
-      });
-      return native.call(this,rq);
-    }catch(e){return native.call(this,q);}});
-  }catch(e){}}
+  // patchMatchMedia is DISABLED — it must NOT wrap window.matchMedia.
+  // Replacing matchMedia with a Proxy (to shift resolution / device-width queries in step with
+  // the spoofed dpr/screen) makes Function.prototype.toString.call(matchMedia) return
+  // "function () { [native code] }" (anonymous) instead of the native "function matchMedia() {
+  // [native code] }". Cloudflare Turnstile runs a function-integrity check, sees the tampered
+  // matchMedia, and REFUSES to load ("Lỗi cổng xoay 600010 — Captcha không tải được") — e.g. the
+  // Wise login. Verified VGC-specific: the SAME residential proxy passes Turnstile in stock Chrome.
+  // The coherence this bought (resolution / device-width media queries matching the spoofed values)
+  // is a MINOR tell and only relevant when dpr/screen is spoofed; a broken Turnstile is a hard
+  // functional failure, so we drop the JS wrapper. Move this to the ENGINE (screen.cc / media
+  // values read the spoofed screen) for undetectable coherence — do NOT reinstate the JS wrapper.
+  function patchMatchMedia(){ /* intentionally a no-op — see comment above */ }
 `
 
 function screenScript(fp: Fingerprint): string {
