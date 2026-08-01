@@ -1,0 +1,28 @@
+diff --git a/third_party/blink/renderer/modules/mediastream/media_device_info.cc b/third_party/blink/renderer/modules/mediastream/media_device_info.cc
+index 39c935687e..e35401a0ee 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_device_info.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_device_info.cc
+@@ -25,6 +25,7 @@
+ 
+ #include "third_party/blink/renderer/modules/mediastream/media_device_info.h"
+ 
++#include "base/command_line.h"
+ #include "third_party/blink/public/mojom/mediastream/media_devices.mojom-blink.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+@@ -62,6 +63,15 @@ V8MediaDeviceKind MediaDeviceInfo::kind() const {
+ }
+ 
+ String MediaDeviceInfo::label() const {
++  // VGC Core: blank the device label (mic/cam model string, e.g. "HD Pro Webcam C920",
++  // "Realtek Audio") — it is IDENTICAL across every profile on a host, a same-machine
++  // correlator (deviceId/groupId are already per-profile salted by the separate user-data-dir).
++  // toJSONForBinding() calls label(), so this also covers JSON.stringify(device). Real Chrome
++  // returns "" before getUserMedia permission anyway; blanking always keeps two profiles from
++  // ever sharing the hardware model string. Native so there is no JS prototype override to
++  // lie-detect (the JS one left an anonymous-name toString tell on label + toJSON).
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch("vgc-seed"))
++    return String("");
+   return label_;
+ }
+ 

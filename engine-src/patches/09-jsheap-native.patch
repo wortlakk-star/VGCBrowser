@@ -1,0 +1,39 @@
+diff --git a/third_party/blink/renderer/core/timing/memory_info.cc b/third_party/blink/renderer/core/timing/memory_info.cc
+index b17ada56e6..8c265b2cfd 100644
+--- a/third_party/blink/renderer/core/timing/memory_info.cc
++++ b/third_party/blink/renderer/core/timing/memory_info.cc
+@@ -32,6 +32,8 @@
+ 
+ #include <limits>
+ 
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/time/default_tick_clock.h"
+ #include "base/time/time.h"
+ #include "third_party/blink/renderer/core/frame/settings.h"
+@@ -52,6 +54,25 @@ static void GetHeapSize(HeapInfo& info) {
+   info.total_js_heap_size =
+       heap_statistics.total_physical_size() + heap_statistics.external_memory();
+   info.js_heap_size_limit = heap_statistics.heap_size_limit();
++  // VGC Core: performance.memory.jsHeapSizeLimit scales with PHYSICAL RAM, not with
++  // navigator.deviceMemory. A profile that spoofs deviceMemory:4 on a big rig otherwise
++  // exposes a ~4GB V8 heap limit — an internal contradiction creepjs/pixelscan flag. Pin
++  // it to the canonical value for the CLAIMED RAM class (--vgc-device-memory), but only
++  // cap DOWN, never claim more heap than the machine actually has. Native so there is no
++  // JS getter to lie-detect (the JS override left an anonymous-name toString tell).
++  {
++    static const uint64_t kVgcLimit = [] {
++      const std::string dm = base::CommandLine::ForCurrentProcess()
++                                 ->GetSwitchValueASCII("vgc-device-memory");
++      int mem = 0;
++      if (dm.empty() || !base::StringToInt(dm, &mem) || mem <= 0)
++        return uint64_t{0};
++      return mem <= 2 ? uint64_t{1090519040}
++                      : (mem <= 4 ? uint64_t{2172649472} : uint64_t{4395630592});
++    }();
++    if (kVgcLimit != 0 && kVgcLimit < info.js_heap_size_limit)
++      info.js_heap_size_limit = kVgcLimit;
++  }
+ }
+ 
+ class HeapSizeCache {

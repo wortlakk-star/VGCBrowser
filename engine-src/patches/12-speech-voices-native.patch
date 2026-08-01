@@ -1,0 +1,65 @@
+diff --git a/third_party/blink/renderer/modules/speech/speech_synthesis.cc b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
+index 891a81543b..023a6e31f5 100644
+--- a/third_party/blink/renderer/modules/speech/speech_synthesis.cc
++++ b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
+@@ -27,6 +27,8 @@
+ 
+ #include <tuple>
+ 
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+@@ -47,6 +49,36 @@
+ 
+ namespace blink {
+ 
++namespace {
++// VGC Core: the OS TTS voice list is IDENTICAL across every profile on a machine — a
++// same-machine correlator, and its exact contents also leak the host OS/locale set. Keep a
++// DETERMINISTIC per-seed (--vgc-seed) ~75% subset (index 0 always kept so the list is never
++// empty), so two profiles enumerate DIFFERENT voice lists. Deterministic per index ⇒ repeated
++// getVoices() calls are stable (an unstable list is itself a tell). Native so there is no JS
++// getVoices override to lie-detect (the JS one left an anonymous-name toString tell).
++uint32_t VgcVoiceSeed() {
++  static const uint32_t seed = [] {
++    const std::string s =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("vgc-seed");
++    uint32_t v = 0;
++    return base::StringToUint(s, &v) ? v : 0u;
++  }();
++  return seed;
++}
++bool VgcKeepVoice(int i) {
++  if (VgcVoiceSeed() == 0)
++    return true;  // no seed ⇒ don't filter
++  if (i == 0)
++    return true;  // always keep the first voice
++  uint32_t s = (VgcVoiceSeed() ^ 0x5F356495u ^
++                static_cast<uint32_t>(i + 1) * 0x9E3779B1u);
++  s ^= s >> 15;
++  s *= 0x2C1B3C6Du;
++  s ^= s >> 13;
++  return (s & 3u) != 0u;  // keep ~75% of the non-primary voices
++}
++}  // namespace
++
+ const char SpeechSynthesis::kSupplementName[] = "SpeechSynthesis";
+ 
+ 
+@@ -85,9 +117,12 @@ SpeechSynthesis::SpeechSynthesis(LocalDOMWindow& window)
+ void SpeechSynthesis::OnSetVoiceList(
+     Vector<mojom::blink::SpeechSynthesisVoicePtr> mojom_voices) {
+   voice_list_.clear();
++  int vgc_i = 0;
+   for (auto& mojom_voice : mojom_voices) {
+-    voice_list_.push_back(
+-        MakeGarbageCollected<SpeechSynthesisVoice>(std::move(mojom_voice)));
++    if (VgcKeepVoice(vgc_i++)) {  // VGC: per-seed subset (see anonymous namespace above)
++      voice_list_.push_back(
++          MakeGarbageCollected<SpeechSynthesisVoice>(std::move(mojom_voice)));
++    }
+   }
+   VoicesDidChange();
+ }

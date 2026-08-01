@@ -165,8 +165,15 @@ try {
   // heap says ≥8GB"). Pin jsHeapSizeLimit to the canonical value for the claimed RAM class.
   // Only jsHeapSizeLimit is touched: used/total are page-runtime values that leak nothing
   // about hardware and fluctuate naturally, so faking them (constant) would be the bigger tell.
+  // Skip the next THREE (jsHeapSizeLimit, speechSynthesis voices, mediaDevices label/toJSON)
+  // when the VGC Core engine spoofs them NATIVELY (memory_info.cc / speech_synthesis.cc /
+  // media_device_info.cc). Gated on __vgcScreenNative like client-rects/connection: on the
+  // native engine a JS override would only re-wrap an already-correct native value and add an
+  // anonymous-name toString tell (the exact thing verify:tostring flags). Runs ONLY on the
+  // system-Chrome fallback (no native engine → the JS override IS the spoof).
+  var _vgcNativeEngine = (typeof __vgcScreenNative !== 'undefined' && __vgcScreenNative);
   try {
-    if (window.performance && performance.memory && typeof performance.memory.jsHeapSizeLimit === 'number') {
+    if (!_vgcNativeEngine && window.performance && performance.memory && typeof performance.memory.jsHeapSizeLimit === 'number') {
       var _mproto = Object.getPrototypeOf(performance.memory);
       var _dm = XCFG.deviceMemory;
       var _limit = _dm <= 2 ? 1090519040 : (_dm <= 4 ? 2172649472 : 4395630592);
@@ -214,7 +221,7 @@ try {
   // repeated getVoices() calls are stable — an unstable list is itself a tell) and always
   // keeping at least the first voice (an empty list is a tell too).
   try {
-    if (window.SpeechSynthesis && SpeechSynthesis.prototype && SpeechSynthesis.prototype.getVoices) {
+    if (!_vgcNativeEngine && window.SpeechSynthesis && SpeechSynthesis.prototype && SpeechSynthesis.prototype.getVoices) {
       var _keepVoice = function(i){
         var s = (XCFG.seed ^ 0x5F356495 ^ Math.imul(i + 1, 0x9E3779B1)) >>> 0;
         s ^= s >>> 15; s = Math.imul(s, 0x2C1B3C6D) >>> 0; s ^= s >>> 13;
@@ -244,7 +251,7 @@ try {
   // internal slot, bypassing the getter — without this, JSON.stringify(device) would re-leak it.
   try {
     var _MDI = window.MediaDeviceInfo;
-    if (_MDI && _MDI.prototype) {
+    if (!_vgcNativeEngine && _MDI && _MDI.prototype) {
       xdef(_MDI.prototype, 'label', function(){ return ''; });
       if (_MDI.prototype.toJSON) {
         var _origToJSON = _MDI.prototype.toJSON;
