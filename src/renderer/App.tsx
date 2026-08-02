@@ -266,6 +266,12 @@ export default function App(): JSX.Element {
       list.map((p) => `${p.id}:${p.updatedAt}`).sort().join('|')
     const id = setInterval(() => {
       if (loading || pullingRef.current) return // a previous pull is still running
+      // Egress guard: pullCloudProfileList() downloads the FULL `data` blob of EVERY profile
+      // from Supabase Storage/DB. Don't do that while the window is hidden/minimised — nobody
+      // is looking at the list, so a background app was silently burning Supabase egress every
+      // tick (a big driver of the exceed_egress_quota lockouts). It resyncs the moment the
+      // window is shown again (visibilitychange handler below).
+      if (typeof document !== 'undefined' && document.hidden) return
       void (async () => {
         pullingRef.current = true
         try {
@@ -295,8 +301,39 @@ export default function App(): JSX.Element {
           pullingRef.current = false
         }
       })()
-    }, 12 * 1000)
-    return () => clearInterval(id)
+    }, 60 * 1000)
+    // Pull once immediately when the window becomes visible again (covers the gap left by
+    // skipping ticks while hidden), so changes from another machine still show up promptly
+    // without paying for a full-list download every 12s in the background.
+    const onVisible = (): void => {
+      if (document.hidden || loading || pullingRef.current) return
+      void (async () => {
+        pullingRef.current = true
+        try {
+          if (pendingPushRef.current) {
+            if ((await applyCloudTombstones()) > 0) {
+              justPulledRef.current = true
+              await refresh()
+            }
+            return
+          }
+          const n = await pullCloudProfileList()
+          if (n >= 0) {
+            justPulledRef.current = true
+            await refresh()
+          }
+        } catch (e) {
+          console.error('[auto-sync:visible]', e)
+        } finally {
+          pullingRef.current = false
+        }
+      })()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [loading, refresh])
 
   const createGroup = useCallback(
