@@ -1,4 +1,4 @@
-﻿// â”€â”€ VGC Browser â€” app settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── VGC Browser — app settings ───────────────────────────────────────────────
 // Small JSON-backed settings store (userData/settings.json). Holds the local
 // automation API config + token. Cached in memory; written on change.
 
@@ -30,12 +30,12 @@ function defaults(): AppSettings {
     // hosted on vgcbrowser.com/dl). Other Macs auto-download it on first launch;
     // the build machine uses its local userData/engine/VGC Core.app regardless.
     engineUrlMac: 'https://vgcbrowser.com/dl/vgc-core-mac-arm64-0.1.100.zip',
-    // SHA-256 of the engine zip above â€” verified after download so a compromised host
+    // SHA-256 of the engine zip above — verified after download so a compromised host
     // or a MITM can't swap in a malicious engine (the zip is executed as the browser).
     engineHashMac: 'dcf605201b8e168a6ba4df8b88f2339c1d7a6fd67528e617470e686e4cf476aa',
-    // GoLogin-style: native engine spoofing, NO CDP debugger â†’ Google sign-in works.
+    // GoLogin-style: native engine spoofing, NO CDP debugger → Google sign-in works.
     nativeMode: true,
-    // Hold residential (Evomi hardsession) IPs against idle rotation â€” background poke.
+    // Hold residential (Evomi hardsession) IPs against idle rotation — background poke.
     proxyKeepAlive: true
   }
 }
