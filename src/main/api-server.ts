@@ -1,40 +1,68 @@
 // ── VGC Browser — local automation REST API ──────────────────────────────────
 // A small HTTP API bound to 127.0.0.1 (GoLogin's :36912 equivalent) so external
-// automation can drive profiles. Starting a profile returns its CDP browser
-// WebSocket endpoint, which Puppeteer/Playwright connect to:
+// automation can manage profiles. Browser control stays on the app's private
+// CDP pipe and is never exposed as an unauthenticated DevTools socket:
 //
-//   POST /profiles/:id/start  →  { id, port, ws }
-//     puppeteer.connect({ browserWSEndpoint: ws })
-//     playwright.chromium.connectOverCDP(ws)
+//   POST /profiles/:id/start  ->  { id, status }
 //
 // This module is deliberately electron-free (deps are injected) so it can be
 // unit-tested standalone.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
+import { timingSafeEqual } from 'crypto'
+import type { Socket } from 'net'
 import type { CreateProfileInput, Profile, ProfileRuntimeState } from '../shared/types'
+import type { LaunchProfileOptions } from './profile-manager'
 
 export interface ApiDeps {
   listProfiles: () => Promise<Profile[]>
-  launchProfile: (id: string, opts?: { headless?: boolean }) => Promise<ProfileRuntimeState>
+  launchProfile: (id: string, opts?: LaunchProfileOptions) => Promise<ProfileRuntimeState>
   stopProfile: (id: string) => void
   getRuntimeState: (id: string) => ProfileRuntimeState
-  browserWsForPort: (port: number) => Promise<string>
   createProfile: (input: CreateProfileInput) => Promise<Profile>
   updateProfile: (id: string, patch: Partial<Profile>) => Promise<Profile>
   deleteProfile: (id: string) => Promise<void>
 }
 
+const MAX_BODY_BYTES = 1024 * 1024
+const MAX_CONNECTIONS = 128
+const LOOPBACK_HOST = /^(?:127\.0\.0\.1|localhost)(?::[1-9]\d{0,4})?$/i
+
+class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message)
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let data = ''
-    req.on('data', (c) => (data += c))
+    let bytes = 0
+    let exceeded = false
+    req.on('data', (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > MAX_BODY_BYTES) {
+        exceeded = true
+        return
+      }
+      data += chunk.toString('utf-8')
+    })
     req.on('end', () => {
+      if (exceeded) return reject(new ApiError(413, 'Request body too large'))
       try {
-        resolve(data ? (JSON.parse(data) as Record<string, unknown>) : {})
+        const parsed = data ? (JSON.parse(data) as unknown) : {}
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return reject(new ApiError(400, 'JSON object required'))
+        }
+        resolve(parsed as Record<string, unknown>)
       } catch {
-        resolve({})
+        reject(new ApiError(400, 'Invalid JSON'))
       }
     })
+    req.on('error', reject)
   })
 }
 
@@ -44,8 +72,21 @@ export interface ApiHandle {
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
-  res.writeHead(code, { 'Content-Type': 'application/json' })
+  if (res.destroyed || res.writableEnded) return
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer'
+  })
   res.end(JSON.stringify(body))
+}
+
+function validBearer(actual: string | undefined, token: string): boolean {
+  if (!actual || !token) return false
+  const got = Buffer.from(actual, 'utf8')
+  const expected = Buffer.from(`Bearer ${token}`, 'utf8')
+  return got.length === expected.length && timingSafeEqual(got, expected)
 }
 
 export async function startApiServer(opts: {
@@ -54,6 +95,13 @@ export async function startApiServer(opts: {
   deps: ApiDeps
 }): Promise<ApiHandle> {
   const { token, deps } = opts
+  if (!/^[a-f0-9]{48}$/i.test(token)) throw new Error('API token không hợp lệ')
+  if (
+    !Number.isInteger(opts.port) ||
+    (opts.port !== 0 && (opts.port < 1024 || opts.port > 65535))
+  ) {
+    throw new Error('API port không hợp lệ')
+  }
 
   const server = createServer(async (req, res) => {
     try {
@@ -65,19 +113,26 @@ export async function startApiServer(opts: {
       // 127.0.0.1 and sends NO Origin header; a web page in any browser always sends
       // one. Pinning Host to loopback also defeats a rebound domain (evil.com →
       // 127.0.0.1) reaching the API. Reject both before doing anything else.
-      const hostHeader = (req.headers.host ?? '').split(':')[0]
-      if (req.headers.origin || (hostHeader !== '127.0.0.1' && hostHeader !== 'localhost')) {
+      const hostHeader = req.headers.host ?? ''
+      if (req.headers.origin || !LOOPBACK_HOST.test(hostHeader)) {
         return send(res, 403, { error: 'Forbidden' })
       }
 
-      // Health check needs no auth.
-      if (path === '/ping') {
-        return send(res, 200, { ok: true, app: 'vgc-browser' })
+      // Bearer token auth for every route, including health checks, so websites and
+      // unrelated local processes cannot probe whether VGC Browser is running.
+      if (!validBearer(req.headers.authorization, token)) {
+        return send(res, 401, { error: 'Unauthorized' })
       }
 
-      // Bearer token auth for everything else.
-      if (!token || req.headers['authorization'] !== `Bearer ${token}`) {
-        return send(res, 401, { error: 'Unauthorized' })
+      if (
+        (method === 'PATCH' || method === 'PUT' || (method === 'POST' && path === '/profiles')) &&
+        !String(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')
+      ) {
+        return send(res, 415, { error: 'application/json required' })
+      }
+
+      if (path === '/ping') {
+        return send(res, 200, { ok: true })
       }
 
       if (path === '/profiles' && method === 'GET') {
@@ -109,15 +164,7 @@ export async function startApiServer(opts: {
             url.searchParams.get('headless') === '1' ||
             url.searchParams.get('headless') === 'true'
           const state = await deps.launchProfile(id, { headless })
-          let ws = ''
-          if (state.debugPort) {
-            try {
-              ws = await deps.browserWsForPort(state.debugPort)
-            } catch {
-              /* ws best-effort */
-            }
-          }
-          return send(res, 200, { id, port: state.debugPort, ws })
+          return send(res, 200, { id, status: state.status })
         }
         if (method === 'POST' && action === 'stop') {
           deps.stopProfile(id)
@@ -139,9 +186,26 @@ export async function startApiServer(opts: {
 
       send(res, 404, { error: 'Not found' })
     } catch (e) {
-      send(res, 500, { error: e instanceof Error ? e.message : String(e) })
+      const status = e instanceof ApiError ? e.status : 500
+      send(res, status, { error: e instanceof Error ? e.message : String(e) })
     }
   })
+  server.headersTimeout = 10_000
+  server.requestTimeout = 15_000
+  server.keepAliveTimeout = 5_000
+  server.maxHeadersCount = 50
+  server.maxConnections = MAX_CONNECTIONS
+  const clients = new Set<Socket>()
+  server.on('connection', (socket) => {
+    if (socket.remoteAddress !== '127.0.0.1') {
+      socket.destroy()
+      return
+    }
+    clients.add(socket)
+    socket.once('close', () => clients.delete(socket))
+  })
+  // A late server error must not become an uncaught EventEmitter error in main.
+  server.on('error', () => {})
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
@@ -155,6 +219,8 @@ export async function startApiServer(opts: {
   const port = typeof addr === 'object' && addr ? addr.port : opts.port
   return {
     close: () => {
+      for (const socket of clients) socket.destroy()
+      clients.clear()
       try {
         server.close()
       } catch {

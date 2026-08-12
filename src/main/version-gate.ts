@@ -9,6 +9,8 @@
 // POSITIVELY confirms this build < minVersion.
 
 import { app } from 'electron'
+import { trustedExternalUrl } from './validation'
+import { readLimitedResponseJson } from './http-limit'
 
 export interface VersionGate {
   blocked: boolean
@@ -38,18 +40,24 @@ export async function checkVersionGate(): Promise<VersionGate> {
   // Never gate a dev run (there is no installed version to update).
   if (!app.isPackaged) return open
   try {
-    const ctrl = new AbortController()
-    const t = setTimeout(() => ctrl.abort(), 6000)
     const res = await fetch(`${MIN_VERSION_URL}?t=${Date.now()}`, {
-      signal: ctrl.signal,
-      cache: 'no-store'
+      signal: AbortSignal.timeout(6000),
+      cache: 'no-store',
+      redirect: 'error'
     } as RequestInit)
-    clearTimeout(t)
-    if (!res.ok) return open
-    const j = (await res.json()) as { minVersion?: string; downloadUrl?: string }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {})
+      return open
+    }
+    const j = await readLimitedResponseJson<{ minVersion?: string; downloadUrl?: string }>(
+      res,
+      64 * 1024
+    )
     const min = String(j.minVersion || '').trim()
-    const downloadUrl = String(j.downloadUrl || DEFAULT_DOWNLOAD)
-    if (!min) return open
+    const downloadUrl =
+      trustedExternalUrl(j.downloadUrl, new Set(['vgcbrowser.com', 'www.vgcbrowser.com'])) ??
+      DEFAULT_DOWNLOAD
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(min)) return open
     return { blocked: cmpVersion(current, min) < 0, current, min, downloadUrl }
   } catch {
     return open // fail-open

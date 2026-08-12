@@ -697,11 +697,11 @@ export default function App(): JSX.Element {
   }, [selected, refresh])
   const exportSelected = useCallback(async () => {
     const res = await window.vgc.exportProfiles([...selected])
-    if (res.count) window.alert(`Đã xuất ${res.count} profile.`)
+    if (res.count) window.alert(`Đã xuất ${res.count} profile (đã loại cookie và thông tin đăng nhập).`)
   }, [selected])
   const exportAll = useCallback(async () => {
     const res = await window.vgc.exportProfiles()
-    if (res.count) window.alert(`Đã xuất ${res.count} profile.`)
+    if (res.count) window.alert(`Đã xuất ${res.count} profile (đã loại cookie và thông tin đăng nhập).`)
   }, [])
   const importProfiles = useCallback(async () => {
     const res = await window.vgc.importProfiles()

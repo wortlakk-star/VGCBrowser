@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { Profile } from '../../shared/types'
-import { getCloud } from '../cloud'
+import { getCloud, pullCloudProfileList, pushCloudProfileList } from '../cloud'
+
+const TEAM_SHARING_ENABLED = false
 
 interface Props {
   onClose: () => void
@@ -55,7 +57,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
         uid: data.user.id
       })
     }
-    if (data.user) {
+    if (data.user && TEAM_SHARING_ENABLED) {
       await loadTeams()
       setLocalProfiles(await window.vgc.listProfiles())
     }
@@ -176,6 +178,11 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
         setMsg('Chưa đăng nhập')
         return
       }
+      const encryption = await window.vgc.cloudEncryptionStatus()
+      if (!encryption.configured || !encryption.unlocked) {
+        setMsg('Lỗi: cần mở khoá mã hoá Cloud trong Cài đặt trước khi đồng bộ.')
+        return
+      }
       const locals = await window.vgc.listProfiles()
       // 1) Upload each profile's browser DATA (cookies/logins/storage) to Storage.
       //    This sets cloudDataAt on the profile so "pull" knows to fetch it.
@@ -187,23 +194,11 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
           // profile may have never been opened (no data yet) — metadata still syncs
         }
       }
-      // 2) Re-read (now carrying cloudDataAt) and upsert the metadata rows.
-      const fresh = await window.vgc.listProfiles()
-      const rows = fresh.map((p) => ({
-        owner: uid,
-        team_id: p.cloudTeamId || target || null,
-        profile_id: p.id,
-        name: p.name,
-        data: p,
-        updated_at: new Date().toISOString()
-      }))
-      const { error } = await c.from('profiles_cloud').upsert(rows, { onConflict: 'owner,profile_id' })
-      const where = target ? `nhóm "${teams.find((t) => t.id === target)?.name ?? ''}"` : 'cá nhân'
-      setMsg(
-        error
-          ? 'Lỗi: ' + error.message
-          : `Đã đẩy ${rows.length} profile (kèm dữ liệu phiên đăng nhập) lên ${where}.`
-      )
+      // 2) Use the same encrypted metadata pipeline as automatic sync.
+      const count = await pushCloudProfileList(true)
+      setMsg(`Đã đẩy ${count} profile (kèm dữ liệu phiên đăng nhập) lên cloud.`)
+    } catch (error) {
+      setMsg(`Lỗi: ${error instanceof Error ? error.message : 'đồng bộ thất bại'}`)
     } finally {
       setBusy(false)
     }
@@ -215,13 +210,13 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
     setBusy(true)
     setMsg('')
     try {
-      const { data, error } = await c.from('profiles_cloud').select('data')
-      if (error) {
-        setMsg('Lỗi: ' + error.message)
+      const encryption = await window.vgc.cloudEncryptionStatus()
+      if (!encryption.configured || !encryption.unlocked) {
+        setMsg('Lỗi: cần mở khoá mã hoá Cloud trong Cài đặt trước khi đồng bộ.')
         return
       }
-      const profiles = (data ?? []).map((r) => (r as { data: Profile }).data)
-      await window.vgc.bulkUpsertProfiles(profiles)
+      const count = await pullCloudProfileList()
+      const profiles = await window.vgc.listProfiles()
       // Download the browser DATA for every profile that has it in the cloud,
       // so each opens already signed into its sites on this machine.
       let got = 0
@@ -234,8 +229,10 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
           // continue with the rest
         }
       }
-      setMsg(`Đã kéo ${profiles.length} profile về máy (kèm dữ liệu đăng nhập của ${got} profile).`)
+      setMsg(`Đã kéo ${count} profile về máy (kèm dữ liệu đăng nhập của ${got} profile).`)
       onSynced()
+    } catch (error) {
+      setMsg(`Lỗi: ${error instanceof Error ? error.message : 'đồng bộ thất bại'}`)
     } finally {
       setBusy(false)
     }
@@ -250,7 +247,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 560 }}>
         <header className="modal-head">
-          <h2>☁ Cloud &amp; Team</h2>
+          <h2>☁ Cloud</h2>
           <button className="btn" onClick={onClose}>
             ✕
           </button>
@@ -301,7 +298,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
                   </button>
                 </div>
                 <label>
-                  User ID (gửi cho chủ nhóm để được mời)
+                  User ID
                   <div className="token-row">
                     <input className="mono small" value={uid} readOnly />
                     <button className="btn" onClick={copyUid}>
@@ -313,17 +310,19 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
 
               <section className="card">
                 <h3>Đồng bộ</h3>
-                <label>
-                  Đẩy lên
-                  <select value={target} onChange={(e) => void onTargetChange(e.target.value)}>
-                    <option value="">Cá nhân</option>
-                    {teams.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        Nhóm: {t.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {TEAM_SHARING_ENABLED && (
+                  <label>
+                    Đẩy lên
+                    <select value={target} onChange={(e) => void onTargetChange(e.target.value)}>
+                      <option value="">Cá nhân</option>
+                      {teams.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          Nhóm: {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <div className="proxy-check">
                   <button className="btn primary" onClick={push} disabled={busy}>
                     ↥ Đẩy lên (kèm phiên)
@@ -342,48 +341,50 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
                 </p>
               </section>
 
-              <section className="card">
-                <h3>Nhóm (Team)</h3>
-                <div className="token-row">
-                  <input
-                    placeholder="Tên nhóm mới"
-                    value={newTeamName}
-                    onChange={(e) => setNewTeamName(e.target.value)}
-                  />
-                  <button className="btn" onClick={createTeam} disabled={busy}>
-                    Tạo nhóm
-                  </button>
-                </div>
-                {target ? (
-                  <>
-                    <p className="hint">
-                      Thành viên nhóm “{teams.find((t) => t.id === target)?.name}”:{' '}
-                      {members.length}
-                    </p>
-                    <ul className="ext-list">
-                      {members.map((m) => (
-                        <li key={m}>
-                          <span className="mono small">{m}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="token-row">
-                      <input
-                        placeholder="User ID thành viên cần thêm"
-                        value={memberUid}
-                        onChange={(e) => setMemberUid(e.target.value)}
-                      />
-                      <button className="btn" onClick={addMember} disabled={busy}>
-                        Thêm thành viên
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <p className="hint">Chọn một nhóm ở mục “Đẩy lên” để quản lý thành viên.</p>
-                )}
-              </section>
+              {TEAM_SHARING_ENABLED && (
+                <section className="card">
+                  <h3>Nhóm (Team)</h3>
+                  <div className="token-row">
+                    <input
+                      placeholder="Tên nhóm mới"
+                      value={newTeamName}
+                      onChange={(e) => setNewTeamName(e.target.value)}
+                    />
+                    <button className="btn" onClick={createTeam} disabled={busy}>
+                      Tạo nhóm
+                    </button>
+                  </div>
+                  {target ? (
+                    <>
+                      <p className="hint">
+                        Thành viên nhóm “{teams.find((t) => t.id === target)?.name}”:{' '}
+                        {members.length}
+                      </p>
+                      <ul className="ext-list">
+                        {members.map((m) => (
+                          <li key={m}>
+                            <span className="mono small">{m}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="token-row">
+                        <input
+                          placeholder="User ID thành viên cần thêm"
+                          value={memberUid}
+                          onChange={(e) => setMemberUid(e.target.value)}
+                        />
+                        <button className="btn" onClick={addMember} disabled={busy}>
+                          Thêm thành viên
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="hint">Chọn một nhóm ở mục “Đẩy lên” để quản lý thành viên.</p>
+                  )}
+                </section>
+              )}
 
-              {teams.length > 0 && localProfiles.length > 0 && (
+              {TEAM_SHARING_ENABLED && teams.length > 0 && localProfiles.length > 0 && (
                 <section className="card">
                   <h3>Gán nhóm theo profile</h3>
                   <ul className="ext-list" style={{ maxHeight: 200, overflow: 'auto' }}>

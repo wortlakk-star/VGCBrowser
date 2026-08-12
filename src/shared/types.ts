@@ -83,9 +83,9 @@ export interface Fingerprint {
 
 /** One saved website login (Chrome "Login Data" → `logins` row), with the password
  *  DECRYPTED. Synced cross-machine as plaintext (then account-secret-encrypted in the
- *  cloud, exactly like cookies) so passwords survive machines whose engines use a
- *  different os_crypt key (Windows VGC Core portable key ⇄ macOS system-Chrome keychain
- *  key). Re-encrypted with the LOCAL key when written back into a profile's Login Data. */
+ *  cloud, exactly like cookies) so passwords survive machines with different
+ *  machine-bound os_crypt keys. Re-encrypted with the LOCAL key when written back
+ *  into a profile's Login Data. */
 export interface SavedLogin {
   origin_url: string
   signon_realm: string
@@ -247,15 +247,14 @@ export interface AppSettings {
   supabaseAnonKey: string
   /** URL of the VGC Core engine .zip on the server; downloaded on first run. */
   engineUrl: string
+  /** Pinned SHA-256 for the Windows engine archive. Empty disables runtime download. */
+  engineHash?: string
   /** URL of the macOS VGC Core engine .zip (a built Chromium .app); downloaded on
    *  first run on Mac. Empty → fall back to the system Chrome. */
   engineUrlMac?: string
   engineHashMac?: string
-  /** Use the genuine system Chrome as the engine instead of VGC Core. Google trusts
-   *  real Chrome ("this browser or app may not be secure" only fires on the custom
-   *  build), and the fingerprint injection still applies on top. Trade-off: WebGL/
-   *  canvas are spoofed in JS only (no native C++ spoof), so slightly more detectable
-   *  to deep fingerprinters — but Google sign-in works. */
+  /** Legacy setting retained for migration. Production always requires VGC Core because
+   *  stock Chrome ignores the native --vgc-* switches and creates a mixed fingerprint. */
   useSystemBrowser?: boolean
   /** GoLogin-style native mode (default ON): open profiles with the engine's own C++
    *  fingerprint spoofing and DO NOT attach a CDP debugger. Google blocks browsers with
@@ -334,7 +333,6 @@ export interface ProfileRuntimeState {
   id: string
   status: ProfileStatus
   pid?: number
-  debugPort?: number
   startedAt?: string
   error?: string
 }

@@ -5,11 +5,13 @@
 // overrides into every tab the user opens — not just the first.
 
 import WebSocket from 'ws'
+import { readLimitedResponseJson } from './http-limit'
 import type { Readable, Writable } from 'node:stream'
 
 interface Pending {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
+  timer: ReturnType<typeof setTimeout>
 }
 
 type EventHandler = (params: Record<string, unknown>, sessionId?: string) => void
@@ -24,12 +26,15 @@ interface CdpMessage {
 }
 
 export class CdpConnection {
+  private static readonly MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+  private static readonly COMMAND_TIMEOUT_MS = 60_000
   private nextId = 1
   private pending = new Map<number, Pending>()
   private handlers = new Map<string, EventHandler[]>()
   // Transport-agnostic core: WebSocket (port mode) OR a pipe (--remote-debugging-pipe).
   private writeRaw: (data: string) => void
   private closeRaw: () => void
+  private closed = false
 
   private constructor(writeRaw: (data: string) => void, closeRaw: () => void) {
     this.writeRaw = writeRaw
@@ -37,17 +42,31 @@ export class CdpConnection {
   }
 
   private failAllPending(reason: string): void {
-    if (this.pending.size === 0) return
+    this.closed = true
     const err = new Error(reason)
-    for (const p of this.pending.values()) p.reject(err)
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer)
+      p.reject(err)
+    }
     this.pending.clear()
   }
 
   /** Connect over the browser-level WebSocket (requires --remote-debugging-port). */
   static async connect(wsUrl: string): Promise<CdpConnection> {
+    const parsed = new URL(wsUrl)
+    if (
+      parsed.protocol !== 'ws:' ||
+      !['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) ||
+      parsed.username ||
+      parsed.password ||
+      !/^\/devtools\/browser\/[a-z0-9-]+$/i.test(parsed.pathname)
+    ) {
+      throw new Error('CDP WebSocket URL không hợp lệ')
+    }
     const ws = new WebSocket(wsUrl, {
       perMessageDeflate: false,
-      maxPayload: 256 * 1024 * 1024
+      maxPayload: CdpConnection.MAX_MESSAGE_BYTES,
+      handshakeTimeout: 10_000
     })
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve())
@@ -97,6 +116,16 @@ export class CdpConnection {
     let buf = Buffer.alloc(0)
     readStream.on('data', (chunk: Buffer) => {
       buf = Buffer.concat([buf, chunk])
+      if (buf.length > CdpConnection.MAX_MESSAGE_BYTES) {
+        buf = Buffer.alloc(0)
+        conn.failAllPending('CDP pipe message too large')
+        try {
+          readStream.destroy()
+        } catch {
+          // ignore
+        }
+        return
+      }
       let nul = buf.indexOf(0)
       while (nul !== -1) {
         const msg = buf.subarray(0, nul).toString('utf8')
@@ -121,24 +150,36 @@ export class CdpConnection {
     params: Record<string, unknown> = {},
     sessionId?: string
   ): Promise<Record<string, unknown>> {
+    if (this.closed) return Promise.reject(new Error('CDP connection closed'))
     const id = this.nextId++
     const msg: CdpMessage = { id, method, params }
     if (sessionId) msg.sessionId = sessionId
     return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`CDP command timed out: ${method}`))
+      }, CdpConnection.COMMAND_TIMEOUT_MS)
       this.pending.set(id, {
         resolve: resolve as (v: unknown) => void,
-        reject
+        reject,
+        timer
       })
       try {
         this.writeRaw(JSON.stringify(msg))
       } catch (err) {
         this.pending.delete(id)
+        clearTimeout(timer)
         reject(err instanceof Error ? err : new Error(String(err)))
       }
     }) as Promise<Record<string, unknown>>
   }
 
   private onMessage(raw: string): void {
+    if (Buffer.byteLength(raw, 'utf8') > CdpConnection.MAX_MESSAGE_BYTES) {
+      this.failAllPending('CDP message too large')
+      this.closeRaw()
+      return
+    }
     let msg: CdpMessage
     try {
       msg = JSON.parse(raw) as CdpMessage
@@ -149,6 +190,7 @@ export class CdpConnection {
     if (typeof msg.id === 'number' && this.pending.has(msg.id)) {
       const p = this.pending.get(msg.id)!
       this.pending.delete(msg.id)
+      clearTimeout(p.timer)
       if (msg.error) p.reject(new Error(msg.error.message ?? 'CDP error'))
       else p.resolve(msg.result ?? {})
       return
@@ -156,11 +198,20 @@ export class CdpConnection {
 
     if (msg.method) {
       const list = this.handlers.get(msg.method)
-      if (list) for (const h of list) h(msg.params ?? {}, msg.sessionId)
+      if (list) {
+        for (const h of list) {
+          try {
+            h(msg.params ?? {}, msg.sessionId)
+          } catch {
+            // One event consumer must not break the CDP transport.
+          }
+        }
+      }
     }
   }
 
   close(): void {
+    this.failAllPending('CDP connection closed')
     this.closeRaw()
   }
 }
@@ -170,14 +221,32 @@ export class CdpConnection {
  * browser-level WebSocket debugger URL.
  */
 export async function getBrowserWsUrl(port: number, timeoutMs = 15000): Promise<string> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('CDP port không hợp lệ')
   const deadline = Date.now() + timeoutMs
   let lastErr: unknown
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`)
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+        signal: AbortSignal.timeout(1000),
+        redirect: 'error'
+      })
       if (res.ok) {
-        const json = (await res.json()) as { webSocketDebuggerUrl?: string }
-        if (json.webSocketDebuggerUrl) return json.webSocketDebuggerUrl
+        const json = await readLimitedResponseJson<{ webSocketDebuggerUrl?: string }>(res, 64 * 1024)
+        if (typeof json.webSocketDebuggerUrl === 'string') {
+          const ws = new URL(json.webSocketDebuggerUrl)
+          if (
+            ws.protocol === 'ws:' &&
+            ['127.0.0.1', 'localhost'].includes(ws.hostname) &&
+            Number(ws.port) === port &&
+            !ws.username &&
+            !ws.password &&
+            /^\/devtools\/browser\/[a-z0-9-]+$/i.test(ws.pathname)
+          ) {
+            return ws.toString()
+          }
+        }
+      } else {
+        await res.body?.cancel().catch(() => {})
       }
     } catch (e) {
       lastErr = e

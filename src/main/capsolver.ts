@@ -6,6 +6,7 @@
 // No SDK — just fetch. The API key lives in AppSettings.capsolverApiKey.
 
 import { dbg } from './dbg'
+import { readLimitedResponseJson } from './http-limit'
 
 const BASE = 'https://api.capsolver.com'
 
@@ -19,13 +20,19 @@ interface CapTaskResult {
 }
 
 async function post(path: string, body: unknown): Promise<CapTaskResult> {
+  if (path !== '/createTask' && path !== '/getTaskResult') throw new Error('CapSolver path không hợp lệ')
   const res = await fetch(BASE + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000)
   })
-  if (!res.ok) throw new Error(`CapSolver HTTP ${res.status}`)
-  return (await res.json()) as CapTaskResult
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {})
+    throw new Error(`CapSolver HTTP ${res.status}`)
+  }
+  return readLimitedResponseJson<CapTaskResult>(res, 1024 * 1024)
 }
 
 function sleep(ms: number): Promise<void> {
@@ -65,6 +72,7 @@ async function solve(
  *  data-URL prefix. Returns the recognised text (or '' on failure). */
 export async function solveImageCaptcha(apiKey: string, base64: string): Promise<string> {
   try {
+    if (!apiKey || apiKey.length > 4096 || !base64 || base64.length > 8 * 1024 * 1024) return ''
     const sol = await solve(apiKey, { type: 'ImageToTextTask', module: 'common', body: base64 }, 60000)
     return (sol?.text || '').trim()
   } catch (e) {
@@ -80,6 +88,9 @@ export async function solveRecaptchaV2(
   websiteKey: string
 ): Promise<string> {
   try {
+    if (!apiKey || apiKey.length > 4096 || websiteKey.length > 2048) return ''
+    const url = new URL(websiteURL)
+    if (url.protocol !== 'https:' || url.username || url.password || websiteURL.length > 2048) return ''
     const sol = await solve(apiKey, {
       type: 'ReCaptchaV2TaskProxyLess',
       websiteURL,

@@ -25,11 +25,14 @@ on:
 jobs:
   build-win:
     runs-on: windows-latest
+    env:
+      VGC_ENGINE_SHA256: 4c0d6fa647740ce26e92c1be6c5a432b219c6ca41d3896b393d6720ad2abb6d2
+      VGC_ALLOW_UNSIGNED_BUILD: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       # Pre-fetch the ~357MB engine with retries — a flaky download from the host was
@@ -44,6 +47,20 @@ jobs:
           done
           test -f engine/chromium/chrome.exe || { echo "engine still missing after retries"; exit 1; }
       - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
+      - name: Verify unsigned Windows installer
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem release -Filter 'VGC-Browser-Setup-*.exe')
+          if ($installer.Count -ne 1) { throw "Expected one Windows installer, found $($installer.Count)" }
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer[0].FullName
+          if ($signature.Status -ne 'NotSigned' -or $signature.SignerCertificate) {
+            throw "Windows installer is not unsigned as configured: $($signature.Status)"
+          }
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if (-not (Select-String -LiteralPath release/latest.yml -Pattern "^version: $([regex]::Escape($version))$" -Quiet)) {
+            throw 'latest.yml version does not match package.json'
+          }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $installer[0].FullName
       - name: Collect Windows artifacts
         shell: bash
         run: |
@@ -65,7 +82,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run dist:mac # electron-vite build && electron-builder --mac (dmg + zip)

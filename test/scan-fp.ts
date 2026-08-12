@@ -9,24 +9,15 @@
 //         --external:bufferutil --external:utf-8-validate --outfile=test/scan.cjs \
 //         && node test/scan.cjs [pathToChrome.exe]
 
-import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CdpConnection, getBrowserWsUrl } from '../src/main/cdp'
+import { CdpConnection } from '../src/main/cdp'
 import { seedFromString } from '../src/main/fingerprint-script'
 import { generateFingerprint } from '../src/shared/fingerprint'
+import { createLoopbackPage, openNativePage, resolveTestEngine } from './native-harness'
 
-const DEFAULT_ENGINE = join(
-  process.env.APPDATA || '',
-  'vgc-browser',
-  'engine',
-  'chromium',
-  'chrome.exe'
-)
-const ENGINE = process.argv[2] || DEFAULT_ENGINE
-const PORT = 9571
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const ENGINE = resolveTestEngine(process.argv[2])
 
 async function evaluate(conn: CdpConnection, sid: string, expr: string): Promise<unknown> {
   const res = (await conn.send(
@@ -161,8 +152,6 @@ async function main(): Promise<void> {
 
   const args = [
     `--user-data-dir=${udd}`,
-    `--remote-debugging-port=${PORT}`,
-    '--remote-allow-origins=*',
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
@@ -201,26 +190,14 @@ async function main(): Promise<void> {
   console.log('  languages :', langs.join(','))
   console.log('  webgl     :', fp.webgl.vendor, '|', fp.webgl.renderer)
 
-  const proc = spawn(ENGINE, args)
-  proc.on('error', (e) => console.error('spawn error:', e))
-
+  const page = await createLoopbackPage()
   try {
-    const ws = await getBrowserWsUrl(PORT)
-    const conn = await CdpConnection.connect(ws)
-    const created = (await conn.send('Target.createTarget', { url: 'about:blank' })) as {
-      targetId: string
-    }
-    const att = (await conn.send('Target.attachToTarget', {
-      targetId: created.targetId,
-      flatten: true
-    })) as { sessionId: string }
-    const sid = att.sessionId
-    await conn.send('Page.enable', {}, sid)
-    await conn.send('Runtime.enable', {}, sid)
-    await conn.send('Page.navigate', { url: 'https://example.com' }, sid)
-    await sleep(3500)
+    const browser = await openNativePage(ENGINE, args, page.url)
+    const conn = browser.conn
+    const sid = browser.sessionId
+    try {
 
-    const r = (await evaluate(conn, sid, PROBE)) as Record<string, unknown>
+      const r = (await evaluate(conn, sid, PROBE)) as Record<string, unknown>
     if (!r || typeof r !== 'object') {
       console.error('probe returned nothing:', r)
       process.exitCode = 2
@@ -422,14 +399,13 @@ async function main(): Promise<void> {
     console.log(
       `\n${rows.filter((x) => x.sev === 'OK').length} ok, ${warns.length} warn, ${fails.length} FAIL`
     )
-    conn.close()
-    process.exitCode = fails.length ? 1 : 0
-  } finally {
-    try {
-      proc.kill()
-    } catch {
-      /* ignore */
+      process.exitCode = fails.length ? 1 : 0
+    } finally {
+      await browser.close()
     }
+  } finally {
+    await page.close()
+    rmSync(udd, { recursive: true, force: true })
   }
 }
 

@@ -54,6 +54,11 @@ export function SettingsModal({
 }: Props): JSX.Element {
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [apiEnabled, setApiEnabled] = useState(false)
+  const [apiPort, setApiPort] = useState('36912')
+  const [apiToken, setApiToken] = useState('')
+  const [apiTokenVisible, setApiTokenVisible] = useState(false)
+  const [apiMsg, setApiMsg] = useState('')
   // iProyal proxy provider credentials (used by Proxy → "Tạo proxy qua API").
   const [ipToken, setIpToken] = useState('')
   const [ipUser, setIpUser] = useState('')
@@ -72,6 +77,9 @@ export function SettingsModal({
 
   const [capKey, setCapKey] = useState('')
   const [capMsg, setCapMsg] = useState('')
+  const [cloudPassphrase, setCloudPassphrase] = useState('')
+  const [cloudEncryptionConfigured, setCloudEncryptionConfigured] = useState(false)
+  const [cloudEncryptionMsg, setCloudEncryptionMsg] = useState('')
 
   const saveIproyal = async (): Promise<void> => {
     await window.vgc.saveProviderCreds({
@@ -88,6 +96,17 @@ export function SettingsModal({
   const saveCapsolver = async (): Promise<void> => {
     await window.vgc.saveSettings({ capsolverApiKey: capKey.trim() })
     setCapMsg(capKey.trim() ? '✓ Đã lưu API key CapSolver.' : '✓ Đã xoá API key CapSolver.')
+  }
+
+  const saveCloudPassphrase = async (): Promise<void> => {
+    try {
+      await window.vgc.cloudSetPassphrase(cloudPassphrase)
+      setCloudPassphrase('')
+      setCloudEncryptionConfigured(true)
+      setCloudEncryptionMsg('✓ Khoá cloud đã được bọc an toàn trên thiết bị này.')
+    } catch (error) {
+      setCloudEncryptionMsg(`⚠ ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   const saveCliproxy = async (): Promise<void> => {
@@ -108,6 +127,32 @@ export function SettingsModal({
     setCpMsg('✓ Đã lưu tài khoản Cliproxy.')
   }
 
+  const saveApi = async (): Promise<void> => {
+    const port = Number(apiPort)
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      setApiMsg('⚠ Port phải nằm trong khoảng 1024–65535.')
+      return
+    }
+    try {
+      const saved = await window.vgc.saveSettings({ apiEnabled, apiPort: port })
+      setApiEnabled(saved.apiEnabled)
+      setApiPort(String(saved.apiPort))
+      setApiMsg(saved.apiEnabled ? '✓ API cục bộ đã bật.' : '✓ API cục bộ đã tắt.')
+    } catch (error) {
+      setApiMsg(`⚠ ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const regenerateApiToken = async (): Promise<void> => {
+    try {
+      const saved = await window.vgc.regenerateApiToken()
+      setApiToken(saved.apiToken)
+      setApiMsg('✓ Đã tạo token mới; token cũ không còn hiệu lực.')
+    } catch (error) {
+      setApiMsg(`⚠ ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   useEffect(() => {
     void window.vgc.getProviderCreds().then((c) => {
       if (c.iproyal) {
@@ -125,6 +170,9 @@ export function SettingsModal({
       }
     })
     void window.vgc.getVersion().then(setVersion)
+    void window.vgc.cloudEncryptionStatus().then((status) => {
+      setCloudEncryptionConfigured(status.configured && status.unlocked)
+    })
     // The engine always runs in Native (VGC Core) mode — the antidetect-correct
     // config that also keeps Google login working — so the manual toggles were
     // removed. Normalise any stale saved value so no profile is stuck in CDP /
@@ -134,6 +182,9 @@ export function SettingsModal({
         void window.vgc.saveSettings({ nativeMode: true, useSystemBrowser: false })
       }
       setCapKey(s.capsolverApiKey || '')
+      setApiEnabled(s.apiEnabled)
+      setApiPort(String(s.apiPort))
+      setApiToken(s.apiToken)
     })
     void window.vgc.getUpdateStatus().then((s) => {
       if (s.phase !== 'idle') setUpdate(s)
@@ -164,7 +215,7 @@ export function SettingsModal({
             </p>
             <div className="proxy-check">
               <button className="btn" onClick={onOpenCloud}>
-                ☁ Cloud &amp; Team
+                ☁ Cloud
               </button>
               <button className="btn" onClick={onSignOut}>
                 🔁 Đổi tài khoản
@@ -172,6 +223,81 @@ export function SettingsModal({
               <button className="btn danger" onClick={onSignOut}>
                 ⎋ Đăng xuất
               </button>
+            </div>
+          </section>
+
+          <section className="card">
+            <h3>API automation cục bộ</h3>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={apiEnabled}
+                  onChange={(e) => setApiEnabled(e.target.checked)}
+                />
+                Bật API trên 127.0.0.1
+              </label>
+              <input
+                type="number"
+                min={1024}
+                max={65535}
+                value={apiPort}
+                onChange={(e) => setApiPort(e.target.value)}
+                style={inp}
+                aria-label="API port"
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
+                <input
+                  readOnly
+                  type={apiTokenVisible ? 'text' : 'password'}
+                  value={apiToken}
+                  style={inp}
+                  aria-label="API bearer token"
+                />
+                <button className="btn" onClick={() => setApiTokenVisible((visible) => !visible)}>
+                  {apiTokenVisible ? 'Ẩn' : 'Hiện'}
+                </button>
+              </div>
+              <div className="proxy-check">
+                <button className="btn primary" onClick={() => void saveApi()}>
+                  Lưu API
+                </button>
+                <button className="btn" onClick={() => void regenerateApiToken()}>
+                  Tạo token mới
+                </button>
+              </div>
+              {apiMsg && <p className="hint">{apiMsg}</p>}
+            </div>
+          </section>
+
+          <section className="card">
+            <h3>Mã hoá cloud</h3>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <input
+                placeholder={
+                  cloudEncryptionConfigured
+                    ? 'Nhập lại passphrase cloud để xác minh'
+                    : 'Passphrase cloud, tối thiểu 12 ký tự'
+                }
+                type="password"
+                autoComplete={cloudEncryptionConfigured ? 'current-password' : 'new-password'}
+                value={cloudPassphrase}
+                onChange={(e) => setCloudPassphrase(e.target.value)}
+                style={inp}
+              />
+              <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
+                <button
+                  className="btn primary"
+                  disabled={cloudPassphrase.length < 12}
+                  onClick={() => void saveCloudPassphrase()}
+                >
+                  Lưu passphrase
+                </button>
+                <span style={{ color: cloudEncryptionConfigured ? 'var(--green)' : 'var(--muted)', fontSize: 12 }}>
+                  {cloudEncryptionMsg ||
+                    (cloudEncryptionConfigured ? 'Đã mở khoá' : 'Chưa cấu hình')}
+                </span>
+              </div>
             </div>
           </section>
 

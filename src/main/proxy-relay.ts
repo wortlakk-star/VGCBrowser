@@ -6,10 +6,29 @@
 // profile, torn down on exit.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
-import { connect as netConnect } from 'net'
+import { connect as netConnect, isIP, type Socket } from 'net'
+import { connect as tlsConnect } from 'tls'
 import type { Duplex } from 'stream'
 import { SocksClient } from 'socks'
 import type { ProxyConfig } from '../shared/types'
+import { sanitizeProxyConfig } from './validation'
+
+const MAX_UPSTREAM_HEADER = 64 * 1024
+const SOCKET_TIMEOUT = 30_000
+const MAX_RELAY_CONNECTIONS = 256
+
+function connectTarget(raw: string): { host: string; port: number } | null {
+  try {
+    const url = new URL(`http://${raw}`)
+    const port = Number(url.port || 443)
+    if (!url.hostname || url.username || url.password || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return null
+    }
+    return { host: url.hostname.replace(/^\[|\]$/g, ''), port }
+  } catch {
+    return null
+  }
+}
 
 export interface RelayHandle {
   port: number
@@ -45,14 +64,52 @@ function safePipe(src: NodeJS.ReadableStream, dst: NodeJS.WritableStream): void 
   src.pipe(dst)
 }
 
+function connectUpstream(proxy: ProxyConfig, connected: () => void): Socket {
+  if (proxy.type === 'https') {
+    return tlsConnect(
+      {
+        host: proxy.host!,
+        port: proxy.port!,
+        servername: isIP(proxy.host!) ? undefined : proxy.host!,
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.2',
+        ALPNProtocols: ['http/1.1']
+      },
+      connected
+    )
+  }
+  return netConnect(proxy.port!, proxy.host!, connected)
+}
+
+function requestHeaders(req: IncomingMessage, targetHost: string): string | null {
+  const lines = Object.entries(req.headers)
+    .filter(
+      ([key, value]) =>
+        value !== undefined &&
+        !['host', 'proxy-authorization', 'proxy-connection', 'connection'].includes(
+          key.toLowerCase()
+        )
+    )
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+  lines.unshift(`Host: ${targetHost}`)
+  lines.push('Connection: close')
+  const headers = lines.join('\r\n')
+  return Buffer.byteLength(headers, 'latin1') <= MAX_UPSTREAM_HEADER ? headers : null
+}
+
 // ── HTTPS tunneling (CONNECT) — the common path ──
 function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex, head: Buffer): void {
-  const [host, portStr] = (req.url ?? '').split(':')
-  const port = Number(portStr) || 443
+  const target = connectTarget(req.url ?? '')
+  let upstream: Socket | null = null
+  let established = false
+  let failed = false
 
   const fail = (): void => {
+    if (failed) return
+    failed = true
+    upstream?.destroy()
     try {
-      client.write('HTTP/1.1 502 Bad Gateway\r\n\r\n')
+      if (!established) client.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
     } catch {
       /* ignore */
     }
@@ -62,6 +119,13 @@ function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex,
       /* ignore */
     }
   }
+
+  if (!target || head.length > MAX_UPSTREAM_HEADER) {
+    fail()
+    return
+  }
+  const { host, port } = target
+  ;(client as import('net').Socket).setTimeout(SOCKET_TIMEOUT, () => client.destroy())
 
   if (proxy.type === 'socks5') {
     SocksClient.createConnection({
@@ -73,9 +137,17 @@ function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex,
         password: proxy.password
       },
       command: 'connect',
-      destination: { host, port }
+      destination: { host, port },
+      timeout: SOCKET_TIMEOUT
     })
       .then(({ socket }) => {
+        if (failed || client.destroyed) {
+          socket.destroy()
+          return
+        }
+        upstream = socket
+        socket.setTimeout(SOCKET_TIMEOUT, fail)
+        established = true
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
         if (head && head.length) socket.write(head)
         safePipe(socket, client)
@@ -86,48 +158,66 @@ function handleConnect(proxy: ProxyConfig, req: IncomingMessage, client: Duplex,
   }
 
   // http/https upstream proxy → forward CONNECT with credentials.
-  const upstream = netConnect(proxy.port!, proxy.host!, () => {
-    upstream.write(
+  const relay = connectUpstream(proxy, () => {
+    if (failed) return
+    relay.write(
       `CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n` +
         basicAuth(proxy) +
         'Proxy-Connection: keep-alive\r\n\r\n'
     )
   })
+  upstream = relay
+  relay.setTimeout(SOCKET_TIMEOUT, fail)
 
   let buf = Buffer.alloc(0)
   const onData = (chunk: Buffer): void => {
     buf = Buffer.concat([buf, chunk])
-    const idx = buf.indexOf('\r\n\r\n')
-    if (idx === -1) return
-    upstream.removeListener('data', onData)
-    const statusLine = buf.slice(0, buf.indexOf('\r\n')).toString('latin1')
-    if (!/ 200 /.test(statusLine)) {
+    if (buf.length > MAX_UPSTREAM_HEADER) {
       fail()
-      upstream.end()
       return
     }
+    const idx = buf.indexOf('\r\n\r\n')
+    if (idx === -1) return
+    relay.removeListener('data', onData)
+    const statusLine = buf.slice(0, buf.indexOf('\r\n')).toString('latin1')
+    if (!/^HTTP\/1\.[01] 2\d\d(?: |$)/.test(statusLine)) {
+      fail()
+      return
+    }
+    established = true
     client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
     const remainder = buf.slice(idx + 4)
-    if (head && head.length) upstream.write(head)
+    if (head && head.length) relay.write(head)
     if (remainder.length) client.write(remainder)
-    safePipe(upstream, client)
-    safePipe(client, upstream)
+    safePipe(relay, client)
+    safePipe(client, relay)
   }
-  upstream.on('data', onData)
-  upstream.on('error', fail)
-  client.on('error', () => {
-    try {
-      upstream.end()
-    } catch {
-      /* ignore */
-    }
-  })
+  relay.on('data', onData)
+  relay.on('error', fail)
+  client.on('error', () => upstream?.destroy())
+  client.on('close', () => upstream?.destroy())
 }
 
 // ── Plain HTTP forwarding (http:// sites) ──
 function handleHttp(proxy: ProxyConfig, req: IncomingMessage, res: ServerResponse): void {
-  const url = req.url ?? ''
+  let target: URL
+  try {
+    target = new URL(req.url ?? '')
+    if (target.protocol !== 'http:' || target.username || target.password) {
+      throw new Error('invalid relay URL')
+    }
+    target.hash = ''
+  } catch {
+    res.writeHead(400)
+    res.end('invalid proxy request')
+    return
+  }
+  let upstream: Socket | null = null
+  let failed = false
   const fail = (): void => {
+    if (failed) return
+    failed = true
+    upstream?.destroy()
     try {
       res.writeHead(502)
       res.end('relay error')
@@ -137,24 +227,28 @@ function handleHttp(proxy: ProxyConfig, req: IncomingMessage, res: ServerRespons
   }
 
   if (proxy.type === 'socks5') {
-    let u: URL
-    try {
-      u = new URL(url)
-    } catch {
+    const port = Number(target.port) || 80
+    const headers = requestHeaders(req, target.host)
+    if (!headers) {
       fail()
       return
     }
-    const port = Number(u.port) || 80
     SocksClient.createConnection({
       proxy: { host: proxy.host!, port: proxy.port!, type: 5, userId: proxy.username, password: proxy.password },
       command: 'connect',
-      destination: { host: u.hostname, port }
+      destination: { host: target.hostname, port },
+      timeout: SOCKET_TIMEOUT
     })
       .then(({ socket }) => {
-        const headers = Object.entries(req.headers)
-          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
-          .join('\r\n')
-        socket.write(`${req.method} ${u.pathname}${u.search} HTTP/1.1\r\n${headers}\r\n\r\n`)
+        if (failed || res.destroyed) {
+          socket.destroy()
+          return
+        }
+        upstream = socket
+        socket.setTimeout(SOCKET_TIMEOUT, () => socket.destroy())
+        socket.write(
+          `${req.method} ${target.pathname}${target.search} HTTP/1.1\r\n${headers}\r\n\r\n`
+        )
         safePipe(req, socket)
         if (res.socket) safePipe(socket, res.socket)
         socket.on('error', fail)
@@ -164,23 +258,43 @@ function handleHttp(proxy: ProxyConfig, req: IncomingMessage, res: ServerRespons
   }
 
   // http/https upstream proxy: replay the absolute-URI request with credentials.
-  const upstream = netConnect(proxy.port!, proxy.host!, () => {
+  const headers = requestHeaders(req, target.host)
+  if (!headers) {
+    fail()
+    return
+  }
+  upstream = connectUpstream(proxy, () => {
+    if (!upstream || failed) return
     const auth = basicAuth(proxy)
-    const headers = Object.entries(req.headers)
-      .filter(([k]) => k.toLowerCase() !== 'proxy-authorization')
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
-      .join('\r\n')
-    upstream.write(`${req.method} ${url} HTTP/1.1\r\n${headers}\r\n${auth}\r\n`)
+    upstream.write(`${req.method} ${target.href} HTTP/1.1\r\n${headers}\r\n${auth}\r\n`)
     safePipe(req, upstream)
   })
+  upstream.setTimeout(SOCKET_TIMEOUT, fail)
   if (res.socket) safePipe(upstream, res.socket)
   upstream.on('error', fail)
+  req.on('aborted', () => upstream?.destroy())
 }
 
 export async function startRelay(proxy: ProxyConfig): Promise<RelayHandle> {
+  const safeProxy = sanitizeProxyConfig(proxy)
+  if (safeProxy.type === 'none' || !safeProxy.host || !safeProxy.port) throw new Error('Proxy relay không hợp lệ')
   const server = createServer()
-  server.on('request', (req, res) => handleHttp(proxy, req, res))
-  server.on('connect', (req, socket, head) => handleConnect(proxy, req as IncomingMessage, socket, head))
+  const clients = new Set<Socket>()
+  server.maxConnections = MAX_RELAY_CONNECTIONS
+  server.headersTimeout = 15_000
+  server.requestTimeout = 30_000
+  server.keepAliveTimeout = 10_000
+  server.maxHeadersCount = 100
+  server.on('request', (req, res) => handleHttp(safeProxy, req, res))
+  server.on('connect', (req, socket, head) => handleConnect(safeProxy, req as IncomingMessage, socket, head))
+  server.on('connection', (socket) => {
+    if (socket.remoteAddress !== '127.0.0.1') {
+      socket.destroy()
+      return
+    }
+    clients.add(socket)
+    socket.once('close', () => clients.delete(socket))
+  })
   server.on('clientError', (_e, socket) => {
     try {
       socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')
@@ -188,13 +302,24 @@ export async function startRelay(proxy: ProxyConfig): Promise<RelayHandle> {
       /* ignore */
     }
   })
+  // Keep a permanent listener so a late accept/listen error cannot become an
+  // uncaught EventEmitter error in Electron's main process.
+  server.on('error', () => {})
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.removeListener('error', reject)
+      resolve()
+    })
+  })
   const addr = server.address()
   const port = typeof addr === 'object' && addr ? addr.port : 0
   return {
     port,
     close: () => {
+      for (const socket of clients) socket.destroy()
+      clients.clear()
       try {
         server.close()
       } catch {

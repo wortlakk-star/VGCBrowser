@@ -1,20 +1,23 @@
-// electron-builder afterPack hook — ad-hoc code-sign the macOS app.
-//
-// We don't have an Apple Developer certificate (paid), so the app can't be
-// notarized. An UNSIGNED app, once downloaded (quarantined), is blocked by
-// Gatekeeper as "VGC Browser is damaged and can't be opened" — a dead end for
-// normal users. An AD-HOC signature (free, no cert) makes the signature valid, so
-// the block downgrades to "unidentified developer", which users CAN bypass via
-// right-click → Open, or System Settings → Privacy & Security → Open Anyway.
-//
-// Runs on macOS builds only; no-op elsewhere.
-const { execSync } = require('child_process')
+// Remove macOS resource-fork sidecars before electron-builder signs the bundle.
+// Unexpected `._*` files inside nested frameworks invalidate strict verification.
+const { readdir, rm } = require('fs/promises')
 const { join } = require('path')
+
+async function clean(root) {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  await Promise.all(
+    entries.map(async (entry) => {
+      const full = join(root, entry.name)
+      if (entry.name === '.DS_Store' || entry.name.startsWith('._')) {
+        await rm(full, { recursive: true, force: true })
+      } else if (entry.isDirectory()) {
+        await clean(full)
+      }
+    })
+  )
+}
 
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return
-  const appName = context.packager.appInfo.productFilename
-  const appPath = join(context.appOutDir, `${appName}.app`)
-  console.log('  • ad-hoc signing (no Apple cert):', appPath)
-  execSync(`codesign --force --deep --sign - "${appPath}"`, { stdio: 'inherit' })
+  await clean(context.appOutDir)
 }

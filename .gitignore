@@ -16,7 +16,8 @@ test/guard.cjs
 test/scan.cjs
 test/tells.cjs
 test/correlation.cjs
-test/tells.cjs
+test/tostring.cjs
 test/rectbase.ts
 test/rectbase.cjs
 test/deep.cjs
+test/hi-extension.cjs

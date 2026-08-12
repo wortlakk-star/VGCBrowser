@@ -53,7 +53,14 @@ const GPUS = [
   }
 ]
 
-const OS_OPTIONS: OsType[] = ['windows', 'macos', 'linux', 'android']
+const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
+  ? 'macos'
+  : /Win/i.test(navigator.userAgent)
+    ? 'windows'
+    : /Android/i.test(navigator.userAgent)
+      ? 'android'
+      : 'linux'
+const OS_OPTIONS: OsType[] = [HOST_OS]
 const PROXY_TYPES: ProxyType[] = ['none', 'http', 'https', 'socks5']
 // Must stay in step with the generator's lists in src/shared/fingerprint.ts.
 // navigator.deviceMemory is QUANTISED by Chrome to 0.25/0.5/1/2/4/8 and capped at 8 —
@@ -72,7 +79,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
   const [accTotp, setAccTotp] = useState(profile.account?.totp ?? '')
   const [accStatus, setAccStatus] = useState<AccountStatus | ''>(profile.account?.status ?? '')
   const [startUrls, setStartUrls] = useState(profile.startUrls.join('\n'))
-  const [os, setOs] = useState<OsType>(profile.os)
+  const [os, setOs] = useState<OsType>(HOST_OS)
   const [proxy, setProxy] = useState({ ...profile.proxy })
   const [fp, setFp] = useState<Fingerprint>({ ...profile.fingerprint })
   const [cookies, setCookies] = useState<Cookie[]>(profile.cookies ?? [])
@@ -294,7 +301,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               </label>
               <label>
                 Mật khẩu
-                <input value={accPass} onChange={(e) => setAccPass(e.target.value)} />
+                <input type="password" value={accPass} onChange={(e) => setAccPass(e.target.value)} />
               </label>
               <label>
                 Khóa 2FA (base32)

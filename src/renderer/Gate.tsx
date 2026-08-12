@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import App from './App'
 import { AuthScreen } from './components/AuthScreen'
 import { getCloud } from './cloud'
@@ -26,6 +26,20 @@ interface Gate {
 export default function Gate(): JSX.Element {
   const [status, setStatus] = useState<Status>('loading')
   const [gate, setGate] = useState<Gate | null>(null)
+  const sessionRevision = useRef(0)
+
+  const applySession = async (session: Session | null): Promise<void> => {
+    const revision = ++sessionRevision.current
+    try {
+      const applied = await window.vgc.cloudSetSession(
+        session ? { accessToken: session.access_token, uid: session.user.id } : null
+      )
+      if (applied && revision === sessionRevision.current) setStatus(session ? 'in' : 'out')
+    } catch (error) {
+      if (revision === sessionRevision.current) setStatus('out')
+      throw error
+    }
+  }
 
   // Forced-update check first — if blocked, we never reach auth/app.
   useEffect(() => {
@@ -49,28 +63,22 @@ export default function Gate(): JSX.Element {
         return
       }
 
-      const apply = async (session: Session | null): Promise<void> => {
-        if (session) {
-          await window.vgc.cloudSetSession({
-            accessToken: session.access_token,
-            uid: session.user.id
-          })
-          setStatus('in')
-        } else {
-          await window.vgc.cloudSetSession(null)
-          setStatus('out')
-        }
+      const { data } = await c.auth.getSession()
+      try {
+        await applySession(data.session)
+      } catch (error) {
+        console.error('[cloud-session]', error)
       }
 
-      const { data } = await c.auth.getSession()
-      await apply(data.session)
-
       const { data: sub } = c.auth.onAuthStateChange((_e, session) => {
-        void apply(session)
+        void applySession(session).catch((error) =>
+          console.error('[cloud-session-refresh]', error)
+        )
       })
       unsub = () => sub.subscription.unsubscribe()
     })()
     return () => {
+      sessionRevision.current++
       if (unsub) unsub()
     }
   }, [])
@@ -80,13 +88,7 @@ export default function Gate(): JSX.Element {
   const handleAuthed = async (): Promise<void> => {
     const c = await getCloud()
     const session = c ? (await c.auth.getSession()).data.session : null
-    if (session) {
-      await window.vgc.cloudSetSession({
-        accessToken: session.access_token,
-        uid: session.user.id
-      })
-    }
-    setStatus('in')
+    if (session) await applySession(session)
   }
 
   // Forced update — blocks everything (takes priority over auth/loading).

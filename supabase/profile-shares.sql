@@ -1,111 +1,41 @@
--- VGC Browser — profile sharing (share a profile, two-way, to another email)
--- Run ONCE in the Supabase SQL editor.
+-- VGC Browser - revoke the legacy symmetric-key profile-sharing design.
+-- Run after schema.sql. Safe to re-run.
 --
--- A profile owned by A can be shared with member emails. Because synced data is
--- AES-256-GCM encrypted, a SHARED random key (per shared profile) is stored here so
--- BOTH the owner and the members can decrypt it (the per-account secret can't be
--- used — only its owner can read that). The owner also picks a `proxy` that the
--- shared copy uses. RLS: the owner manages the share; a member can READ the row
--- (to get the shared_key + proxy) when the share targets their email.
+-- Existing rows are retained for an administrator-led migration, but no client role
+-- can read or mutate them. Re-enable sharing only after adding authenticated user
+-- public keys and one encrypted key envelope per recipient.
 
 create table if not exists public.profile_shares (
-  profile_id    text not null,                       -- the app's local profile id
-  owner         uuid not null references auth.users (id) on delete cascade,
-  member_email  text not null,
-  shared_key    text not null,                       -- random hex; the AES key material
-  proxy         jsonb,                               -- proxy the owner chose for the share
-  created_at    timestamptz not null default now(),
+  profile_id text not null,
+  owner uuid not null references auth.users (id) on delete cascade,
+  member_email text not null,
+  shared_key text not null,
+  proxy jsonb,
+  created_at timestamptz not null default now(),
   primary key (owner, profile_id, member_email)
 );
 
 alter table public.profile_shares enable row level security;
+alter table public.profile_shares force row level security;
 
--- Owner manages shares of their OWN profiles only. The WITH CHECK additionally
--- requires the profile to actually belong to the inserter in profiles_cloud —
--- otherwise anyone could self-insert a share row (owner = themselves) for a victim's
--- profile_id and, via can_access_shared_profile(), read/write that profile's cloud
--- row + storage. This binds share authorization to real profile ownership, so it no
--- longer collapses to merely knowing a profile_id UUID.
 drop policy if exists "share owner manage" on public.profile_shares;
-create policy "share owner manage" on public.profile_shares
-  for all
-  using (owner = auth.uid())
-  with check (
-    owner = auth.uid()
-    and exists (
-      select 1 from public.profiles_cloud pc
-      where pc.profile_id = profile_shares.profile_id
-        and pc.owner = auth.uid()
-    )
-  );
-
--- A member reads shares addressed to their email (to get the key + proxy + know
--- which profiles are shared with them).
 drop policy if exists "share member read" on public.profile_shares;
-create policy "share member read" on public.profile_shares
-  for select using (member_email = (auth.jwt() ->> 'email'));
 
--- SECURITY DEFINER helper (avoids RLS recursion when referenced by other policies):
--- true when the current user owns OR is a member of a share for this profile.
-create or replace function public.can_access_shared_profile(_profile_id text)
-returns boolean language sql security definer set search_path = public stable as $$
-  select exists (
-    select 1 from public.profile_shares
-    where profile_id = _profile_id
-      and (owner = auth.uid() or member_email = (auth.jwt() ->> 'email'))
-  );
-$$;
-
--- profiles_cloud: a member can READ + INSERT + UPDATE the shared profile's row
--- (two-way sync), but NOT hard-DELETE it — only the owner can remove the profile.
--- Split into per-command policies instead of `for all` so a member can't drop the
--- owner's row. Owner keeps full control via the existing "owner full access" policy.
 drop policy if exists "shared profile member access" on public.profiles_cloud;
 drop policy if exists "shared profile member read" on public.profiles_cloud;
 drop policy if exists "shared profile member insert" on public.profiles_cloud;
 drop policy if exists "shared profile member update" on public.profiles_cloud;
-create policy "shared profile member read" on public.profiles_cloud
-  for select using (public.can_access_shared_profile(profile_id));
-create policy "shared profile member insert" on public.profiles_cloud
-  for insert with check (public.can_access_shared_profile(profile_id));
-create policy "shared profile member update" on public.profiles_cloud
-  for update using (public.can_access_shared_profile(profile_id))
-  with check (public.can_access_shared_profile(profile_id));
+drop policy if exists "team read profiles" on public.profiles_cloud;
 
--- Storage: the session zip + cookies live at  {owner_uid}/{profile_id}.(zip|cookies.json).
--- Let a member read+write the objects of a profile shared with them. The FILENAME is
--- "{profile_id}.zip" / "{profile_id}.cookies.json" → strip the suffix to get the
--- profile id and check the share.
--- Members read + write (insert/update) the shared profile's objects, but can't
--- DELETE them (owner-only), so a member can't wipe the owner's session blob.
 drop policy if exists "shared profile storage member" on storage.objects;
 drop policy if exists "shared profile storage member read" on storage.objects;
 drop policy if exists "shared profile storage member insert" on storage.objects;
 drop policy if exists "shared profile storage member update" on storage.objects;
-create policy "shared profile storage member read" on storage.objects
-  for select using (
-    bucket_id = 'profiles'
-    and public.can_access_shared_profile(
-      regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')
-    )
-  );
-create policy "shared profile storage member insert" on storage.objects
-  for insert with check (
-    bucket_id = 'profiles'
-    and public.can_access_shared_profile(
-      regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')
-    )
-  );
-create policy "shared profile storage member update" on storage.objects
-  for update using (
-    bucket_id = 'profiles'
-    and public.can_access_shared_profile(
-      regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')
-    )
-  )
-  with check (
-    bucket_id = 'profiles'
-    and public.can_access_shared_profile(
-      regexp_replace(storage.filename(name), '\.(zip|cookies\.json)$', '')
-    )
-  );
+drop policy if exists "shared profile storage member delete" on storage.objects;
+
+drop trigger if exists guard_shared_profile_update on public.profiles_cloud;
+drop function if exists public.guard_shared_profile_update();
+drop function if exists public.is_shared_profile_member(uuid, text);
+drop function if exists public.can_access_shared_object(text);
+
+revoke all on table public.profile_shares from public, anon, authenticated;

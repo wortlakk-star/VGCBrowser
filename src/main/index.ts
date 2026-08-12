@@ -8,6 +8,49 @@ import { restartApiServer, stopApiServer } from './api-manager'
 import { initUpdater, hasDownloadedUpdate, installOnQuit } from './updater'
 import { startProxyKeepAlive, stopProxyKeepAlive } from './proxy-keepalive'
 import { startScheduler, stopScheduler } from './warmup-scheduler'
+import { fileURLToPath } from 'url'
+import { trustedExternalUrl } from './validation'
+
+const EXTERNAL_HOSTS = new Set([
+  'vgcbrowser.com',
+  'www.vgcbrowser.com',
+  'dashboard.iproyal.com',
+  'my.evomi.com',
+  'dash.cliproxy.com',
+  'dashboard.capsolver.com'
+])
+
+// Enforce Chromium's process sandbox for every renderer/utility process before
+// Electron becomes ready. The preload only uses contextBridge + ipcRenderer.
+app.enableSandbox()
+
+function safeExternalUrl(raw: string): string | null {
+  return trustedExternalUrl(raw, EXTERNAL_HOSTS)
+}
+
+function devRendererUrl(): URL | null {
+  if (app.isPackaged || !process.env.ELECTRON_RENDERER_URL) return null
+  try {
+    const url = new URL(process.env.ELECTRON_RENDERER_URL)
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
+      (url.protocol === 'http:' || url.protocol === 'https:')
+      ? url
+      : null
+  } catch {
+    return null
+  }
+}
+
+function isRendererNavigation(raw: string): boolean {
+  try {
+    const target = new URL(raw)
+    const devUrl = devRendererUrl()
+    if (devUrl) return target.origin === devUrl.origin
+    return target.protocol === 'file:' && fileURLToPath(target) === join(__dirname, '../renderer/index.html')
+  } catch {
+    return false
+  }
+}
 
 // Network races — a browser tab or upstream proxy closing mid-write — surface as
 // socket errors with these codes. The proxy relay attaches its own handlers, but
@@ -59,9 +102,13 @@ function createWindow(): void {
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: !app.isPackaged,
+      navigateOnDragDrop: false
     }
   })
 
@@ -69,12 +116,27 @@ function createWindow(): void {
 
   // Open external links in the OS browser, never in-app.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    const safe = safeExternalUrl(url)
+    if (safe) void shell.openExternal(safe)
     return { action: 'deny' }
   })
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isRendererNavigation(url)) return
+    event.preventDefault()
+    const safe = safeExternalUrl(url)
+    if (safe) void shell.openExternal(safe)
+  })
+
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault())
+
+  const ses = win.webContents.session
+  ses.setPermissionCheckHandler(() => false)
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+
+  const devUrl = devRendererUrl()
+  if (devUrl) {
+    win.loadURL(devUrl.toString())
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }

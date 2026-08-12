@@ -4,7 +4,6 @@
 
 import { startApiServer, type ApiHandle } from './api-server'
 import { getSettings } from './settings'
-import { getBrowserWsUrl } from './cdp'
 import { listProfiles, deleteProfile } from './store'
 import { launchProfile, stopProfile, getRuntimeState } from './profile-manager'
 import { createProfile, updateProfile } from './profiles-service'
@@ -24,7 +23,6 @@ export async function restartApiServer(): Promise<{ running: boolean; port?: num
         launchProfile,
         stopProfile,
         getRuntimeState,
-        browserWsForPort: (p) => getBrowserWsUrl(p),
         createProfile,
         updateProfile,
         deleteProfile

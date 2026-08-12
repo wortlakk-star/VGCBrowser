@@ -12,11 +12,6 @@ import type { UpdateStatus } from '../shared/types'
 
 const { autoUpdater } = electronUpdater
 
-// macOS auto-install needs an Apple Developer ID signature (Squirrel.Mac rejects an
-// unsigned update with "Code signature did not pass validation"). The app isn't
-// signed, so on Mac we only CHECK for a newer version and send the user to the
-// download page to install the .dmg manually. Windows auto-updates normally.
-const isMac = process.platform === 'darwin'
 const MAC_DOWNLOAD_PAGE = 'https://vgcbrowser.com/'
 
 let lastStatus: UpdateStatus = { phase: 'idle', currentVersion: app.getVersion() }
@@ -41,10 +36,12 @@ export function getUpdateStatus(): UpdateStatus {
 export function initUpdater(): void {
   if (!app.isPackaged) return // dev build: no updater
 
-  // On Mac we can't install an unsigned update, so don't download it (the download
-  // would only end in a signature-validation error). Just check + prompt manual.
-  autoUpdater.autoDownload = !isMac
-  autoUpdater.autoInstallOnAppQuit = !isMac
+  // Release builds are code-signed on both platforms; electron-updater verifies the
+  // platform signature before installation.
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.allowDowngrade = false
+  autoUpdater.allowPrerelease = false
   autoUpdater.logger = null
 
   autoUpdater.on('checking-for-update', () =>
@@ -55,8 +52,7 @@ export function initUpdater(): void {
       phase: 'available',
       currentVersion: app.getVersion(),
       newVersion: info.version,
-      // Mac stays at 'available' (no auto-download) with a manual-download link.
-      ...(isMac ? { manualDownloadUrl: MAC_DOWNLOAD_PAGE } : {})
+      ...(process.platform === 'darwin' ? { manualDownloadUrl: MAC_DOWNLOAD_PAGE } : {})
     })
   )
   autoUpdater.on('update-not-available', () =>

@@ -10,13 +10,6 @@ interface Props {
   onCreated: () => void
 }
 
-const OS_OPTIONS: Array<{ v: OsType; label: string; icon: string }> = [
-  { v: 'windows', label: 'Windows', icon: '🪟' },
-  { v: 'macos', label: 'macOS', icon: '' },
-  { v: 'linux', label: 'Linux', icon: '🐧' },
-  { v: 'android', label: 'Android', icon: '🤖' }
-]
-
 type ProxyMode = 'none' | 'manual' | 'pool' | 'generate'
 const PROXY_MODES: Array<{ v: ProxyMode; label: string }> = [
   { v: 'none', label: 'Không dùng' },
@@ -39,6 +32,14 @@ const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
     : /Android/i.test(navigator.userAgent)
       ? 'android'
       : 'linux'
+
+const OS_LABEL: Record<OsType, string> = {
+  windows: 'Windows',
+  macos: 'macOS',
+  linux: 'Linux',
+  android: 'Android'
+}
+const OS_OPTIONS: Array<{ v: OsType; label: string }> = [{ v: HOST_OS, label: OS_LABEL[HOST_OS] }]
 
 export function CreateProfileModal({
   groups,
@@ -218,7 +219,7 @@ export function CreateProfileModal({
                   className={`seg-btn ${os === o.v ? 'active' : ''}`}
                   onClick={() => setOs(o.v)}
                 >
-                  {o.icon} {o.label}
+                  {o.label}
                 </button>
               ))}
             </div>

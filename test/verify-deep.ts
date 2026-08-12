@@ -10,19 +10,17 @@
 //
 // Run:  npm run verify:deep [enginePath]     (REAL_CORES=.. REAL_MEM=.. to flag leaks)
 
-import { spawn, ChildProcess } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CdpConnection, getBrowserWsUrl } from '../src/main/cdp'
+import { CdpConnection } from '../src/main/cdp'
 import { seedFromString } from '../src/main/fingerprint-script'
 import { ensureNativeGuardExtension } from '../src/main/webrtc-guard'
 import { generateFingerprint } from '../src/shared/fingerprint'
 import type { Fingerprint } from '../src/shared/types'
+import { createLoopbackPage, openNativePage, resolveTestEngine } from './native-harness'
 
-const ENGINE =
-  process.argv[2] || join(process.env.APPDATA || '', 'vgc-browser', 'engine', 'chromium', 'chrome.exe')
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const ENGINE = resolveTestEngine(process.argv[2])
 
 async function evaluate(conn: CdpConnection, sid: string, expr: string): Promise<unknown> {
   const res = (await conn.send(
@@ -156,20 +154,22 @@ const PROBE = `(async () => {
 
 interface Probe { [k: string]: unknown }
 
-async function launch(fp: Fingerprint, id: string, port: number): Promise<Probe> {
+async function launch(fp: Fingerprint, id: string, pageUrl: string): Promise<Probe> {
   const udd = mkdtempSync(join(tmpdir(), 'vgc-deep-'))
   const seed = seedFromString(id)
-  const guardExt = ensureNativeGuardExtension(udd, fp, seed)
+  const guardExt = ensureNativeGuardExtension(udd, fp)
   const langs = fp.languages && fp.languages.length ? fp.languages : [fp.language]
+  const uaPlatform = fp.platform === 'MacIntel' ? 'macOS' : fp.platform.startsWith('Linux') ? 'Linux' : 'Windows'
+  const uaArch = uaPlatform === 'macOS' && /apple/i.test(fp.webgl.renderer) ? 'arm' : 'x86'
   const args = [
-    `--user-data-dir=${udd}`, `--remote-debugging-port=${port}`, '--remote-allow-origins=*',
+    `--user-data-dir=${udd}`,
     '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync',
     '--hide-crash-restore-bubble',
     ...(process.env.HEADFUL ? [] : ['--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']),
     `--lang=${fp.language}`, `--window-size=${fp.screen.width},${fp.screen.height - 40}`,
     `--user-agent=${fp.userAgent}`, `--vgc-ua-full-version=${fp.uaFullVersion || ''}`,
-    '--vgc-ua-platform=Windows', `--vgc-ua-platform-version=${fp.uaPlatformVersion || '15.0.0'}`,
-    '--vgc-ua-arch=x86', '--vgc-ua-bitness=64',
+    `--vgc-ua-platform=${uaPlatform}`, `--vgc-ua-platform-version=${fp.uaPlatformVersion || ''}`,
+    `--vgc-ua-arch=${uaArch}`, '--vgc-ua-bitness=64',
     `--vgc-hardware-concurrency=${fp.hardwareConcurrency}`, `--vgc-device-memory=${fp.deviceMemory}`,
     `--vgc-platform=${fp.platform}`, `--vgc-webgl-vendor=${fp.webgl.vendor}`, `--vgc-webgl-renderer=${fp.webgl.renderer}`,
     `--vgc-timezone=${fp.timezone}`, `--vgc-accept-languages=${langs.join(',')}`,
@@ -179,28 +179,24 @@ async function launch(fp: Fingerprint, id: string, port: number): Promise<Probe>
     ...(guardExt ? [`--load-extension=${guardExt}`, `--disable-extensions-except=${guardExt}`] : []),
     'about:blank'
   ]
-  const proc: ChildProcess = spawn(ENGINE, args)
+  const browser = await openNativePage(ENGINE, args, pageUrl)
   try {
-    const conn = await CdpConnection.connect(await getBrowserWsUrl(port))
-    const c = (await conn.send('Target.createTarget', { url: 'about:blank' })) as { targetId: string }
-    const a = (await conn.send('Target.attachToTarget', { targetId: c.targetId, flatten: true })) as { sessionId: string }
-    await conn.send('Page.enable', {}, a.sessionId)
-    await conn.send('Runtime.enable', {}, a.sessionId)
-    await conn.send('Page.navigate', { url: 'https://example.com' }, a.sessionId)
-    await sleep(3500)
-    const r = (await evaluate(conn, a.sessionId, PROBE)) as Probe
-    conn.close()
-    return r
+    return (await evaluate(browser.conn, browser.sessionId, PROBE)) as Probe
   } finally {
-    try { proc.kill() } catch { /* */ }
+    await browser.close()
+    rmSync(udd, { recursive: true, force: true })
   }
 }
 
 async function main(): Promise<void> {
   console.log('engine:', ENGINE)
-  const fp = generateFingerprint('windows')
+  const os = process.env.VGC_OS === 'windows' || process.env.VGC_OS === 'linux' || process.env.VGC_OS === 'macos'
+    ? process.env.VGC_OS
+    : process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'
+  const fp = generateFingerprint(os)
   console.log(`profile: ${fp.hardwareConcurrency}c/${fp.deviceMemory}GB ${fp.screen.width}x${fp.screen.height} ${fp.webgl.renderer.slice(0, 50)} tz=${fp.timezone}`)
-  const r = await launch(fp, 'deep-audit-profile', 9631)
+  const page = await createLoopbackPage()
+  const r = await launch(fp, 'deep-audit-profile', page.url).finally(() => page.close())
   console.log('\n===== RAW =====')
   console.log(JSON.stringify(r, null, 1))
 
@@ -246,12 +242,13 @@ async function main(): Promise<void> {
 
   // coherence
   const ua = r.uaData as { platform?: string; mobile?: boolean; arch?: string; fv?: string; fvl?: string }
+  const expectedUaPlatform = fp.platform === 'MacIntel' ? 'macOS' : fp.platform.startsWith('Linux') ? 'Linux' : 'Windows'
   if (typeof ua === 'object') {
-    if (ua.platform !== 'Windows') coh.push(`UA-CH platform ${ua.platform} != Windows`)
+    if (ua.platform !== expectedUaPlatform) coh.push(`UA-CH platform ${ua.platform} != ${expectedUaPlatform}`)
     if (ua.mobile !== false) coh.push(`UA-CH mobile = ${ua.mobile}`)
     if (!ua.fvl) coh.push(`UA-CH fullVersionList empty`)
   }
-  if (String(r.platform) !== 'Win32') coh.push(`navigator.platform ${r.platform} != Win32`)
+  if (String(r.platform) !== fp.platform) coh.push(`navigator.platform ${r.platform} != ${fp.platform}`)
   if (![0.25, 0.5, 1, 2, 4, 8].includes(Number(r.deviceMemory))) coh.push(`deviceMemory ${r.deviceMemory} not a Chrome value`)
   if (String(r.vendor) !== 'Google Inc.') coh.push(`navigator.vendor = ${r.vendor}`)
   if (String(r.productSub) !== '20030107') coh.push(`navigator.productSub = ${r.productSub} (Chrome=20030107)`)

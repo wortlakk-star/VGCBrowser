@@ -1,105 +1,120 @@
-// ── VGC Browser — access licensing (admin-approved email allowlist) ──────────
-// Only emails the admin approved (managed at https://vgcbrowser.com/quanly) may use
-// VGC Browser. On cloud login (and again right before a profile opens) we ask the
-// allowlist API whether the signed-in email is approved; launching a profile is blocked
-// otherwise. Fail-safe: a transient network error falls back to the last-known cached
-// result per email, so a server blip never locks out an already-approved user — but an
-// email that has never been approved (no cache) stays blocked.
-
 import { app } from 'electron'
 import { join } from 'path'
-import { readFileSync, writeFileSync } from 'fs'
 import { getMachineId, getMachineName } from './machine-id'
+import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
+import { readLimitedResponseJson } from './http-limit'
 
 const API = 'https://vgcbrowser.com/quanly/check.php'
 const REGISTER_API = 'https://vgcbrowser.com/quanly/register.php'
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const MAX_RESPONSE_BYTES = 64 * 1024
 
-// Owner emails that are ALWAYS licensed — a hard safety net so the admin can never be
-// locked out of their own app, even if the allowlist server is unreachable.
-const ALWAYS_ALLOWED = new Set(['c.d.wortl@gmail.com'])
+interface CachedDecision {
+  approved: boolean
+  checkedAt: number
+}
 
-let state: { email: string; approved: boolean; reason: string } = { email: '', approved: false, reason: 'init' }
+let state: { email: string; approved: boolean; reason: string } = {
+  email: '',
+  approved: false,
+  reason: 'init'
+}
 
 function cacheFile(): string {
+  return join(app.getPath('userData'), 'vgc-license.enc')
+}
+
+function legacyCacheFile(): string {
   return join(app.getPath('userData'), 'vgc-license.json')
 }
-function loadCache(): Record<string, boolean> {
+
+async function loadCache(): Promise<Record<string, CachedDecision>> {
   try {
-    return JSON.parse(readFileSync(cacheFile(), 'utf-8')) as Record<string, boolean>
+    const raw =
+      (await readSecureJson<Record<string, CachedDecision | boolean>>(cacheFile())) ??
+      (await migratePlainJson<Record<string, CachedDecision | boolean>>(cacheFile(), legacyCacheFile())) ??
+      {}
+    const now = Date.now()
+    const out: Record<string, CachedDecision> = {}
+    for (const [email, value] of Object.entries(raw)) {
+      if (
+        value &&
+        typeof value === 'object' &&
+        typeof value.approved === 'boolean' &&
+        Number.isFinite(value.checkedAt) &&
+        value.checkedAt <= now
+      ) {
+        out[email] = value
+      }
+    }
+    return out
   } catch {
     return {}
   }
 }
-function saveCache(c: Record<string, boolean>): void {
-  try {
-    writeFileSync(cacheFile(), JSON.stringify(c))
-  } catch {
-    /* best-effort */
-  }
+
+async function saveDecision(email: string, approved: boolean): Promise<void> {
+  const fresh = await loadCache()
+  fresh[email] = { approved, checkedAt: Date.now() }
+  await writeSecureJson(cacheFile(), fresh)
 }
 
-/** Ask the allowlist whether `email` may use VGC. Updates cached state; returns approved. */
+async function smallJson<T>(response: Response): Promise<T> {
+  return readLimitedResponseJson<T>(response, MAX_RESPONSE_BYTES)
+}
+
 export async function refreshLicense(email: string | null): Promise<boolean> {
-  const e = (email || '').toLowerCase().trim()
-  if (!e) {
+  const e = (email || '').toLowerCase().trim().slice(0, 320)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
     state = { email: '', approved: false, reason: 'not-signed-in' }
     return false
   }
-  if (ALWAYS_ALLOWED.has(e)) {
-    state = { email: e, approved: true, reason: 'owner' }
-    return true
-  }
   try {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 8000)
-    const r = await fetch(`${API}?email=${encodeURIComponent(e)}`, { signal: ctrl.signal }).finally(() =>
-      clearTimeout(timer)
-    )
-    const j = (await r.json()) as { approved?: boolean; reason?: string }
+    const r = await fetch(`${API}?email=${encodeURIComponent(e)}`, {
+      signal: AbortSignal.timeout(8000),
+      cache: 'no-store',
+      redirect: 'error'
+    })
+    if (!r.ok) {
+      await r.body?.cancel().catch(() => {})
+      throw new Error(`License HTTP ${r.status}`)
+    }
+    const j = await smallJson<{ approved?: boolean; reason?: string }>(r)
     const approved = j.approved === true
-    state = { email: e, approved, reason: j.reason ?? (approved ? 'ok' : 'not-approved') }
-    // Re-read + merge ONLY this key right before writing. refreshLicense runs fire-and-forget on
-    // every login, so two calls for different emails can race; writing back the stale whole-file
-    // snapshot loaded at the top would clobber the other email's cached=true and later wrongly
-    // block that already-approved user during a network blip.
-    const fresh = loadCache()
-    fresh[e] = approved
-    saveCache(fresh)
+    state = {
+      email: e,
+      approved,
+      reason: typeof j.reason === 'string' ? j.reason.slice(0, 120) : approved ? 'ok' : 'not-approved'
+    }
+    await saveDecision(e, approved).catch(() => {})
     return approved
   } catch {
-    // Network error → trust the last-known cached decision (don't lock out on a blip). Re-read so
-    // a decision another concurrent call just wrote is seen.
-    const cached = loadCache()[e] === true
-    state = { email: e, approved: cached, reason: cached ? 'cache' : 'unverified' }
-    return cached
+    const cached = (await loadCache())[e]
+    const fresh = Boolean(cached?.approved && Date.now() - cached.checkedAt <= CACHE_TTL_MS)
+    state = { email: e, approved: fresh, reason: fresh ? 'recent-cache' : 'unverified' }
+    return fresh
   }
 }
 
-/**
- * Fire-and-forget: tell the admin panel (/quanly) this email just signed in — from which
- * machine (a stable per-machine id + hostname) and, resolved server-side from the request
- * IP, which country. Lets the admin SEE new sign-ups (with country + machine) and approve
- * them there. Never blocks or throws: registration reporting must not affect login.
- */
 export async function reportRegistration(email: string | null): Promise<void> {
-  const e = (email || '').toLowerCase().trim()
-  if (!e) return
+  const e = (email || '').toLowerCase().trim().slice(0, 320)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return
   try {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 8000)
-    await fetch(REGISTER_API, {
+    const response = await fetch(REGISTER_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: e,
         machineId: getMachineId(),
-        machineName: getMachineName(),
+        machineName: getMachineName().slice(0, 255),
         os: process.platform
       }),
-      signal: ctrl.signal
-    }).finally(() => clearTimeout(timer))
+      signal: AbortSignal.timeout(8000),
+      redirect: 'error'
+    })
+    await response.body?.cancel().catch(() => {})
   } catch {
-    /* best-effort */
+    // Registration telemetry must not affect login.
   }
 }
 

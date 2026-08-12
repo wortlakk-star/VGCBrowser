@@ -6,9 +6,9 @@
 // formatting the username/password; no per-request API call is needed to use it.
 
 import { app } from 'electron'
-import { promises as fs } from 'fs'
 import { join } from 'path'
 import { accountKey } from './session'
+import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
 import type {
   ProxyConfig,
   ProxyProviderId,
@@ -17,28 +17,162 @@ import type {
   GenerateProxiesOpts,
   SavedProxy
 } from '../shared/types'
+import { cleanText, sanitizeProxyConfig } from './validation'
+import { randomBytes, randomUUID } from 'crypto'
+import { readLimitedResponseJson, readLimitedResponseText } from './http-limit'
 
-function file(): string {
-  return join(app.getPath('userData'), 'db', `proxy-providers-${accountKey()}.json`)
+const MAX_PROVIDER_RESPONSE = 2 * 1024 * 1024
+const PROVIDERS = new Set<ProxyProviderId>([
+  'iproyal',
+  'oxylabs',
+  'brightdata',
+  'evomi',
+  'cliproxy'
+])
+
+function credential(value: unknown, max = 4096): string {
+  return cleanText(value, max).replace(/[\r\n\t]/g, '').trim()
 }
 
-export async function getProviderCreds(): Promise<ProviderCreds> {
-  try {
-    return JSON.parse(await fs.readFile(file(), 'utf-8')) as ProviderCreds
-  } catch {
-    return {}
+function normalizeCreds(value: unknown): ProviderCreds {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const input = value as ProviderCreds
+  const clipPort = Number(input.cliproxy?.port)
+  return {
+    ...(input.iproyal
+      ? { iproyal: {
+          username: credential(input.iproyal.username, 512),
+          password: credential(input.iproyal.password, 2048),
+          ...(input.iproyal.apiToken ? { apiToken: credential(input.iproyal.apiToken) } : {})
+        } }
+      : {}),
+    ...(input.oxylabs
+      ? { oxylabs: { username: credential(input.oxylabs.username, 512), password: credential(input.oxylabs.password, 2048) } }
+      : {}),
+    ...(input.brightdata
+      ? { brightdata: {
+          customer: credential(input.brightdata.customer, 512),
+          zone: credential(input.brightdata.zone, 512),
+          password: credential(input.brightdata.password, 2048)
+        } }
+      : {}),
+    ...(input.evomi ? { evomi: { apiKey: credential(input.evomi.apiKey) } } : {}),
+    ...(input.cliproxy
+      ? { cliproxy: {
+          host: credential(input.cliproxy.host, 253),
+          port: Number.isInteger(clipPort) && clipPort > 0 && clipPort <= 65535 ? clipPort : undefined,
+          username: credential(input.cliproxy.username, 512),
+          password: credential(input.cliproxy.password, 2048),
+          state: credential(input.cliproxy.state, 80)
+        } }
+      : {})
   }
 }
 
+async function limitedText(response: Response): Promise<string> {
+  return readLimitedResponseText(response, MAX_PROVIDER_RESPONSE)
+}
+
+async function limitedJson<T>(response: Response): Promise<T> {
+  return readLimitedResponseJson<T>(response, MAX_PROVIDER_RESPONSE)
+}
+
+interface ProviderStorePaths {
+  encrypted: string
+  legacy: string
+}
+
+function storePaths(key = accountKey()): ProviderStorePaths {
+  const dir = join(app.getPath('userData'), 'db')
+  return {
+    encrypted: join(dir, `proxy-providers-${key}.enc`),
+    legacy: join(dir, `proxy-providers-${key}.json`)
+  }
+}
+
+async function getProviderCredsAt(paths: ProviderStorePaths): Promise<ProviderCreds> {
+  return normalizeCreds(
+    (await readSecureJson<ProviderCreds>(paths.encrypted)) ??
+    (await migratePlainJson<ProviderCreds>(paths.encrypted, paths.legacy)) ??
+    {}
+  )
+}
+
+export function getProviderCreds(): Promise<ProviderCreds> {
+  const paths = storePaths()
+  return serializeCredentialAccess(paths, () => getProviderCredsAt(paths))
+}
+
+const credentialWriteChains = new Map<string, Promise<unknown>>()
+
+function serializeCredentialAccess<T>(
+  paths: ProviderStorePaths,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = credentialWriteChains.get(paths.encrypted) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const settled = run.then(
+    () => undefined,
+    () => undefined
+  )
+  credentialWriteChains.set(paths.encrypted, settled)
+  void settled.finally(() => {
+    if (credentialWriteChains.get(paths.encrypted) === settled) {
+      credentialWriteChains.delete(paths.encrypted)
+    }
+  })
+  return run
+}
+
 export async function saveProviderCreds(patch: ProviderCreds): Promise<ProviderCreds> {
-  await fs.mkdir(join(app.getPath('userData'), 'db'), { recursive: true })
-  const merged = { ...(await getProviderCreds()), ...patch }
-  await fs.writeFile(file(), JSON.stringify(merged, null, 2), 'utf-8')
-  return merged
+  const paths = storePaths()
+  return serializeCredentialAccess(paths, async () => {
+    const merged = normalizeCreds({ ...(await getProviderCredsAt(paths)), ...normalizeCreds(patch) })
+    await writeSecureJson(paths.encrypted, merged)
+    return merged
+  })
 }
 
 function sessionId(): string {
-  return Math.random().toString(36).slice(2, 10)
+  return randomBytes(8).toString('base64url')
+}
+
+function countryCode(value: unknown): string {
+  const country = cleanText(value, 2).trim().toLowerCase()
+  return /^[a-z]{2}$/.test(country) ? country : ''
+}
+
+function normalizeBuildOptions(value: unknown): ProxyBuildOpts {
+  const input = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Partial<ProxyBuildOpts>)
+    : {}
+  return {
+    country: countryCode(input.country),
+    sticky: input.sticky === true,
+    sessionMinutes: Math.max(1, Math.min(1440, Math.trunc(Number(input.sessionMinutes) || 10)))
+  }
+}
+
+function normalizeGenerateOptions(value: unknown): GenerateProxiesOpts {
+  const input = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Partial<GenerateProxiesOpts>)
+    : {}
+  const lifetime = cleanText(input.lifetime, 16).trim().toLowerCase()
+  return {
+    count: Math.max(1, Math.min(100, Math.trunc(Number(input.count) || 1))),
+    country: countryCode(input.country),
+    protocol: input.protocol === 'socks5' ? 'socks5' : 'http',
+    sticky: input.sticky === true,
+    hard: input.hard === true,
+    ...(lifetime ? { lifetime } : {}),
+    ...(cleanText(input.label, 160).trim() ? { label: cleanText(input.label, 160).trim() } : {}),
+    ...(PROVIDERS.has(input.provider as ProxyProviderId)
+      ? { provider: input.provider as ProxyProviderId }
+      : {}),
+    ...(['rpc', 'rp', 'mp'].includes(cleanText(input.product, 8).trim())
+      ? { product: cleanText(input.product, 8).trim() }
+      : {})
+  }
 }
 
 /**
@@ -49,10 +183,12 @@ export async function buildProviderProxy(
   provider: ProxyProviderId,
   opts: ProxyBuildOpts
 ): Promise<ProxyConfig> {
+  if (!PROVIDERS.has(provider)) throw new Error('Nhà cung cấp không hợp lệ.')
+  opts = normalizeBuildOptions(opts)
   const creds = await getProviderCreds()
-  const cc = (opts.country ?? '').trim().toLowerCase()
+  const cc = countryCode(opts.country)
   const sid = sessionId()
-  const mins = opts.sessionMinutes && opts.sessionMinutes > 0 ? opts.sessionMinutes : 10
+  const mins = Math.max(1, Math.min(1440, Math.trunc(Number(opts.sessionMinutes) || 10)))
 
   if (provider === 'iproyal') {
     const c = creds.iproyal
@@ -97,7 +233,7 @@ export async function buildProviderProxy(
     })
     const p = list[0]
     if (!p) throw new Error('Evomi không trả về proxy.')
-    return { type: p.type, host: p.host, port: p.port, username: p.username, password: p.password, provider: 'Evomi' }
+    return sanitizeProxyConfig({ type: p.type, host: p.host, port: p.port, username: p.username, password: p.password, provider: 'Evomi' })
   }
 
   if (provider === 'cliproxy') {
@@ -132,6 +268,7 @@ export async function buildProviderProxy(
  * Docs: help.cliproxy.com — username `user-region-{CC}-st-{STATE}-sid-{ID}-t-{MINUTES}`.
  */
 export async function generateCliproxyProxies(opts: GenerateProxiesOpts): Promise<SavedProxy[]> {
+  opts = normalizeGenerateOptions(opts)
   const creds = await getProviderCreds()
   const c = creds.cliproxy
   if (!c?.username || !c?.password) {
@@ -142,7 +279,7 @@ export async function generateCliproxyProxies(opts: GenerateProxiesOpts): Promis
   const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
   const type: SavedProxy['type'] = opts.protocol === 'socks5' ? 'socks5' : 'http'
   const host = (c.host || 'us.cliproxy.io').trim()
-  const region = (opts.country ?? '').trim().toUpperCase() || 'US'
+  const region = countryCode(opts.country).toUpperCase() || 'US'
   const state = (c.state ?? '').trim()
   // Cliproxy sticky max is 120 min; default to the max when sticky + no explicit lifetime.
   const mins = Math.min(120, evomiLifetimeMinutes(opts.lifetime) ?? 120)
@@ -166,8 +303,7 @@ export async function generateCliproxyProxies(opts: GenerateProxiesOpts): Promis
   return out
 }
 
-const genProxyId = (): string =>
-  globalThis.crypto?.randomUUID?.() ?? `p_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
+const genProxyId = (): string => randomUUID()
 
 /**
  * Generate N ready-to-use proxies on demand via the iProyal Residential API and
@@ -176,13 +312,14 @@ const genProxyId = (): string =>
  * Docs: POST https://resi-api.iproyal.com/v1/access/generate-proxy-list
  */
 export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise<SavedProxy[]> {
+  opts = normalizeGenerateOptions(opts)
   const creds = await getProviderCreds()
   const c = creds.iproyal
   if (!c?.apiToken) throw new Error('Chưa nhập API token iProyal (Dashboard → Settings → API).')
   if (!c?.username || !c?.password) throw new Error('Chưa nhập username/password iProyal.')
 
   const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
-  const cc = (opts.country ?? '').trim().toLowerCase()
+  const cc = countryCode(opts.country)
 
   // The dashboard "Proxy password" often already has session modifiers appended
   // (e.g. "BASE_country-us_state-colorado_session-xxx_lifetime-59s"). The API wants
@@ -210,14 +347,16 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
   const res = await fetch('https://resi-api.iproyal.com/v1/access/generate-proxy-list', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${c.apiToken}` },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+    redirect: 'error'
   })
   if (!res.ok) {
-    const t = await res.text().catch(() => '')
+    const t = await limitedText(res).catch(() => '')
     throw new Error(`iProyal API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
   }
 
-  const data = (await res.json()) as unknown
+  const data = await limitedJson<unknown>(res)
   const lines: string[] = Array.isArray(data)
     ? (data as string[])
     : Array.isArray((data as { proxies?: string[] })?.proxies)
@@ -228,7 +367,7 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
   const type: SavedProxy['type'] = opts.protocol === 'socks5' ? 'socks5' : 'http'
   const prefix = (opts.label ?? '').trim() || `iProyal${cc ? '-' + cc.toUpperCase() : ''}`
   const out: SavedProxy[] = []
-  lines.forEach((line, i) => {
+  lines.slice(0, count).forEach((line, i) => {
     // Format "{hostname}:{port}:{username}:{password}" — the password can itself
     // contain ':' so take everything after the 3rd separator as the password.
     const parts = String(line).trim().split(':')
@@ -237,9 +376,16 @@ export async function generateIproyalProxies(opts: GenerateProxiesOpts): Promise
     const port = Number(parts[1])
     // Skip a malformed line rather than guessing a port — for SOCKS5 the old HTTP-port
     // fallback (12321) produced a dead proxy pointing at the wrong protocol's port.
-    if (!Number.isInteger(port) || port <= 0) return
-    const username = parts[2]
-    const password = parts.slice(3).join(':')
+    if (
+      host.toLowerCase() !== 'geo.iproyal.com' ||
+      !Number.isInteger(port) ||
+      port <= 0 ||
+      port > 65535
+    ) {
+      return
+    }
+    const username = credential(parts[2], 512)
+    const password = credential(parts.slice(3).join(':'), 2048)
     if (!host || !username || !password) return
     out.push({ id: genProxyId(), label: `${prefix} ${i + 1}`, type, host, port, username, password })
   })
@@ -259,13 +405,15 @@ export async function iproyalBalance(): Promise<{ availableGb: number; subusers:
     throw new Error('Chưa nhập API token iProyal (Cài đặt → Nhà cung cấp Proxy).')
   }
   const res = await fetch('https://resi-api.iproyal.com/v1/me', {
-    headers: { Authorization: `Bearer ${c.apiToken}` }
+    headers: { Authorization: `Bearer ${c.apiToken}` },
+    signal: AbortSignal.timeout(20_000),
+    redirect: 'error'
   })
   if (!res.ok) {
-    const t = await res.text().catch(() => '')
+    const t = await limitedText(res).catch(() => '')
     throw new Error(`iProyal API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
   }
-  const data = (await res.json()) as { available_traffic?: number; subusers_count?: number }
+  const data = await limitedJson<{ available_traffic?: number; subusers_count?: number }>(res)
   return {
     availableGb: typeof data.available_traffic === 'number' ? data.available_traffic : 0,
     subusers: typeof data.subusers_count === 'number' ? data.subusers_count : 0
@@ -317,6 +465,7 @@ function evomiLifetimeMinutes(lt?: string): number | undefined {
 function parseEvomiLine(
   line: string
 ): { host: string; port: number; username?: string; password?: string } | null {
+  if (line.length > 8192) return null
   let s = line.trim()
   if (!s) return null
   const scheme = s.match(/^(https?|socks5):\/\//i)
@@ -326,19 +475,29 @@ function parseEvomiLine(
     const c = cred.split(':')
     const h = hp.split(':')
     const port = Number(h[1])
-    if (!h[0] || !Number.isInteger(port) || port <= 0) return null
-    return { host: h[0], port, username: c[0], password: c.slice(1).join(':') || undefined }
+    if (!h[0] || !Number.isInteger(port) || port <= 0 || port > 65535) return null
+    return {
+      host: credential(h[0], 253),
+      port,
+      username: credential(c[0], 512) || undefined,
+      password: credential(c.slice(1).join(':'), 2048) || undefined
+    }
   }
   const parts = s.split(':')
   if (parts.length >= 4) {
     const port = Number(parts[1])
-    if (!parts[0] || !Number.isInteger(port) || port <= 0) return null
-    return { host: parts[0], port, username: parts[2], password: parts.slice(3).join(':') }
+    if (!parts[0] || !Number.isInteger(port) || port <= 0 || port > 65535) return null
+    return {
+      host: credential(parts[0], 253),
+      port,
+      username: credential(parts[2], 512) || undefined,
+      password: credential(parts.slice(3).join(':'), 2048) || undefined
+    }
   }
   if (parts.length === 2) {
     const port = Number(parts[1])
-    if (!parts[0] || !Number.isInteger(port) || port <= 0) return null
-    return { host: parts[0], port }
+    if (!parts[0] || !Number.isInteger(port) || port <= 0 || port > 65535) return null
+    return { host: credential(parts[0], 253), port }
   }
   return null
 }
@@ -349,14 +508,16 @@ function parseEvomiLine(
  * the account apiKey. Docs: GET https://api.evomi.com/public/generate
  */
 export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<SavedProxy[]> {
+  opts = normalizeGenerateOptions(opts)
   const creds = await getProviderCreds()
   const c = creds.evomi
   if (!c?.apiKey) throw new Error('Chưa nhập API key Evomi (Cài đặt → Nhà cung cấp Proxy).')
 
   const count = Math.max(1, Math.min(100, Math.floor(opts.count || 1)))
-  const product = (opts.product || 'rpc').trim()
+  const requestedProduct = cleanText(opts.product, 8).trim()
+  const product = ['rpc', 'rp', 'mp'].includes(requestedProduct) ? requestedProduct : 'rpc'
   const proto: 'http' | 'socks5' = opts.protocol === 'socks5' ? 'socks5' : 'http'
-  const cc = (opts.country ?? '').trim().toUpperCase()
+  const cc = countryCode(opts.country).toUpperCase()
 
   const qs = new URLSearchParams()
   qs.set('product', product)
@@ -376,18 +537,19 @@ export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<S
     if (mins) qs.set('lifetime', String(mins))
   }
 
-  // Evomi's generate endpoint documents auth via the `apikey` query param; the sibling
-  // endpoints also accept the `x-apikey` header. Send BOTH so auth works either way.
-  qs.set('apikey', c.apiKey.trim())
+  // Evomi supports `x-apikey` on Public API endpoints. Keep the secret out of the URL
+  // so it cannot leak through proxy/server access logs, history, or error telemetry.
   const res = await fetch(`${EVOMI_API}/public/generate?${qs.toString()}`, {
-    headers: { 'x-apikey': c.apiKey.trim() }
+    headers: { 'x-apikey': c.apiKey.trim() },
+    signal: AbortSignal.timeout(30_000),
+    redirect: 'error'
   })
   if (!res.ok) {
-    const t = await res.text().catch(() => '')
+    const t = await limitedText(res).catch(() => '')
     throw new Error(`Evomi API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
   }
 
-  const text = await res.text()
+  const text = await limitedText(res)
   // The generate endpoint returns plain text (one proxy per line); on rejection it may
   // instead return a JSON error body with 200 — surface its message.
   const trimmed = text.trim()
@@ -401,7 +563,7 @@ export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<S
     if (j && j.success === false) throw new Error(j.message || j.error || 'Evomi API từ chối yêu cầu.')
   }
 
-  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, count)
   if (!lines.length) throw new Error('Evomi API không trả về proxy nào.')
 
   const type: SavedProxy['type'] = proto === 'socks5' ? 'socks5' : 'http'
@@ -412,9 +574,16 @@ export async function generateEvomiProxies(opts: GenerateProxiesOpts): Promise<S
   lines.forEach((line, i) => {
     const parsed = parseEvomiLine(line)
     if (!parsed) return
-    const host = parsed.host || fallbackHost
+    const host = (parsed.host || fallbackHost).toLowerCase()
     const port = pinnedPort || parsed.port
-    if (!host || !port || !parsed.username || !parsed.password) return
+    if (
+      !/^(?:[a-z0-9-]+\.)*evomi\.com$/.test(host) ||
+      !port ||
+      !parsed.username ||
+      !parsed.password
+    ) {
+      return
+    }
     out.push({
       id: genProxyId(),
       label: `${prefix} ${i + 1}`,
@@ -437,14 +606,19 @@ export async function evomiBalance(product?: string): Promise<{ availableGb: num
   const creds = await getProviderCreds()
   const c = creds.evomi
   if (!c?.apiKey) throw new Error('Chưa nhập API key Evomi (Cài đặt → Nhà cung cấp Proxy).')
-  const res = await fetch(`${EVOMI_API}/public`, { headers: { 'x-apikey': c.apiKey.trim() } })
+  const res = await fetch(`${EVOMI_API}/public`, {
+    headers: { 'x-apikey': c.apiKey.trim() },
+    signal: AbortSignal.timeout(20_000),
+    redirect: 'error'
+  })
   if (!res.ok) {
-    const t = await res.text().catch(() => '')
+    const t = await limitedText(res).catch(() => '')
     throw new Error(`Evomi API lỗi HTTP ${res.status}${t ? ': ' + t.slice(0, 200) : ''}`)
   }
-  const data = (await res.json()) as { products?: Record<string, { balance_mb?: number }> }
+  const data = await limitedJson<{ products?: Record<string, { balance_mb?: number }> }>(res)
   const products = data.products || {}
-  const key = (product || 'rpc').trim()
+  const requested = cleanText(product, 8).trim()
+  const key = ['rpc', 'rp', 'mp'].includes(requested) ? requested : 'rpc'
   const mb =
     typeof products[key]?.balance_mb === 'number'
       ? (products[key]!.balance_mb as number)

@@ -1,40 +1,75 @@
-// ── VGC Browser — profile groups (per account) ──────────────────────────────
-// A persistent list of group (folder) names so empty groups still show in the
-// sidebar. Scoped per account (by Supabase uid) like the profile store.
-
 import { app } from 'electron'
-import { promises as fs } from 'fs'
 import { join } from 'path'
 import { accountKey } from './session'
+import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
+import { cleanText } from './validation'
 
-function file(): string {
-  return join(app.getPath('userData'), 'db', `groups-${accountKey()}.json`)
+interface GroupStorePaths {
+  encrypted: string
+  legacy: string
 }
 
-export async function listGroups(): Promise<string[]> {
-  try {
-    const arr = JSON.parse(await fs.readFile(file(), 'utf-8'))
-    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
-  } catch {
-    return []
+function storePaths(key = accountKey()): GroupStorePaths {
+  const dir = join(app.getPath('userData'), 'db')
+  return {
+    encrypted: join(dir, `groups-${key}.enc`),
+    legacy: join(dir, `groups-${key}.json`)
   }
 }
 
-async function write(groups: string[]): Promise<void> {
-  await fs.mkdir(join(app.getPath('userData'), 'db'), { recursive: true })
-  await fs.writeFile(file(), JSON.stringify([...new Set(groups)], null, 2), 'utf-8')
+function normalize(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((name) => cleanText(name, 120).trim()).filter(Boolean))].slice(0, 500)
+}
+
+async function listGroupsAt(paths: GroupStorePaths): Promise<string[]> {
+  const groups =
+    (await readSecureJson<unknown>(paths.encrypted)) ??
+    (await migratePlainJson<unknown>(paths.encrypted, paths.legacy))
+  return normalize(groups)
+}
+
+export function listGroups(): Promise<string[]> {
+  const paths = storePaths()
+  return mutate(paths, () => listGroupsAt(paths))
+}
+
+const mutationChains = new Map<string, Promise<unknown>>()
+function mutate<T>(paths: GroupStorePaths, fn: () => Promise<T>): Promise<T> {
+  const previous = mutationChains.get(paths.encrypted) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const settled = run.then(
+    () => undefined,
+    () => undefined
+  )
+  mutationChains.set(paths.encrypted, settled)
+  void settled.finally(() => {
+    if (mutationChains.get(paths.encrypted) === settled) mutationChains.delete(paths.encrypted)
+  })
+  return run
+}
+
+async function writeAt(paths: GroupStorePaths, groups: string[]): Promise<void> {
+  await writeSecureJson(paths.encrypted, normalize(groups))
 }
 
 export async function createGroup(name: string): Promise<string[]> {
-  const n = name.trim()
-  const groups = await listGroups()
-  if (n && !groups.includes(n)) groups.push(n)
-  await write(groups)
-  return groups
+  const n = cleanText(name, 120).trim()
+  const paths = storePaths()
+  return mutate(paths, async () => {
+    const groups = await listGroupsAt(paths)
+    if (n && !groups.includes(n)) groups.push(n)
+    await writeAt(paths, groups)
+    return groups
+  })
 }
 
 export async function deleteGroup(name: string): Promise<string[]> {
-  const groups = (await listGroups()).filter((g) => g !== name)
-  await write(groups)
-  return groups
+  const target = cleanText(name, 120).trim()
+  const paths = storePaths()
+  return mutate(paths, async () => {
+    const groups = (await listGroupsAt(paths)).filter((group) => group !== target)
+    await writeAt(paths, groups)
+    return groups
+  })
 }

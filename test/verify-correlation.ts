@@ -9,27 +9,31 @@
 //
 // Run:  npm run verify:correlation
 
-import { spawn, ChildProcess } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CdpConnection, getBrowserWsUrl } from '../src/main/cdp'
+import { CdpConnection } from '../src/main/cdp'
 import { seedFromString } from '../src/main/fingerprint-script'
 import { ensureNativeGuardExtension } from '../src/main/webrtc-guard'
 import { generateFingerprint } from '../src/shared/fingerprint'
 import type { Fingerprint } from '../src/shared/types'
+import { createLoopbackPage, openNativePage, resolveTestEngine } from './native-harness'
 
-const ENGINE =
-  process.argv[2] ||
-  join(process.env.APPDATA || '', 'vgc-browser', 'engine', 'chromium', 'chrome.exe')
+const ENGINE = resolveTestEngine(process.argv[2])
 // Profile OS to simulate. MUST match the engine's HOST OS for the font vector to be valid:
 // a Windows profile on a Mac engine can't expose Windows fonts (they aren't installed), so it
 // collapses to the ~10 cross-platform core-web fonts and false-flags a font correlator. Run
 // `VGC_OS=macos npm run verify:correlation -- <mac engine>` on a Mac.
-const OS = process.env.VGC_OS === 'macos' || process.env.VGC_OS === 'linux' ? process.env.VGC_OS : 'windows'
+const OS =
+  process.env.VGC_OS === 'macos' || process.env.VGC_OS === 'linux' || process.env.VGC_OS === 'windows'
+    ? process.env.VGC_OS
+    : process.platform === 'darwin'
+      ? 'macos'
+      : process.platform === 'win32'
+        ? 'windows'
+        : 'linux'
 const UA_PLATFORM = OS === 'macos' ? 'macOS' : OS === 'linux' ? 'Linux' : 'Windows'
 const UA_ARCH = OS === 'macos' ? 'arm' : 'x86'
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 async function evaluate(conn: CdpConnection, sid: string, expr: string): Promise<unknown> {
   const res = (await conn.send(
@@ -220,17 +224,15 @@ const PROBE = `(async () => {
 
 interface Probe { [k: string]: unknown }
 
-async function launchAndProbe(fp: Fingerprint, id: string, port: number): Promise<Probe> {
+async function launchAndProbe(fp: Fingerprint, id: string, pageUrl: string): Promise<Probe> {
   const udd = mkdtempSync(join(tmpdir(), 'vgc-corr-'))
   const seed = seedFromString(id)
-  const guardExt = ensureNativeGuardExtension(udd, fp, seed)
+  const guardExt = ensureNativeGuardExtension(udd, fp)
 
   const langs = fp.languages && fp.languages.length ? fp.languages : [fp.language]
   const macArm = /apple/i.test(fp.webgl?.renderer || '')
   const args = [
     `--user-data-dir=${udd}`,
-    `--remote-debugging-port=${port}`,
-    '--remote-allow-origins=*',
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
@@ -261,21 +263,12 @@ async function launchAndProbe(fp: Fingerprint, id: string, port: number): Promis
     'about:blank'
   ]
   void macArm
-  const proc: ChildProcess = spawn(ENGINE, args)
+  const browser = await openNativePage(ENGINE, args, pageUrl)
   try {
-    const conn = await CdpConnection.connect(await getBrowserWsUrl(port))
-    const created = (await conn.send('Target.createTarget', { url: 'about:blank' })) as { targetId: string }
-    const att = (await conn.send('Target.attachToTarget', { targetId: created.targetId, flatten: true })) as { sessionId: string }
-    const sid = att.sessionId
-    await conn.send('Page.enable', {}, sid)
-    await conn.send('Runtime.enable', {}, sid)
-    await conn.send('Page.navigate', { url: 'https://example.com' }, sid)
-    await sleep(3500)
-    const r = (await evaluate(conn, sid, PROBE)) as Probe
-    conn.close()
-    return r
+    return (await evaluate(browser.conn, browser.sessionId, PROBE)) as Probe
   } finally {
-    try { proc.kill() } catch { /* ignore */ }
+    await browser.close()
+    rmSync(udd, { recursive: true, force: true })
   }
 }
 
@@ -305,8 +298,13 @@ async function main(): Promise<void> {
     console.log(`profile ${i}: ${f.hardwareConcurrency}c/${f.deviceMemory}GB ${f.webgl.renderer.slice(0, 42)}`)
   )
   const probes: Probe[] = []
-  for (let i = 0; i < N; i++) {
-    probes.push(await launchAndProbe(fps[i], `corr-profile-${i}-xyz`, 9601 + i))
+  const page = await createLoopbackPage()
+  try {
+    for (let i = 0; i < N; i++) {
+      probes.push(await launchAndProbe(fps[i], `corr-profile-${i}-xyz`, page.url))
+    }
+  } finally {
+    await page.close()
   }
 
   const keys = Array.from(new Set(probes.flatMap((p) => Object.keys(p))))

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>HI</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <section id="accessGate" class="access-gate" aria-labelledby="accessTitle">
+      <form id="accessForm" class="access-card">
+        <div class="lock-mark" aria-hidden="true">🔒</div>
+        <div class="access-brand-row">
+          <p class="eyebrow">HI</p>
+          <span id="accessVersionBadge" class="badge">v1.3.3</span>
+        </div>
+        <h1 id="accessTitle">Đang kiểm tra khóa truy cập…</h1>
+        <p id="accessIntro" class="access-intro">Vui lòng chờ trong giây lát.</p>
+
+        <label class="field access-field">
+          <span>Mật khẩu truy cập extension</span>
+          <input id="accessPasswordInput" class="input" type="password" minlength="1" maxlength="256" autocomplete="current-password" disabled />
+        </label>
+        <label id="accessConfirmWrap" class="field access-field" hidden>
+          <span>Nhập lại mật khẩu</span>
+          <input id="accessPasswordConfirmInput" class="input" type="password" minlength="8" maxlength="256" autocomplete="new-password" />
+        </label>
+
+        <button id="accessSubmitBtn" class="btn btn-primary access-submit" type="submit" disabled>Mở khóa</button>
+        <p id="accessStatus" class="access-status" data-kind="idle" role="status" aria-live="polite"></p>
+        <p class="access-note">Khóa này riêng với mật khẩu mã hóa file .cepx và sẽ được hỏi lại mỗi lần mở popup.</p>
+      </form>
+    </section>
+
+    <main id="app" class="app" hidden aria-hidden="true">
+      <header class="header">
+        <div>
+          <div class="title-row">
+            <h1>HI</h1>
+            <span id="versionBadge" class="badge">v1.3.3</span>
+          </div>
+          <p>Xuất ở trình duyệt nguồn, sau đó nhập vào profile Chrome/Edge đích.</p>
+        </div>
+      </header>
+
+      <section class="card scan-card">
+        <div class="section-head">
+          <div>
+            <h2>Dữ liệu profile hiện tại</h2>
+            <p id="status" class="status" data-kind="idle" role="status" aria-live="polite">Sẵn sàng.</p>
+          </div>
+          <button id="scanBtn" class="btn btn-secondary" type="button">Quét profile</button>
+        </div>
+        <div class="stats" aria-label="Kết quả quét">
+          <div class="stat"><strong id="cookieCount">—</strong><span>Cookie</span></div>
+          <div class="stat"><strong id="siteCount">—</strong><span>Website/API</span></div>
+          <div class="stat"><strong id="tabCount">—</strong><span>Tab</span></div>
+          <div class="stat"><strong id="storeCount">—</strong><span>Kho cookie</span></div>
+        </div>
+      </section>
+
+      <div class="transfer-grid">
+        <section class="card">
+          <div class="step-title"><span>1</span><h2>Xuất từ trình duyệt nguồn</h2></div>
+          <label class="field">
+            <span>Mật khẩu mã hóa gói .cepx (dùng cả khi nhập)</span>
+            <input id="passphraseInput" class="input" type="password" minlength="8" autocomplete="new-password" placeholder="Tối thiểu 8 ký tự" />
+          </label>
+          <div class="actions export-actions">
+            <button id="exportFileBtn" class="btn btn-primary" type="button">Tạo file (.cepx)</button>
+            <button id="copyPackageBtn" class="btn btn-secondary" type="button">Copy gói</button>
+          </div>
+          <p class="privacy-note inside-card">
+            Chỉ gồm cookie Chrome API cho phép đọc và URL tab HTTP/HTTPS. Không gồm mật khẩu, API key/Bearer token, Local/Session Storage hoặc toàn bộ profile Chrome.
+          </p>
+        </section>
+
+        <section class="card">
+          <div class="step-title"><span>2</span><h2>Nhập vào trình duyệt đích</h2></div>
+          <label class="field">
+            <span>Chọn file chuyển</span>
+            <input id="importFileInput" class="input file-input" type="file" accept=".cepx,.json,application/json" />
+          </label>
+          <div class="or"><span>hoặc dán gói đã copy</span></div>
+          <textarea id="importTextInput" class="textarea" rows="2" spellcheck="false" placeholder="Dán gói mã hóa"></textarea>
+          <div class="import-footer">
+            <label class="check"><input id="openTabsCheckbox" type="checkbox" checked /> Mở lại tab</label>
+            <div class="actions compact">
+              <button id="clearImportBtn" class="btn btn-ghost" type="button">Xóa</button>
+              <button id="importBtn" class="btn btn-primary" type="button">Nhập profile</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -16,7 +16,7 @@ function viErr(m: string): string {
 }
 
 interface Props {
-  onAuthed: () => void
+  onAuthed: () => Promise<void>
 }
 
 export function AuthScreen({ onAuthed }: Props): JSX.Element {
@@ -55,7 +55,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           setOk(false)
           setMsg(viErr(error.message))
         } else {
-          onAuthed() // guaranteed redirect into the app
+          await onAuthed()
         }
       } else {
         if (pass.length < 6) {
@@ -77,7 +77,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           setOk(false)
           setMsg(viErr(error.message))
         } else if (data.session) {
-          onAuthed() // auto-signed-in
+          await onAuthed()
         } else {
           setOk(true)
           setMsg('Tạo tài khoản thành công! Kiểm tra email để xác nhận, rồi đăng nhập.')
@@ -86,6 +86,9 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           setPass2('')
         }
       }
+    } catch (error) {
+      setOk(false)
+      setMsg(viErr(error instanceof Error ? error.message : 'Không xác minh được phiên đăng nhập.'))
     } finally {
       setBusy(false)
     }
@@ -139,7 +142,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
             className="auth-field"
             placeholder="Tên hiển thị (tuỳ chọn)"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(e.target.value.slice(0, 160))}
             onKeyDown={onKey}
           />
         )}
@@ -148,7 +151,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           type="email"
           placeholder="Địa chỉ email"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => setEmail(e.target.value.slice(0, 320))}
           onKeyDown={onKey}
           autoFocus
         />
@@ -157,7 +160,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           type="password"
           placeholder="Mật khẩu"
           value={pass}
-          onChange={(e) => setPass(e.target.value)}
+          onChange={(e) => setPass(e.target.value.slice(0, 1024))}
           onKeyDown={onKey}
         />
         {mode === 'signup' && (
@@ -166,7 +169,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
             type="password"
             placeholder="Nhập lại mật khẩu"
             value={pass2}
-            onChange={(e) => setPass2(e.target.value)}
+            onChange={(e) => setPass2(e.target.value.slice(0, 1024))}
             onKeyDown={onKey}
           />
         )}

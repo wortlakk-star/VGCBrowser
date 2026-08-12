@@ -10,3 +10,7 @@
 
 alter table public.profiles_cloud add column if not exists deleted boolean not null default false;
 alter table public.proxies_cloud  add column if not exists deleted boolean not null default false;
+alter table public.profiles_cloud enable row level security;
+alter table public.proxies_cloud enable row level security;
+alter table public.profiles_cloud force row level security;
+alter table public.proxies_cloud force row level security;

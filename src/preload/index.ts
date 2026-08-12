@@ -54,11 +54,11 @@ const api = {
   importProfiles: (): Promise<{ count: number; error?: string }> =>
     ipcRenderer.invoke('profiles:import'),
 
-  bulkUpsertProfiles: (profiles: Profile[]): Promise<void> =>
-    ipcRenderer.invoke('profiles:bulkUpsert', profiles),
+  bulkUpsertProfiles: (profiles: Profile[], expectedUid?: string): Promise<void> =>
+    ipcRenderer.invoke('profiles:bulkUpsert', profiles, expectedUid),
 
-  removeProfiles: (ids: string[]): Promise<void> =>
-    ipcRenderer.invoke('profiles:removeMany', ids),
+  removeProfiles: (ids: string[], expectedUid?: string): Promise<void> =>
+    ipcRenderer.invoke('profiles:removeMany', ids, expectedUid),
 
   syncTimezones: (): Promise<{ synced: number; total: number; failed: number }> =>
     ipcRenderer.invoke('profiles:syncTimezones'),
@@ -86,7 +86,7 @@ const api = {
   checkFingerprint: (id: string, url?: string): Promise<void> =>
     ipcRenderer.invoke('profiles:checkFingerprint', id, url),
 
-  generateFingerprint: (os: OsType = 'windows'): Promise<Fingerprint> =>
+  generateFingerprint: (os?: OsType): Promise<Fingerprint> =>
     ipcRenderer.invoke('fingerprint:generate', os),
 
   checkProxy: (proxy: ProxyConfig): Promise<ProxyCheckResult> =>
@@ -97,10 +97,11 @@ const api = {
 
   listProxies: (): Promise<SavedProxy[]> => ipcRenderer.invoke('proxies:list'),
   saveProxy: (p: SavedProxy): Promise<SavedProxy> => ipcRenderer.invoke('proxies:save', p),
-  saveManyProxies: (items: SavedProxy[]): Promise<number> =>
-    ipcRenderer.invoke('proxies:saveMany', items),
+  saveManyProxies: (items: SavedProxy[], expectedUid?: string): Promise<number> =>
+    ipcRenderer.invoke('proxies:saveMany', items, expectedUid),
   deleteProxy: (id: string): Promise<void> => ipcRenderer.invoke('proxies:delete', id),
-  removeProxies: (ids: string[]): Promise<void> => ipcRenderer.invoke('proxies:removeMany', ids),
+  removeProxies: (ids: string[], expectedUid?: string): Promise<void> =>
+    ipcRenderer.invoke('proxies:removeMany', ids, expectedUid),
 
   cookieRobot: (id: string, urls?: string[]): Promise<void> =>
     ipcRenderer.invoke('profiles:cookieRobot', id, urls),
@@ -144,7 +145,7 @@ const api = {
   setWarmSchedule: (patch: Partial<WarmSchedule>): Promise<WarmSchedule> =>
     ipcRenderer.invoke('warm:setSchedule', patch),
 
-  /** Durably append "email|newPassword|status" to the on-disk log; returns its path. */
+  /** Append a redacted email/status audit record; the password is never written to disk. */
   logGmailResult: (line: string): Promise<string> => ipcRenderer.invoke('gmail:logResult', line),
 
   /** Live per-account progress while a batch runs. Returns an unsubscribe fn. */
@@ -194,8 +195,19 @@ const api = {
   },
 
   // ── Cloud profile DATA sync (GoLogin-style: session follows the account) ──
-  cloudSetSession: (sess: CloudSession | null): Promise<void> =>
+  cloudSetSession: (sess: CloudSession | null): Promise<boolean> =>
     ipcRenderer.invoke('cloud:setSession', sess),
+
+  cloudAuthGet: (key: string): Promise<string | null> => ipcRenderer.invoke('cloud:authGet', key),
+  cloudAuthSet: (key: string, value: string): Promise<void> =>
+    ipcRenderer.invoke('cloud:authSet', key, value),
+  cloudAuthRemove: (key: string): Promise<void> => ipcRenderer.invoke('cloud:authRemove', key),
+
+  cloudEncryptionStatus: (): Promise<{ configured: boolean; unlocked: boolean }> =>
+    ipcRenderer.invoke('cloud:encryptionStatus'),
+
+  cloudSetPassphrase: (passphrase: string): Promise<void> =>
+    ipcRenderer.invoke('cloud:setPassphrase', passphrase),
 
   cloudUploadData: (id: string): Promise<void> =>
     ipcRenderer.invoke('cloud:uploadData', id),
@@ -204,11 +216,20 @@ const api = {
     ipcRenderer.invoke('cloud:downloadData', id),
 
   // Encrypt/decrypt metadata with the per-account secret before/after it touches the
-  // cloud DB. Return null when no secret yet (pre-migration) → caller pushes plaintext.
-  cloudProtect: (context: string, plaintext: string, profileId?: string): Promise<string | null> =>
-    ipcRenderer.invoke('cloud:protect', context, plaintext, profileId),
-  cloudUnprotect: (context: string, blob: string, profileId?: string): Promise<string | null> =>
-    ipcRenderer.invoke('cloud:unprotect', context, blob, profileId),
+  // cloud DB. Encryption failure rejects; callers must never downgrade to plaintext.
+  cloudProtect: (
+    context: string,
+    plaintext: string,
+    expectedUid: string,
+    profileId?: string
+  ): Promise<string> => ipcRenderer.invoke('cloud:protect', context, plaintext, expectedUid, profileId),
+  cloudUnprotect: (
+    context: string,
+    blob: string,
+    expectedUid: string,
+    profileId?: string
+  ): Promise<{ plaintext: string; legacy: boolean } | null> =>
+    ipcRenderer.invoke('cloud:unprotect', context, blob, expectedUid, profileId),
 
   // ── Profile sharing ──
   shareCreate: (

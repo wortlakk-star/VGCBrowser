@@ -4,8 +4,28 @@
 
 import { randomUUID } from 'crypto'
 import type { CreateProfileInput, OsType, Profile } from '../shared/types'
-import { generateFingerprint } from '../shared/fingerprint'
 import { patchProfile, saveProfile } from './store'
+import { cohereFingerprint, hostOs, hostFingerprintEnvironment } from './host-fingerprint'
+import {
+  cleanText,
+  sanitizeAccount,
+  sanitizeCookies,
+  sanitizeExtensions,
+  sanitizeProxyConfig,
+  sanitizeStartUrls,
+  sanitizeTags
+} from './validation'
+
+export { cohereFingerprint, hostOs, hostFingerprintEnvironment }
+export { sanitizeStartUrls }
+
+function requireHostOs(os: OsType): OsType {
+  const host = hostOs()
+  if (os !== host) {
+    throw new Error(`Profile ${os} không được chạy trên host ${host}; cross-OS làm lộ vân tay thật.`)
+  }
+  return host
+}
 
 /**
  * OS to give a new profile by default = the HOST machine's OS. Matching the host is the
@@ -15,28 +35,21 @@ import { patchProfile, saveProfile } from './store'
  * fingerprint mismatch enterprise anti-bot (wise.com's Cloudflare) catches. So a Mac
  * runs Mac profiles, a Windows box runs Windows profiles.
  */
-export function hostOs(): OsType {
-  return process.platform === 'darwin'
-    ? 'macos'
-    : process.platform === 'win32'
-      ? 'windows'
-      : 'linux'
-}
-
 export async function createProfile(input: CreateProfileInput): Promise<Profile> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Dữ liệu profile không hợp lệ')
   const now = new Date().toISOString()
-  const os: OsType = input.os ?? hostOs()
+  const os = requireHostOs(input.os ?? hostOs())
   const profile: Profile = {
     id: randomUUID(),
-    name: input.name?.trim() || 'Profile mới',
-    notes: input.notes ?? '',
-    tags: input.tags ?? [],
-    group: input.group,
+    name: cleanText(input.name, 120).trim() || 'Profile mới',
+    notes: cleanText(input.notes, 10_000),
+    tags: sanitizeTags(input.tags),
+    group: cleanText(input.group, 120).trim() || undefined,
     os,
-    fingerprint: input.fingerprint ?? generateFingerprint(os),
-    proxy: input.proxy ?? { type: 'none' },
-    startUrls: input.startUrls ?? [],
-    account: input.account,
+    fingerprint: cohereFingerprint(input.fingerprint),
+    proxy: sanitizeProxyConfig(input.proxy),
+    startUrls: sanitizeStartUrls(input.startUrls),
+    account: sanitizeAccount(input.account),
     createdAt: now,
     updatedAt: now
   }
@@ -46,7 +59,22 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
 export async function updateProfile(id: string, patch: Partial<Profile>): Promise<Profile> {
   // Never let a patch rewrite id/createdAt; apply atomically (read-modify-write inside
   // the store lock) so a concurrent edit to other fields isn't lost.
-  const { id: _ignoreId, createdAt: _ignoreCreated, ...safe } = patch
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('Bản cập nhật profile không hợp lệ')
+  const safe: Partial<Profile> = {}
+  if ('name' in patch) {
+    const name = cleanText(patch.name, 120).trim()
+    if (name) safe.name = name
+  }
+  if ('notes' in patch) safe.notes = cleanText(patch.notes, 10_000)
+  if ('tags' in patch) safe.tags = sanitizeTags(patch.tags)
+  if ('group' in patch) safe.group = cleanText(patch.group, 120).trim() || undefined
+  if ('os' in patch && patch.os) safe.os = requireHostOs(patch.os)
+  if ('fingerprint' in patch) safe.fingerprint = cohereFingerprint(patch.fingerprint)
+  if ('proxy' in patch) safe.proxy = sanitizeProxyConfig(patch.proxy)
+  if ('startUrls' in patch) safe.startUrls = sanitizeStartUrls(patch.startUrls)
+  if ('cookies' in patch) safe.cookies = sanitizeCookies(patch.cookies)
+  if ('extensions' in patch) safe.extensions = sanitizeExtensions(patch.extensions)
+  if ('account' in patch) safe.account = sanitizeAccount(patch.account)
   const updated = await patchProfile(id, { ...safe, updatedAt: new Date().toISOString() })
   if (!updated) throw new Error(`Không tìm thấy profile: ${id}`)
   return updated

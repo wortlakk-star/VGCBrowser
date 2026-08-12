@@ -13,11 +13,13 @@ create or replace function public.is_team_member(_team_id uuid, _user_id uuid)
   language sql
   security definer
   stable
-  set search_path = public
+  set search_path = pg_catalog, public
 as $$
   select exists (
     select 1 from public.team_members
-    where team_id = _team_id and user_id = _user_id
+    where _user_id = auth.uid()
+      and team_id = _team_id
+      and user_id = auth.uid()
   );
 $$;
 
@@ -26,35 +28,39 @@ create or replace function public.is_team_owner(_team_id uuid, _user_id uuid)
   language sql
   security definer
   stable
-  set search_path = public
+  set search_path = pg_catalog, public
 as $$
   select exists (
     select 1 from public.teams
-    where id = _team_id and owner = _user_id
+    where _user_id = auth.uid()
+      and id = _team_id
+      and owner = auth.uid()
   );
 $$;
+
+revoke all on function public.is_team_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.is_team_owner(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.is_team_member(uuid, uuid) to authenticated;
+grant execute on function public.is_team_owner(uuid, uuid) to authenticated;
 
 -- teams: members + owner can read
 drop policy if exists "team members read" on public.teams;
 create policy "team members read"
-  on public.teams for select
+  on public.teams for select to authenticated
   using (owner = auth.uid() or public.is_team_member(id, auth.uid()));
 
 -- team_members: see your own rows; team owners see all their team's rows
 drop policy if exists "members read membership" on public.team_members;
 create policy "members read membership"
-  on public.team_members for select
+  on public.team_members for select to authenticated
   using (user_id = auth.uid() or public.is_team_owner(team_id, auth.uid()));
 
 -- team_members: owners manage their team's members
 drop policy if exists "owner manages members" on public.team_members;
 create policy "owner manages members"
-  on public.team_members for all
+  on public.team_members for all to authenticated
   using (public.is_team_owner(team_id, auth.uid()))
   with check (public.is_team_owner(team_id, auth.uid()));
 
--- profiles_cloud: members can read profiles shared to their team
+-- Profile sharing stays disabled until per-recipient public-key envelopes exist.
 drop policy if exists "team read profiles" on public.profiles_cloud;
-create policy "team read profiles"
-  on public.profiles_cloud for select
-  using (team_id is not null and public.is_team_member(team_id, auth.uid()));

@@ -1,16 +1,27 @@
 // ── VGC Browser — profile storage (encrypted at rest) ────────────────────────
 // Profiles (cookies, proxy passwords, fingerprints) are sensitive, so the DB is
 // encrypted on disk with Electron safeStorage (Windows DPAPI / macOS Keychain /
-// libsecret). Falls back to plaintext JSON only if OS encryption is unavailable.
-// Legacy profiles.json is auto-migrated to the encrypted store on first read.
+// libsecret). The store fails closed if OS encryption is unavailable. Legacy
+// profiles.json is auto-migrated to the encrypted store on first read.
 
-import { app, safeStorage } from 'electron'
-import { promises as fs, existsSync } from 'fs'
+import { app } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'node:crypto'
 import type { Profile, Fingerprint } from '../shared/types'
-import { generateFingerprint, CHROME_BUILD } from '../shared/fingerprint'
+import { CHROME_BUILD } from '../shared/fingerprint'
 import { accountKey } from './session'
+import { cohereFingerprint, hostOs } from './host-fingerprint'
+import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
+import {
+  cleanText,
+  isUuid,
+  sanitizeAccount,
+  sanitizeCookies,
+  sanitizeExtensions,
+  sanitizeProxyConfig,
+  sanitizeStartUrls,
+  sanitizeTags
+} from './validation'
 
 function dataDir(): string {
   return join(app.getPath('userData'), 'db')
@@ -18,19 +29,25 @@ function dataDir(): string {
 // Profiles are scoped PER ACCOUNT (by Supabase uid) so logging in with a different
 // email shows only that account's profiles — never another account's. 'local' is
 // used when signed out (the app gates on login, so normally a uid is set).
-function jsonFile(): string {
-  return join(dataDir(), `profiles-${accountKey()}.json`)
-}
-function encFile(): string {
-  return join(dataDir(), `profiles-${accountKey()}.enc`)
+interface StorePaths {
+  encrypted: string
+  legacy: string
 }
 
-function canEncrypt(): boolean {
-  try {
-    return safeStorage.isEncryptionAvailable()
-  } catch {
-    return false
+function storePaths(key = accountKey()): StorePaths {
+  return {
+    encrypted: join(dataDir(), `profiles-${key}.enc`),
+    legacy: join(dataDir(), `profiles-${key}.json`)
   }
+}
+
+function normalizedIso(value: unknown, fallback?: string): string | undefined {
+  if (typeof value !== 'string' || value.length > 64) return fallback
+  const time = Date.parse(value)
+  if (!Number.isFinite(time) || time < Date.UTC(2000, 0, 1) || time > Date.now() + 5 * 60_000) {
+    return fallback
+  }
+  return new Date(time).toISOString()
 }
 
 /**
@@ -46,18 +63,30 @@ function canEncrypt(): boolean {
 function normalizeProfiles(profiles: Profile[]): boolean {
   let changed = false
   const now = new Date().toISOString()
+  const ids = new Set<string>()
   for (const p of profiles) {
     if (!p || typeof p !== 'object') continue
-    if (!p.id) { p.id = randomUUID(); changed = true }
-    if (typeof p.name !== 'string') { p.name = 'Profile'; changed = true }
-    if (typeof p.notes !== 'string') { p.notes = ''; changed = true }
-    if (!Array.isArray(p.tags)) { p.tags = []; changed = true }
-    if (p.os !== 'windows' && p.os !== 'macos' && p.os !== 'linux' && p.os !== 'android') {
-      p.os = 'windows'; changed = true
-    }
+    if (!isUuid(p.id) || ids.has(p.id)) { p.id = randomUUID(); changed = true }
+    ids.add(p.id)
+    const name = cleanText(p.name, 120).trim() || 'Profile'
+    if (p.name !== name) { p.name = name; changed = true }
+    const notes = cleanText(p.notes, 10_000)
+    if (p.notes !== notes) { p.notes = notes; changed = true }
+    const tags = sanitizeTags(p.tags)
+    if (JSON.stringify(p.tags) !== JSON.stringify(tags)) { p.tags = tags; changed = true }
+    const group = cleanText(p.group, 120).trim() || undefined
+    if (p.group !== group) { p.group = group; changed = true }
+    const host = hostOs()
+    if (p.os !== host) { p.os = host; changed = true }
     const fp = p.fingerprint as Fingerprint | undefined
     if (!fp || !fp.userAgent || !fp.webgl || !fp.screen) {
-      p.fingerprint = generateFingerprint(p.os); changed = true
+      p.fingerprint = cohereFingerprint(); changed = true
+    } else {
+      const coherent = cohereFingerprint(fp)
+      if (JSON.stringify(coherent) !== JSON.stringify(fp)) {
+        p.fingerprint = coherent
+        changed = true
+      }
     }
     // Keep the claimed Chrome version aligned with the VGC Core engine. A profile that
     // still claims Chrome 149 while the engine's UA-CH advertises 151 is a version
@@ -86,50 +115,67 @@ function normalizeProfiles(profiles: Profile[]): boolean {
       cfp.deviceMemory = cfp.deviceMemory > 8 ? 8 : 4
       changed = true
     }
-    if (!p.proxy || typeof p.proxy.type !== 'string') {
-      p.proxy = { type: 'none' }; changed = true
+    const proxy = sanitizeProxyConfig(p.proxy)
+    if (JSON.stringify(p.proxy) !== JSON.stringify(proxy)) { p.proxy = proxy; changed = true }
+    const startUrls = sanitizeStartUrls(p.startUrls)
+    if (JSON.stringify(p.startUrls) !== JSON.stringify(startUrls)) { p.startUrls = startUrls; changed = true }
+    const account = sanitizeAccount(p.account)
+    if (JSON.stringify(p.account) !== JSON.stringify(account)) { p.account = account; changed = true }
+    const cookies = sanitizeCookies(p.cookies)
+    if (p.cookies && JSON.stringify(p.cookies) !== JSON.stringify(cookies)) { p.cookies = cookies; changed = true }
+    const extensions = sanitizeExtensions(p.extensions)
+    if (p.extensions && JSON.stringify(p.extensions) !== JSON.stringify(extensions)) { p.extensions = extensions; changed = true }
+    if (p.cloudTeamId !== undefined) { p.cloudTeamId = undefined; changed = true }
+    const cloudDataAt = normalizedIso(p.cloudDataAt)
+    if (p.cloudDataAt !== cloudDataAt) { p.cloudDataAt = cloudDataAt; changed = true }
+    if (p.proxyCheck) {
+      const status = p.proxyCheck.status === 'ok' || p.proxyCheck.status === 'error' ? p.proxyCheck.status : 'error'
+      const at = normalizedIso(p.proxyCheck.at, now)!
+      const latency = Number(p.proxyCheck.latencyMs)
+      const proxyCheck: NonNullable<Profile['proxyCheck']> = {
+        status,
+        at,
+        ...(typeof p.proxyCheck.ip === 'string' ? { ip: cleanText(p.proxyCheck.ip, 64) } : {}),
+        ...(typeof p.proxyCheck.country === 'string'
+          ? { country: cleanText(p.proxyCheck.country, 120) }
+          : {}),
+        ...(typeof p.proxyCheck.countryCode === 'string'
+          ? { countryCode: cleanText(p.proxyCheck.countryCode, 2).toUpperCase() }
+          : {}),
+        ...(Number.isFinite(latency)
+          ? { latencyMs: Math.max(0, Math.min(300_000, latency)) }
+          : {})
+      }
+      if (JSON.stringify(p.proxyCheck) !== JSON.stringify(proxyCheck)) { p.proxyCheck = proxyCheck; changed = true }
     }
-    if (!Array.isArray(p.startUrls)) { p.startUrls = []; changed = true }
-    if (typeof p.createdAt !== 'string') { p.createdAt = now; changed = true }
-    if (typeof p.updatedAt !== 'string') { p.updatedAt = now; changed = true }
+    const createdAt = normalizedIso(p.createdAt, now)!
+    if (p.createdAt !== createdAt) { p.createdAt = createdAt; changed = true }
+    const updatedAt = normalizedIso(p.updatedAt, now)!
+    if (p.updatedAt !== updatedAt) { p.updatedAt = updatedAt; changed = true }
+    const lastUsedAt = normalizedIso(p.lastUsedAt)
+    if (p.lastUsedAt !== lastUsedAt) { p.lastUsedAt = lastUsedAt; changed = true }
   }
   return changed
 }
 
-export async function listProfiles(): Promise<Profile[]> {
-  await fs.mkdir(dataDir(), { recursive: true })
+async function listProfilesAt(paths: StorePaths): Promise<Profile[]> {
+  const loaded =
+    (await readSecureJson<Profile[]>(paths.encrypted)) ??
+    (await migratePlainJson<Profile[]>(paths.encrypted, paths.legacy))
 
-  let profiles: Profile[] | null = null
-
-  // Preferred: encrypted store.
-  if (existsSync(encFile())) {
-    try {
-      const buf = await fs.readFile(encFile())
-      const plain = canEncrypt() ? safeStorage.decryptString(buf) : buf.toString('utf-8')
-      profiles = JSON.parse(plain) as Profile[]
-    } catch {
-      profiles = null // fall through to legacy / empty
-    }
-  }
-
-  // Legacy plaintext → migrate to encrypted on next write.
-  if (!profiles && existsSync(jsonFile())) {
-    try {
-      profiles = JSON.parse(await fs.readFile(jsonFile(), 'utf-8')) as Profile[]
-      await writeAll(profiles)
-    } catch {
-      profiles = null
-    }
-  }
-
-  if (!profiles) return []
+  if (!loaded) return []
+  if (!Array.isArray(loaded)) throw new Error('Kho profile không đúng định dạng')
+  const profiles = loaded
+    .filter((p): p is Profile => !!p && typeof p === 'object' && !Array.isArray(p))
+    .slice(0, 10_000)
+  const filteredInvalidRows = profiles.length !== loaded.length
 
   // Repair any profile with missing/partial required fields (else the UI blanks) and
   // persist the repair so it's stable. Best-effort: a write failure still returns the
   // healed in-memory list so the UI renders this session.
-  if (normalizeProfiles(profiles)) {
+  if (filteredInvalidRows || normalizeProfiles(profiles)) {
     try {
-      await writeAll(profiles)
+      await writeAllAt(paths, profiles)
     } catch {
       // best-effort — return the healed list regardless
     }
@@ -137,48 +183,54 @@ export async function listProfiles(): Promise<Profile[]> {
   return profiles
 }
 
+export function listProfiles(): Promise<Profile[]> {
+  const paths = storePaths()
+  return serialize(paths, () => listProfilesAt(paths))
+}
+
 // Serialize every read-modify-write so concurrent mutations (launch bumping
 // lastUsedAt, an auto-pull saveMany, a proxy-check updateProfile, a cloudDataAt
 // write) can't interleave and lose each other's changes. Each serialized fn runs
 // listProfiles()→mutate→writeAll() atomically vs other mutations.
-let writeChain: Promise<unknown> = Promise.resolve()
-function serialize<T>(fn: () => Promise<T>): Promise<T> {
-  const run = writeChain.then(fn, fn)
-  writeChain = run.then(
+const writeChains = new Map<string, Promise<unknown>>()
+function serialize<T>(paths: StorePaths, fn: () => Promise<T>): Promise<T> {
+  const previous = writeChains.get(paths.encrypted) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const settled = run.then(
     () => {},
     () => {}
   )
+  writeChains.set(paths.encrypted, settled)
+  void settled.finally(() => {
+    if (writeChains.get(paths.encrypted) === settled) writeChains.delete(paths.encrypted)
+  })
   return run
 }
 
-async function writeAll(profiles: Profile[]): Promise<void> {
-  await fs.mkdir(dataDir(), { recursive: true })
-  const plain = JSON.stringify(profiles, null, 2)
-  if (canEncrypt()) {
-    await fs.writeFile(encFile(), safeStorage.encryptString(plain))
-    // Remove any leftover plaintext copy.
-    try {
-      if (existsSync(jsonFile())) await fs.unlink(jsonFile())
-    } catch {
-      // ignore
-    }
-  } else {
-    await fs.writeFile(jsonFile(), plain, 'utf-8')
-  }
+async function writeAllAt(paths: StorePaths, profiles: Profile[]): Promise<void> {
+  await writeSecureJson(paths.encrypted, profiles)
 }
 
 export async function getProfile(id: string): Promise<Profile | null> {
-  const all = await listProfiles()
-  return all.find((p) => p.id === id) ?? null
+  const paths = storePaths()
+  return serialize(paths, async () => {
+    const all = await listProfilesAt(paths)
+    return all.find((p) => p.id === id) ?? null
+  })
 }
 
 export async function saveProfile(profile: Profile): Promise<Profile> {
-  return serialize(async () => {
-    const all = await listProfiles()
+  const paths = storePaths()
+  return serialize(paths, async () => {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+      throw new Error('Profile không hợp lệ')
+    }
+    normalizeProfiles([profile])
+    const all = await listProfilesAt(paths)
     const idx = all.findIndex((p) => p.id === profile.id)
     if (idx >= 0) all[idx] = profile
     else all.push(profile)
-    await writeAll(all)
+    await writeAllAt(paths, all)
     return profile
   })
 }
@@ -192,21 +244,24 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
  * the profile no longer exists.
  */
 export async function patchProfile(id: string, patch: Partial<Profile>): Promise<Profile | null> {
-  return serialize(async () => {
-    const all = await listProfiles()
+  const paths = storePaths()
+  return serialize(paths, async () => {
+    const all = await listProfilesAt(paths)
     const idx = all.findIndex((p) => p.id === id)
     if (idx < 0) return null
     const updated: Profile = { ...all[idx], ...patch, id: all[idx].id }
+    normalizeProfiles([updated])
     all[idx] = updated
-    await writeAll(all)
+    await writeAllAt(paths, all)
     return updated
   })
 }
 
 export async function deleteProfile(id: string): Promise<void> {
-  return serialize(async () => {
-    const all = await listProfiles()
-    await writeAll(all.filter((p) => p.id !== id))
+  const paths = storePaths()
+  return serialize(paths, async () => {
+    const all = await listProfilesAt(paths)
+    await writeAllAt(paths, all.filter((p) => p.id !== id))
   })
 }
 
@@ -217,11 +272,12 @@ export async function deleteProfile(id: string): Promise<void> {
  */
 export async function removeMany(ids: string[]): Promise<void> {
   if (!ids.length) return
-  return serialize(async () => {
-    const all = await listProfiles()
+  const paths = storePaths()
+  return serialize(paths, async () => {
+    const all = await listProfilesAt(paths)
     const set = new Set(ids)
     const next = all.filter((p) => !set.has(p.id))
-    if (next.length !== all.length) await writeAll(next)
+    if (next.length !== all.length) await writeAllAt(paths, next)
   })
 }
 
@@ -232,15 +288,20 @@ export async function removeMany(ids: string[]): Promise<void> {
  * transiently). New ids are always added. ISO timestamps compare lexicographically.
  */
 export async function saveMany(profiles: Profile[]): Promise<void> {
-  return serialize(async () => {
-    const all = await listProfiles()
+  const paths = storePaths()
+  return serialize(paths, async () => {
+    const safe = Array.isArray(profiles)
+      ? profiles.filter((p): p is Profile => !!p && typeof p === 'object' && !Array.isArray(p)).slice(0, 10_000)
+      : []
+    normalizeProfiles(safe)
+    const all = await listProfilesAt(paths)
     const byId = new Map(all.map((p) => [p.id, p]))
-    for (const p of profiles) {
+    for (const p of safe) {
       const existing = byId.get(p.id)
       if (!existing || !existing.updatedAt || (p.updatedAt ?? '') >= existing.updatedAt) {
         byId.set(p.id, p)
       }
     }
-    await writeAll([...byId.values()])
+    await writeAllAt(paths, [...byId.values()].slice(0, 10_000))
   })
 }

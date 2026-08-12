@@ -14,15 +14,21 @@
 //   • proxy authentication via local relay — Phase 3
 
 import { spawn, type ChildProcess } from 'child_process'
+import { randomBytes } from 'crypto'
 import type { Readable, Writable } from 'node:stream'
-import { join } from 'path'
-import { existsSync, mkdirSync, promises as fs } from 'fs'
+import { isAbsolute, join } from 'path'
+import {
+  chmodSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  promises as fs
+} from 'fs'
 import { app, BrowserWindow } from 'electron'
 import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
-import { resolveSystemBrowser, isDedicatedEngine } from './engine'
 import { checkProxy, directGeo } from './proxy-check'
-import { localeForCountry } from '../shared/fingerprint'
 import { getProfile, patchProfile, listProfiles } from './store'
 import { getSettings } from './settings'
 import { attachInjector, type InjectorHandle } from './cdp-injector'
@@ -36,7 +42,8 @@ import {
   uploadProfileCookiesDb,
   downloadProfileCookiesDb,
   uploadProfilePasswords,
-  downloadProfilePasswords
+  downloadProfilePasswords,
+  ensureSafeProfileDestination
 } from './cloud-data'
 import {
   exportCookies,
@@ -45,13 +52,26 @@ import {
   importLogins
 } from './password-bridge'
 import { dbg } from './dbg'
+import { validateBundledHiExtension } from './bundled-hi-extension'
 import { ensureNativeGuardExtension } from './webrtc-guard'
 import { getCloudSession, getCloudEmail } from './session'
 import { refreshLicense, isLicensed, licenseState } from './license'
+import { cohereFingerprint, hostOs, sanitizeStartUrls } from './profiles-service'
+import { requireProfileId } from './validation'
+import { accountTransitionInProgress, runAccountOperation } from './account-operations'
+
+export interface LaunchProfileOptions {
+  headless?: boolean
+  cleanLogin?: boolean
+  automation?: boolean
+  /** Tile the window at this position/size (for "mở lưới"). Overrides the default window-size. */
+  window?: { x: number; y: number; w: number; h: number }
+}
 
 interface RunningProfile {
   proc: ChildProcess
   state: ProfileRuntimeState
+  accountUid: string | null
   injector?: InjectorHandle
   relay?: RelayHandle
   /** Control CDP connection for automation mode (bulk Gmail tool) — over the pipe. */
@@ -105,8 +125,24 @@ function withDataLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
 // engine now always uses its stable per-machine key; do NOT reintroduce the switch.
 
 function profileDataDir(id: string): string {
-  const dir = join(app.getPath('userData'), 'profiles', id)
-  mkdirSync(dir, { recursive: true })
+  const profiles = join(app.getPath('userData'), 'profiles')
+  const dir = join(profiles, requireProfileId(id))
+  for (const path of [profiles, dir]) {
+    try {
+      mkdirSync(path, { mode: 0o700 })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+    const stat = lstatSync(path)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error('Thư mục profile không an toàn.')
+    }
+    try {
+      chmodSync(path, 0o700)
+    } catch {
+      // Windows relies on the current-user ACL.
+    }
+  }
   return dir
 }
 
@@ -120,21 +156,48 @@ function openTabsFile(id: string): string {
 }
 
 async function readSavedTabs(id: string): Promise<string[]> {
+  let handle: fs.FileHandle | undefined
   try {
-    const raw = await fs.readFile(openTabsFile(id), 'utf-8')
+    const file = openTabsFile(id)
+    handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    const stat = await handle.stat()
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024) {
+      return []
+    }
+    const raw = await handle.readFile({ encoding: 'utf8' })
     const arr = JSON.parse(raw)
-    return Array.isArray(arr) ? arr.filter((u): u is string => typeof u === 'string') : []
+    return sanitizeStartUrls(arr)
   } catch {
     return [] // no saved tabs yet (first open) or unreadable
+  } finally {
+    await handle?.close().catch(() => {})
   }
 }
 
 async function writeSavedTabs(id: string, urls: string[]): Promise<void> {
+  let temp = ''
   try {
-    await fs.mkdir(join(profileDataDir(id), 'Default'), { recursive: true })
-    await fs.writeFile(openTabsFile(id), JSON.stringify(urls), 'utf-8')
+    const root = profileDataDir(id)
+    const dir = join(root, 'Default')
+    try {
+      mkdirSync(dir, { mode: 0o700 })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+    const dirStat = lstatSync(dir)
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return
+    const file = join(dir, 'vgc-open-tabs.json')
+    temp = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`
+    await fs.writeFile(temp, JSON.stringify(sanitizeStartUrls(urls)), {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx'
+    })
+    await fs.rename(temp, file)
   } catch {
     // best-effort — tab sync must never break a launch
+  } finally {
+    if (temp) await fs.unlink(temp).catch(() => {})
   }
 }
 
@@ -179,6 +242,15 @@ export function allRuntimeStates(): ProfileRuntimeState[] {
 }
 
 let isQuitting = false
+let accountTransitioning = false
+
+function currentAccountUid(): string | null {
+  return getCloudSession()?.uid ?? null
+}
+
+function sameAccount(uid: string | null): boolean {
+  return currentAccountUid() === uid
+}
 
 /**
  * Cross-machine SAVED PASSWORDS + COOKIES bridge (previously UNWIRED — "future task").
@@ -190,13 +262,15 @@ let isQuitting = false
  * best-effort: any failure is a no-op — the bridge never deletes and writes the DB
  * atomically, so it can never corrupt or downgrade the live session.
  */
-async function uploadCredentials(id: string): Promise<void> {
+async function uploadCredentials(id: string, expectedUid = currentAccountUid()): Promise<void> {
   try {
+    if (!expectedUid || !sameAccount(expectedUid)) return
     const dir = profileDataDir(id)
     const [cookies, logins] = await Promise.all([
       exportCookies(dir, id).catch(() => []),
       exportLogins(dir, id).catch(() => [])
     ])
+    if (!sameAccount(expectedUid)) return
     await Promise.allSettled([
       cookies.length ? uploadProfileCookiesDb(id, cookies) : Promise.resolve(),
       logins.length ? uploadProfilePasswords(id, logins) : Promise.resolve()
@@ -208,13 +282,15 @@ async function uploadCredentials(id: string): Promise<void> {
   }
 }
 
-async function downloadCredentials(id: string): Promise<void> {
+async function downloadCredentials(id: string, expectedUid = currentAccountUid()): Promise<void> {
   try {
+    if (!expectedUid || !sameAccount(expectedUid)) return
     const dir = profileDataDir(id)
     const [cookies, logins] = await Promise.all([
       downloadProfileCookiesDb(id).catch(() => []),
       downloadProfilePasswords(id).catch(() => [])
     ])
+    if (!sameAccount(expectedUid)) return
     if (cookies.length) await importCookies(dir, id, cookies).catch(() => 0)
     if (logins.length) await importLogins(dir, id, logins).catch(() => 0)
     if (cookies.length || logins.length)
@@ -225,10 +301,10 @@ async function downloadCredentials(id: string): Promise<void> {
 }
 
 /** When a single profile closes (app stays open): auto-upload its session. */
-async function syncDataOnClose(id: string): Promise<void> {
+async function syncDataOnClose(id: string, expectedUid: string | null): Promise<void> {
   try {
-    if (isQuitting) return // the app-quit path uploads everything via stopAllAndSync
-    if (!getCloudSession()) return
+    if (isQuitting || accountTransitioning) return
+    if (!expectedUid || !sameAccount(expectedUid)) return
     // Hold the per-profile lock for the WHOLE flush+upload, and take it BEFORE the
     // flush-grace sleep. Otherwise a reopen within ~1.2s takes the lock first,
     // downloads a stale cloud snapshot over the freshest local dir, and this delayed
@@ -237,12 +313,13 @@ async function syncDataOnClose(id: string): Promise<void> {
     await withDataLock(id, async () => {
       // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
       await new Promise((r) => setTimeout(r, 1200))
+      if (!sameAccount(expectedUid)) return
       broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
       // Uploads Local Storage / IndexedDB / Preferences etc. — NOT Cookies/Login Data
       // (excluded via SKIP_FILES; those stay per-machine so the session never churns).
       await uploadProfileData(id)
       // Cross-machine cookies + saved passwords (decrypt-locally → cloud → re-encrypt on B).
-      await uploadCredentials(id)
+      await uploadCredentials(id, expectedUid)
       dbg(`[close ${id}] uploaded zip + credentials bridge`)
     })
     broadcastData({ id, phase: 'done' })
@@ -255,30 +332,77 @@ async function syncDataOnClose(id: string): Promise<void> {
  * Called on app quit: stop every running profile and upload each one's session to
  * the cloud BEFORE the app exits. main awaits this so nothing is lost on close.
  */
-export async function stopAllAndSync(): Promise<void> {
-  isQuitting = true
-  const ids = [...running.keys()]
-  for (const id of ids) stopProfile(id)
-  if (ids.length === 0 || !getCloudSession()) return
-  // give Chromium a moment to flush its SQLite files and release locks
-  await new Promise((r) => setTimeout(r, 1500))
-  await Promise.allSettled(
-    ids.map(async (id) => {
-      try {
-        broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud trước khi thoát…' })
-        await uploadProfileData(id)
-        await uploadCredentials(id) // cross-machine cookies + saved passwords
-        broadcastData({ id, phase: 'done' })
-      } catch {
-        // best-effort — don't block quit on a single failure
+async function stopRunningAndSync(quitting: boolean): Promise<void> {
+  if (quitting) isQuitting = true
+  accountTransitioning = true
+  const expectedUid = currentAccountUid()
+  const ids = new Set<string>()
+  try {
+    const stopDeadline = Date.now() + 10_000
+    while (running.size > 0 && Date.now() < stopDeadline) {
+      for (const [id, entry] of running) {
+        if (entry.accountUid === expectedUid) ids.add(id)
+        stopProfile(id)
       }
-    })
-  )
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    if (running.size > 0) {
+      for (const [id, entry] of running) {
+        if (entry.accountUid === expectedUid) ids.add(id)
+        try {
+          entry.proc.kill('SIGKILL')
+        } catch {
+          // checked below
+        }
+      }
+      const forceDeadline = Date.now() + 2_000
+      while (running.size > 0 && Date.now() < forceDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    }
+    if (running.size > 0 && !quitting) {
+      throw new Error('Không thể dừng hết profile; chưa chuyển tài khoản để tránh lẫn dữ liệu.')
+    }
+    if (!expectedUid || !sameAccount(expectedUid) || ids.size === 0) return
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await Promise.allSettled(
+      [...ids].map(async (id) => {
+        if (!sameAccount(expectedUid)) return
+        try {
+          broadcastData({
+            id,
+            phase: 'upload',
+            message: quitting
+              ? 'Đang lưu phiên lên cloud trước khi thoát…'
+              : 'Đang lưu phiên trước khi đổi tài khoản…'
+          })
+          await withDataLock(id, async () => {
+            if (!sameAccount(expectedUid)) return
+            await uploadProfileData(id)
+            await uploadCredentials(id, expectedUid)
+          })
+          broadcastData({ id, phase: 'done' })
+        } catch {
+          // One failed profile must not cross-contaminate or block the others.
+        }
+      })
+    )
+  } finally {
+    if (!quitting) accountTransitioning = false
+  }
+}
+
+export function stopAllAndSync(): Promise<void> {
+  return stopRunningAndSync(true)
+}
+
+export function stopAllForAccountSwitch(): Promise<void> {
+  return stopRunningAndSync(false)
 }
 
 /**
  * Batch: for every profile that has a proxy, look up the proxy's exit-IP timezone,
- * geolocation and locale and PERSIST them onto the profile's fingerprint — so each
+ * geolocation and PERSIST them onto the profile's fingerprint — so each
  * profile's clock/location matches the country its proxy exits from (a Vietnam clock
  * behind a US proxy is a classic anti-bot tell). Runs the proxy checks with limited
  * concurrency. Returns how many were aligned.
@@ -304,16 +428,13 @@ export async function syncTimezonesToProxies(): Promise<{
           new Promise<null>((r) => setTimeout(() => r(null), 8000))
         ])
         if (geo && geo.ok && geo.timezone) {
-          const loc = localeForCountry(geo.countryCode)
           const fpNext: Fingerprint = {
             ...p.fingerprint,
             timezone: geo.timezone,
             geolocation:
               typeof geo.latitude === 'number' && typeof geo.longitude === 'number'
                 ? { latitude: geo.latitude, longitude: geo.longitude, accuracy: 100 }
-                : p.fingerprint.geolocation,
-            language: loc ? loc.language : p.fingerprint.language,
-            languages: loc ? loc.languages : p.fingerprint.languages
+                : p.fingerprint.geolocation
           }
           await patchProfile(p.id, { fingerprint: fpNext })
           synced++
@@ -335,8 +456,7 @@ export async function syncTimezonesToProxies(): Promise<{
  * CreateProcess error like `spawn UNKNOWN` (engine blocked by antivirus / locked /
  * corrupt) is emitted on the 'error' event AFTER spawn() returns, so a plain
  * try/catch around spawn() never sees it. Waiting on the events catches both the
- * sync throw and the async 'error' — which is what lets the system-browser
- * fallback actually kick in instead of the launch dying with "spawn UNKNOWN".
+ * sync throw and the async 'error', so the UI receives an actionable engine error.
  */
 function spawnAndWait(
   exe: string,
@@ -378,16 +498,15 @@ function spawnAndWait(
   })
 }
 
-export async function launchProfile(
+async function launchProfileImpl(
   id: string,
-  opts: {
-    headless?: boolean
-    cleanLogin?: boolean
-    automation?: boolean
-    /** Tile the window at this position/size (for "mở lưới"). Overrides the default window-size. */
-    window?: { x: number; y: number; w: number; h: number }
-  } = {}
+  opts: LaunchProfileOptions = {}
 ): Promise<ProfileRuntimeState> {
+  if (isQuitting || accountTransitioning || accountTransitionInProgress()) {
+    throw new Error('Ứng dụng đang dừng profile hoặc chuyển tài khoản.')
+  }
+  const launchAccountUid = currentAccountUid()
+  requireProfileId(id)
   const existing = running.get(id)
   if (existing) {
     // Automation mode needs a control pipe. If this profile is already open but WITHOUT
@@ -416,26 +535,28 @@ export async function launchProfile(
   }
 
   const profile = await getProfile(id)
+  if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
+    throw new Error('Tài khoản đã thay đổi trong lúc mở profile.')
+  }
   if (!profile) throw new Error(`Không tìm thấy profile: ${id}`)
+  if (profile.os !== hostOs()) {
+    throw new Error(
+      `Profile ${profile.os} không tương thích host ${hostOs()}. Hãy tạo fingerprint cùng hệ điều hành máy.`
+    )
+  }
 
   // ── Access gate: only emails the admin approved (vgcbrowser.com/quanly) may open a
   // profile. Re-checked here so a revoke takes effect on the next open. Network blip →
   // falls back to the last-known cached decision (see license.ts), so it never locks out
   // an already-approved user; a never-approved / signed-out email stays blocked.
-  // OWNER_UID bypass: the app owner's own cloud account is ALWAYS allowed (belt-and-
-  // suspenders with the ALWAYS_ALLOWED email in license.ts) so the owner can never be
-  // locked out of their own app, whatever the allowlist server says.
-  const OWNER_UID = 'ce0943d5-da08-4219-97fc-00b829789867'
-  if (getCloudSession()?.uid !== OWNER_UID) {
-    await refreshLicense(getCloudEmail())
-    if (!isLicensed()) {
-      const st = licenseState()
-      const msg = st.email
-        ? `Tài khoản "${st.email}" chưa được cấp phép dùng VGC Browser. Liên hệ admin để kích hoạt.`
-        : 'Vui lòng ĐĂNG NHẬP bằng tài khoản đã được admin cấp phép để mở profile.'
-      broadcast({ id, status: 'error', error: msg })
-      throw new Error(msg)
-    }
+  await refreshLicense(getCloudEmail())
+  if (!isLicensed()) {
+    const st = licenseState()
+    const msg = st.email
+      ? `Tài khoản "${st.email}" chưa được cấp phép dùng VGC Browser. Liên hệ admin để kích hoạt.`
+      : 'Vui lòng ĐĂNG NHẬP bằng tài khoản đã được admin cấp phép để mở profile.'
+    broadcast({ id, status: 'error', error: msg })
+    throw new Error(msg)
   }
 
   // GoLogin model: open with the engine's NATIVE C++ fingerprint spoofing and DO NOT
@@ -466,7 +587,7 @@ export async function launchProfile(
     throw new Error(msg)
   }
 
-  const userDataDir = profileDataDir(id)
+  const userDataDir = await ensureSafeProfileDestination(id)
 
   // GoLogin-style AUTO-sync: whenever logged into cloud, ALWAYS pull the latest
   // session (cookies/logins/storage) from the cloud before opening — the cloud is
@@ -499,26 +620,20 @@ export async function launchProfile(
   // Chrome restores the user's own tabs (via --restore-last-session below).
   if (!skipCdp) await clearChromiumSession(id)
 
-  // If opening with the GENUINE system Chrome (useSystemBrowser), the dir may have been
-  // written by a newer engine (Chromium 149) → Chrome refuses "profile from a newer
-  // version". Drop the version marker so any Chrome opens it (cookies/logins untouched).
-  if (settings.useSystemBrowser) {
-    await fs.rm(join(profileDataDir(id), 'Last Version'), { force: true }).catch(() => {})
-  }
-
-  // ── Fingerprint coherence: align timezone / geolocation / locale / WebRTC IP to
+  // ── Fingerprint coherence: align timezone / geolocation / WebRTC IP to
   // the proxy's EXIT IP so they can't contradict each other. A US proxy reporting a
   // Vietnam timezone (or leaking the real public IP via WebRTC) is a classic bot
   // tell. Looked up live so it works with rotating residential proxies; capped at
   // 6s and falls back to the profile's stored fingerprint so launch never hangs.
-  let fp: Fingerprint = profile.fingerprint
+  let fp: Fingerprint = cohereFingerprint(profile.fingerprint)
   const hasProxyForGeo =
     !!profile.proxy && profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
-  // Align timezone/locale/geo to the EXIT IP — the proxy's when there is one, otherwise the
+  // Align timezone/geo to the EXIT IP — the proxy's when there is one, otherwise the
   // machine's REAL public IP. A no-proxy profile that keeps a random stored timezone
   // (e.g. Europe/Paris) while the real IP is elsewhere (e.g. Vietnam) is incoherent and
   // makes Cloudflare Turnstile fail to load (error 600010). Either way, IP ⇄ timezone ⇄
-  // language must agree.
+  // reported location must agree. Language remains the host locale; a user can use any
+  // language in any country, while changing it with rotating proxies is unstable.
   {
     try {
       broadcastData({
@@ -537,36 +652,23 @@ export async function launchProfile(
         if (typeof geo.latitude === 'number' && typeof geo.longitude === 'number') {
           next.geolocation = { latitude: geo.latitude, longitude: geo.longitude, accuracy: 100 }
         }
-        const loc = localeForCountry(geo.countryCode)
-        if (loc) {
-          next.language = loc.language
-          next.languages = loc.languages
-        }
         fp = next
-        // PERSIST the proxy-aligned timezone/geo/locale (NOT the rotating IP) so the
-        // profile's stored fingerprint matches its proxy — stable across launches and
-        // correct even when a later live lookup times out (which would otherwise leave a
-        // random stored timezone contradicting the proxy). Only write when it changed.
-        if (
-          next.timezone !== profile.fingerprint.timezone ||
-          next.language !== profile.fingerprint.language ||
-          JSON.stringify(next.geolocation) !== JSON.stringify(profile.fingerprint.geolocation)
-        ) {
-          const persisted: Fingerprint = {
-            ...profile.fingerprint,
-            timezone: next.timezone,
-            geolocation: next.geolocation,
-            language: next.language,
-            languages: next.languages
-          }
-          await patchProfile(id, { fingerprint: persisted }).catch(() => {})
-        }
       }
       broadcastData({ id, phase: 'done' })
     } catch {
       // keep the profile's stored fingerprint — coherence is best-effort
     }
   }
+  // Persist host-coherent hardware/locale plus proxy timezone/geolocation. The
+  // current proxy exit IP is intentionally ephemeral and is not written to disk.
+  const { webrtcPublicIp: _ephemeralIp, ...stableFp } = fp
+  if (JSON.stringify(stableFp) !== JSON.stringify(profile.fingerprint)) {
+    await patchProfile(id, { fingerprint: stableFp as Fingerprint }).catch(() => {})
+  }
+
+  const defaultWindow = opts.headless
+    ? `${fp.screen.width},${Math.max(480, fp.screen.height - 40)}`
+    : `${Math.min(1280, fp.screen.width)},${Math.min(900, Math.max(480, fp.screen.height - 80))}`
 
   const args: string[] = [
     `--user-data-dir=${userDataDir}`,
@@ -581,13 +683,14 @@ export async function launchProfile(
     // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
     '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,
+    `--accept-lang=${(fp.languages && fp.languages.length ? fp.languages : [fp.language]).join(',')}`,
     // Default window must not exceed the reported WORK AREA. The screen spoof reports
-    // availHeight = screen.height - 40 (the taskbar inset, in webrtc-guard.ts /
-    // fingerprint-script.ts), so opening at the FULL screen height made outerHeight >
+    // availHeight = screen.height - 40 (the taskbar inset in VGC Core), so opening
+    // at the FULL screen height made outerHeight >
     // screen.availHeight — impossible on a real machine with a taskbar, a first-class
     // creepjs/pixelscan tell. Cap the height to availHeight (a maximized-but-coherent
     // window). Grid mode already passes an explicit, bounded slot size.
-    `--window-size=${opts.window ? `${opts.window.w},${opts.window.h}` : `${fp.screen.width},${Math.max(400, fp.screen.height - 40)}`}`,
+    `--window-size=${opts.window ? `${opts.window.w},${opts.window.h}` : defaultWindow}`,
     `--user-agent=${fp.userAgent}`,
     // Make navigator.userAgentData (UA Client Hints) report the SAME Chrome version as
     // the UA string above. Without this the engine leaks its own build version (151)
@@ -628,9 +731,8 @@ export async function launchProfile(
     `--vgc-webgl-renderer=${fp.webgl.renderer}`,
     // IANA timezone → engine overrides ICU default zone (JS Date / Intl) natively.
     `--vgc-timezone=${fp.timezone}`,
-    // navigator.languages spoof (proxy-country locale from localeForCountry) — native
-    // because --lang is a no-op on macOS, which leaked the host's real OS language on
-    // every profile regardless of the proxy country.
+    // navigator.languages stays aligned with the host locale and request headers. This is
+    // native because --lang alone is a no-op for navigator.languages on macOS.
     `--vgc-accept-languages=${(fp.languages && fp.languages.length ? fp.languages : [fp.language]).join(',')}`,
     // Per-profile FONT allowlist → engine (font_cache.cc) hides every system font NOT in
     // this list, so the width-probe / measureText / canvas / FontFaceSet.check all report
@@ -638,17 +740,21 @@ export async function launchProfile(
     // IDENTICAL real Windows font set — a high-entropy same-machine correlator Google uses
     // to link "different" profiles. fp.fonts is a per-profile subset of the real fonts.
     ...(fp.fonts && fp.fonts.length ? [`--vgc-fonts=${fp.fonts.join(',')}`] : []),
-    // Native screen spoof (engine screen.cc) → screen.width/height/avail*/colorDepth come
-    // from these, so the JS Screen.prototype getters (the most lie-detectable surface) are
-    // no longer needed on the native path (webrtc-guard.ts drops screenScript when native).
-    `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
-    `--vgc-color-depth=${fp.screen.colorDepth}`,
+    // Headful profiles use the host's real screen/DPR model. Headless has no physical
+    // display surface, so keep its native media queries aligned with the same profile.
+    ...(opts.headless
+      ? [
+          `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
+          `--vgc-color-depth=${fp.screen.colorDepth}`,
+          `--force-device-scale-factor=${fp.devicePixelRatio}`
+        ]
+      : []),
     // Unique per-profile seed → engine seeds canvas/audio/client-rects/connection noise.
     `--vgc-seed=${seedFromString(id)}`,
     // Profile name shown in the OS window title (title bar / Cmd-Tab / Dock) so you
     // can tell which profile a window is — NOT in document.title, so it never leaks
     // to the page. GoLogin-style profile labelling.
-    `--vgc-profile-name=${profile.name}`
+    `--vgc-profile-name=${profile.name.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120)}`
   ]
 
   // ── os_crypt key: ALWAYS let the engine use its OWN per-machine key ──────────
@@ -666,6 +772,7 @@ export async function launchProfile(
   // account-secret-encrypted in the cloud, and re-encrypted with the other machine's key on
   // open — WITHOUT a shared engine key (which is what destroyed cookies in 2.1.11–2.1.14).
   const childEnv: NodeJS.ProcessEnv = { ...process.env }
+  delete childEnv.VGC_CRYPT_SECRET
   // HARDENING: childEnv inherits the whole host environment. If this machine ever has
   // GOOGLE_DEFAULT_CLIENT_ID / _SECRET set globally (a stray setx, a dev shell, CI), they
   // would reach the engine and re-trigger the DICE AccountReconcilor that deletes the
@@ -720,12 +827,35 @@ export async function launchProfile(
     `--force-webrtc-ip-handling-policy=${hasProxy ? 'disable_non_proxied_udp' : 'default_public_interface_only'}`
   )
 
-  // Load unpacked extensions: the profile's own + (native mode only) the fingerprint guard.
-  // In CDP mode the injector already applies the WebRTC filter + screen spoof, so we only
-  // need the guard extension in native mode, where nothing else stops WebRTC from leaking the
-  // real IPv4/IPv6 or stops screen.* from reporting this machine's real display.
-  const guardExt = skipCdp ? ensureNativeGuardExtension(userDataDir, fp, seedFromString(id)) : null
-  const extList = [...(guardExt ? [guardExt] : []), ...(profile.extensions ?? [])]
+  // Load the native privacy guard in every mode. WebRTC policy and geolocation denial are
+  // browser settings, not page-level shims, so CDP pages and workers receive the same policy.
+  const guardFp: Fingerprint = { ...fp, webrtc: hasProxy ? 'proxy' : 'real' }
+  const guardExt = ensureNativeGuardExtension(userDataDir, guardFp)
+  // HI is shipped with the app and loaded into every profile. Its files are verified before
+  // launch because this extension can read/write cookies when the user opens its popup.
+  const hiRoot = app.isPackaged
+    ? join(process.resourcesPath, 'extensions', 'HI')
+    : join(app.getAppPath(), 'resources', 'extensions', 'HI')
+  const hiExt = validateBundledHiExtension(hiRoot)
+  const safeExtensions = (profile.extensions ?? []).filter((candidate) => {
+    if (!isAbsolute(candidate) || candidate.includes(',') || candidate.includes('\0')) return false
+    try {
+      const dirStat = lstatSync(candidate)
+      const manifestStat = lstatSync(join(candidate, 'manifest.json'))
+      return (
+        dirStat.isDirectory() &&
+        !dirStat.isSymbolicLink() &&
+        manifestStat.isFile() &&
+        !manifestStat.isSymbolicLink() &&
+        manifestStat.nlink === 1 &&
+        manifestStat.size > 0 &&
+        manifestStat.size <= 1024 * 1024
+      )
+    } catch {
+      return false
+    }
+  })
+  const extList = [guardExt, hiExt, ...safeExtensions]
   if (extList.length > 0) {
     const list = extList.join(',')
     args.push(`--load-extension=${list}`, `--disable-extensions-except=${list}`)
@@ -765,7 +895,8 @@ export async function launchProfile(
     if (hasSession) {
       args.push('--restore-last-session')
     } else {
-      const urls = profile.startUrls && profile.startUrls.length ? profile.startUrls : ['about:blank']
+      const safeUrls = sanitizeStartUrls(profile.startUrls)
+      const urls = safeUrls.length ? safeUrls : ['about:blank']
       args.push(...urls)
     }
   } else {
@@ -774,57 +905,20 @@ export async function launchProfile(
 
   broadcast({ id, status: 'starting' })
 
-  // Spawn the engine. CRITICAL: on Windows a CreateProcess failure (errno UNKNOWN
-  // — the unsigned VGC Core engine.exe blocked/quarantined by antivirus, locked,
-  // or corrupt) is reported ASYNCHRONOUSLY via the child's 'error' event, NOT
-  // thrown by spawn(). So we wait on the 'spawn'/'error' events (spawnAndWait)
-  // rather than a plain try/catch — otherwise the failure slips past and the
-  // profile never opens. On failure we fall back to a system browser (Chrome/Edge),
-  // just like the Mac build, so the profile still opens (CDP fingerprint injection
-  // still applies; stock Chrome ignores the unknown --vgc-* flags).
+  // Spawn only the verified VGC Core engine. Falling back to stock Chrome would
+  // keep the spoofed UA while exposing real CPU/GPU/screen values.
+  if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
+    throw new Error('Tài khoản đã thay đổi trong lúc chuẩn bị engine.')
+  }
+
   let proc: ChildProcess
-  // The engine that ACTUALLY ran (may differ from enginePath if we fall back to a
-  // system browser). Drives nativeWebgl below: only the VGC Core engine spoofs
-  // WebGL in C++, so only then do we skip the JS getParameter override.
-  let actualEngine = enginePath
   try {
     proc = await spawnAndWait(enginePath, args, usePipe, childEnv)
   } catch (err) {
-    const fallback = resolveSystemBrowser(enginePath)
-    if (!fallback) {
-      relay?.close()
-      const msg =
-        'Không mở được engine VGC Core (' +
-        (err instanceof Error ? err.message : String(err)) +
-        ') và không tìm thấy Chrome/Edge hệ thống để thay thế. Hãy cài Google Chrome trên máy này.'
-      broadcast({ id, status: 'error', error: msg })
-      throw new Error(msg)
-    }
-    console.error('[vgc] engine spawn failed, dùng trình duyệt hệ thống thay thế:', err)
-    // ⚠️ Coherence warning (S1): stock Chrome ignores every --vgc-* switch, and in NATIVE
-    // mode (the default) there is no CDP injector to compensate — so a fallback profile
-    // reports the HOST machine's real cores/GPU/timezone/screen under the profile's spoofed
-    // UA string. That contradiction is worse than an un-spoofed browser. Surface it loudly
-    // instead of the old comment's false "CDP injection still applies" claim (only true when
-    // !skipCdp). A proper fix (force CDP injection on the genuine-Chrome fallback) needs the
-    // debugging pipe wired before spawn + Google-login re-validation — tracked separately.
-    broadcastEngine(id, {
-      phase: 'done',
-      message: skipCdp
-        ? '⚠️ Engine bị chặn — đang chạy Chrome hệ thống KHÔNG có che vân tay (lộ thông số máy thật). Hãy cài lại engine VGC Core.'
-        : 'Engine bị chặn — đang dùng Chrome hệ thống (che vân tay qua CDP)'
-    })
-    try {
-      proc = await spawnAndWait(fallback, args, usePipe, childEnv)
-      actualEngine = fallback
-    } catch (err2) {
-      relay?.close()
-      const msg =
-        'Không mở được trình duyệt (cả engine VGC Core lẫn Chrome hệ thống đều lỗi): ' +
-        (err2 instanceof Error ? err2.message : String(err2))
-      broadcast({ id, status: 'error', error: msg })
-      throw new Error(msg)
-    }
+    relay?.close()
+    const msg = `Không mở được VGC Core đã xác minh: ${err instanceof Error ? err.message : String(err)}`
+    broadcast({ id, status: 'error', error: msg })
+    throw new Error(msg)
   }
 
   const state: ProfileRuntimeState = {
@@ -833,7 +927,7 @@ export async function launchProfile(
     pid: proc.pid,
     startedAt: new Date().toISOString()
   }
-  const entry: RunningProfile = { proc, state, relay }
+  const entry: RunningProfile = { proc, state, relay, accountUid: launchAccountUid }
   running.set(id, entry)
   broadcast(state)
 
@@ -848,7 +942,7 @@ export async function launchProfile(
     lastCookieSnapshot.delete(id) // don't retain the profile's cookie snapshot after it closes
     broadcast({ id, status: 'stopped' })
     // GoLogin-style sync-on-close: push the freshest session back to the cloud.
-    void syncDataOnClose(id)
+    void runAccountOperation(() => syncDataOnClose(id, entry.accountUid)).catch(() => {})
   })
   proc.on('error', (err) => {
     // Mirror the 'exit' cleanup: the tabPoll interval would otherwise keep firing every 5s
@@ -861,6 +955,15 @@ export async function launchProfile(
     lastCookieSnapshot.delete(id)
     broadcast({ id, status: 'error', error: String(err) })
   })
+
+  if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
+    try {
+      proc.kill()
+    } catch {
+      // exit/error handlers perform cleanup
+    }
+    throw new Error('Tài khoản đã thay đổi trong lúc khởi chạy profile.')
+  }
 
   // Touch lastUsedAt via an atomic patch (re-reads fresh inside the store lock) so a
   // profile edit made while this profile was opening — the cloud download can take
@@ -887,22 +990,13 @@ export async function launchProfile(
   // The session is saved to the profile dir and synced on close.
   if (skipCdp) return state
 
-  // Attach the fingerprint injector (UA/Client Hints/timezone/geo + JS stealth),
+  // Attach the CDP controller (UA/Client Hints/timezone/geo, cookies and tabs),
   // then open the profile's start URLs through it so they get the overrides.
   try {
-    // The VGC Core engine spoofs WebGL natively (C++), so the JS getParameter override must
-    // be skipped there — stacking it on top re-introduces the exact detectable patch the
-    // native spoof removes. This holds on Windows too (the bundled engine/chromium build),
-    // not just the Mac .app — the old check was darwin-only, so every Windows CDP launch on
-    // the real VGC Core engine got a redundant getParameter patch. A system-Chrome fallback
-    // is NOT dedicated, so it correctly keeps the JS override.
-    const nativeWebgl =
-      (process.platform === 'darwin' && actualEngine.includes('VGC Core.app')) ||
-      isDedicatedEngine(actualEngine)
     const injector = await attachInjector(
       { ...profile, fingerprint: fp },
       { write: proc.stdio[3] as Writable, read: proc.stdio[4] as Readable },
-      { nativeWebgl, seedCookies: syncedCookies }
+      { seedCookies: syncedCookies }
     )
     // The browser may have exited while we were attaching (user closed the lone
     // window, engine crashed on a bad flag). The exit handler already ran and
@@ -915,8 +1009,8 @@ export async function launchProfile(
     entry.injector = injector
     // Tab sync: reopen the tabs that were open last time (synced from any machine
     // via the cloud data zip). First-ever open (no saved tabs) → use start URLs.
-    const savedTabs = await readSavedTabs(id)
-    const toOpen = savedTabs.length > 0 ? savedTabs : profile.startUrls
+    const savedTabs = sanitizeStartUrls(await readSavedTabs(id))
+    const toOpen = savedTabs.length > 0 ? savedTabs : sanitizeStartUrls(profile.startUrls)
     for (const url of toOpen) {
       await entry.injector.openUrl(url)
     }
@@ -943,6 +1037,13 @@ export async function launchProfile(
   return state
 }
 
+export function launchProfile(
+  id: string,
+  opts: LaunchProfileOptions = {}
+): Promise<ProfileRuntimeState> {
+  return runAccountOperation(() => launchProfileImpl(id, opts))
+}
+
 /**
  * Open a fingerprint test page inside the profile (launching it first if needed).
  */
@@ -950,17 +1051,20 @@ export async function checkFingerprint(
   id: string,
   url: string = DEFAULT_TEST_URL
 ): Promise<void> {
+  requireProfileId(id)
+  const safeUrl = sanitizeStartUrls([url])[0] ?? DEFAULT_TEST_URL
   let entry = running.get(id)
   if (!entry) {
     await launchProfile(id)
     entry = running.get(id)
   }
   if (entry?.injector) {
-    await entry.injector.openUrl(url)
+    await entry.injector.openUrl(safeUrl)
   }
 }
 
 export function stopProfile(id: string): void {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return
   const r = running.get(id)
   if (!r) return
   try {
@@ -972,6 +1076,7 @@ export function stopProfile(id: string): void {
 
 /** Read the live cookies of a running profile (for export). Null if not running. */
 export async function getProfileCookies(id: string): Promise<Cookie[] | null> {
+  requireProfileId(id)
   const r = running.get(id)
   if (!r?.injector) return null
   return r.injector.getCookies()
@@ -991,13 +1096,14 @@ const WARMUP_URLS = [
  * delay between each so the profile accumulates realistic cookies/history.
  */
 export async function cookieRobot(id: string, urls: string[] = WARMUP_URLS): Promise<void> {
+  requireProfileId(id)
   let entry = running.get(id)
   if (!entry) {
     await launchProfile(id)
     entry = running.get(id)
   }
   if (!entry?.injector) return
-  for (const url of urls) {
+  for (const url of sanitizeStartUrls(urls).slice(0, 20)) {
     await entry.injector.openUrl(url)
     await new Promise((r) => setTimeout(r, 3000))
   }

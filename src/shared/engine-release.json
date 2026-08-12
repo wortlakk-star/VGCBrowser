@@ -1,0 +1,9 @@
+{
+  "chromeMajor": 151,
+  "chromeVersion": "151.0.7902.0",
+  "windowsSigning": "unsigned",
+  "windowsFiles": {
+    "chrome.exe": "8a3f63e7c17e23c2d324715528a224b42e74687abec40cf2e4fa0cd07c291743",
+    "chrome.dll": "cb4d4e1bd9b080d337472be508b47a2516aa78a8ea23d6375c3c6fca5b76a407"
+  }
+}

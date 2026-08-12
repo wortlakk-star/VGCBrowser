@@ -5,13 +5,17 @@
 // profiles whose parts disagree (e.g. a Windows UA with an Apple GPU).
 
 import type { Fingerprint, OsType } from './types'
+import engineRelease from './engine-release.json'
 
 // Pinned to the current STABLE Chrome — MUST match the VGC Core engine build, else the
 // claimed UA (say 149) contradicts the engine's UA-CH high-entropy hints (151) and
 // anti-bot (Google "browser not secure", Cloudflare) flags the version MISMATCH.
 // Exported so the store can bump older profiles' UA to this version. Keep in sync with
 // the engine (engine-src/BUILD-WINDOWS-ENGINE.md pins 151.0.7902.0).
-export const CHROME_BUILD = { major: 151, full: '151.0.7902.0' }
+export const CHROME_BUILD = {
+  major: engineRelease.chromeMajor,
+  full: engineRelease.chromeVersion
+}
 const CHROME_BUILDS: Array<{ major: number; full: string }> = [CHROME_BUILD]
 
 const DESKTOP_SCREENS = [
@@ -53,6 +57,18 @@ interface OsPreset {
   fonts: string[]
   gpus: Array<{ vendor: string; renderer: string }>
   mobile: boolean
+}
+
+export interface FingerprintEnvironment {
+  language?: string
+  languages?: string[]
+  hardwareConcurrency?: number
+  deviceMemory?: number
+  devicePixelRatio?: number
+  screen?: { width: number; height: number }
+  webgl?: { vendor: string; renderer: string }
+  platformVersion?: string
+  timezone?: string
 }
 
 // The full default Windows 10/11 font set. The universal fonts (also listed in
@@ -240,12 +256,19 @@ export function localeForCountry(
 }
 
 /** Generate a self-consistent fingerprint for the given OS. */
-export function generateFingerprint(os: OsType = 'windows'): Fingerprint {
+export function generateFingerprint(
+  os: OsType = 'windows',
+  environment: FingerprintEnvironment = {}
+): Fingerprint {
   const preset = OS_PRESETS[os] ?? OS_PRESETS.windows
   const build = pick(CHROME_BUILDS)
-  const gpu = pick(preset.gpus)
-  const screen = preset.mobile ? pick(MOBILE_SCREENS) : pick(DESKTOP_SCREENS)
-  const timezone = pick(TIMEZONES)
+  const gpu = environment.webgl ?? pick(preset.gpus)
+  const screen = environment.screen ?? (preset.mobile ? pick(MOBILE_SCREENS) : pick(DESKTOP_SCREENS))
+  const timezone = environment.timezone ?? pick(TIMEZONES)
+  const language = environment.language ?? 'en-US'
+  const languages = environment.languages?.length
+    ? environment.languages
+    : [language, language.split('-')[0]].filter((v, i, a) => a.indexOf(v) === i)
 
   const userAgent =
     `Mozilla/5.0 (${preset.uaParens}) ` +
@@ -255,17 +278,19 @@ export function generateFingerprint(os: OsType = 'windows'): Fingerprint {
   return {
     userAgent,
     platform: preset.platform,
-    language: 'en-US',
-    languages: ['en-US', 'en'],
-    hardwareConcurrency: preset.mobile ? pick([4, 6, 8]) : pick(CORES),
-    deviceMemory: preset.mobile ? pick([4, 8]) : pick(MEMORY),
+    language,
+    languages,
+    hardwareConcurrency:
+      environment.hardwareConcurrency ?? (preset.mobile ? pick([4, 6, 8]) : pick(CORES)),
+    deviceMemory: environment.deviceMemory ?? (preset.mobile ? pick([4, 8]) : pick(MEMORY)),
     vendor: 'Google Inc.',
     screen: {
       ...screen,
       colorDepth: 24,
       pixelDepth: 24
     },
-    devicePixelRatio: preset.mobile ? 2.625 : 1,
+    devicePixelRatio:
+      environment.devicePixelRatio ?? (preset.mobile ? 2.625 : os === 'macos' ? 2 : 1),
     webgl: gpu,
     canvasNoise: true,
     audioNoise: true,
@@ -273,7 +298,7 @@ export function generateFingerprint(os: OsType = 'windows'): Fingerprint {
     webrtc: 'proxy',
     timezone,
     uaFullVersion: build.full,
-    uaPlatformVersion: preset.platformVersion,
+    uaPlatformVersion: environment.platformVersion ?? preset.platformVersion,
     fonts: fontSubset(preset.fonts),
     doNotTrack: 'unset'
   }

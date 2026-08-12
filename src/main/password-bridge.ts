@@ -1,10 +1,9 @@
 // ── VGC Browser — cross-machine SAVED PASSWORDS bridge ───────────────────────
-// Chrome stores saved website logins in the `Default/Login Data` SQLite DB with each
+// Chromium stores saved website logins in the `Default/Login Data` SQLite DB with each
 // password ENCRYPTED by the machine's os_crypt key. That key differs per engine:
-//   • Windows runs the patched VGC Core → PORTABLE key = PBKDF2-SHA1(sha256(accountSecret
-//     :profileId), "saltysalt", 1003) → AES-128-CBC, tag "v10".
-//   • macOS runs the SYSTEM Google Chrome → KEYCHAIN key = PBKDF2-SHA1("Chrome Safe
-//     Storage" keychain password, "saltysalt", 1003) → AES-128-CBC, tag "v10".
+//   • Windows VGC Core uses the profile's DPAPI-wrapped AES-256-GCM machine key.
+//   • macOS VGC Core uses the Chromium Safe Storage keychain password, deriving an
+//     AES-128-CBC key with PBKDF2-SHA1.
 // So a Login Data written on one machine is undecryptable on the other, and syncing the
 // zip just overwrites one machine's logins with the other's (last-writer-wins → both
 // vanish). Cookies already dodge this via a plaintext bridge; passwords didn't — this
@@ -22,11 +21,20 @@
 
 import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes } from 'crypto'
 import { execFileSync } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'fs'
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { join, dirname } from 'path'
 import type { SavedLogin, SavedCookie } from '../shared/types'
-import { getAccountSecret } from './account-secret'
-import { getSettings } from './settings'
 
 // sql.js is loaded lazily so a missing/broken WASM just disables the bridge.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,9 +63,16 @@ async function getSQL(): Promise<unknown> {
 
 const V10 = Buffer.from('v10', 'latin1')
 const FIXED_IV = Buffer.alloc(16, 0x20) // 16 spaces — the os_crypt v10 AES-128-CBC IV
+const MAX_LOGIN_DB_BYTES = 128 * 1024 * 1024
+const MAX_COOKIE_DB_BYTES = 128 * 1024 * 1024
+const MAX_LOCAL_STATE_BYTES = 4 * 1024 * 1024
+const MAX_LOGIN_ROWS = 10_000
+const MAX_COOKIE_ROWS = 20_000
+const MAX_SECRET_CHARS = 64 * 1024
+const SAFE_COLUMN_RE = /^[a-z_][a-z0-9_]{0,63}$/i
 
 // macOS keychain-derived key, resolved at most once per process (undefined = untried,
-// null = unavailable). Machine-wide: stock Chrome uses one key for all profiles.
+// null = unavailable). Machine-wide: VGC Core uses one key for all profiles.
 let macKeyCache: Buffer | null | undefined
 
 function loginDataPath(userDataDir: string): string {
@@ -69,40 +84,22 @@ function loginDataPath(userDataDir: string): string {
  * derived (→ bridge skips, safely). Mirrors exactly what the running engine uses so
  * blobs we write are readable by it and blobs it wrote are readable by us.
  */
-async function localKey(id: string): Promise<Buffer | null> {
+async function localKey(): Promise<Buffer | null> {
   try {
-    const s = await getSettings()
-    if (process.platform === 'win32') {
-      // System Chrome on Windows uses DPAPI/AES-256-GCM (different format) — skip.
-      if (s.useSystemBrowser) return null
-      const acct = await getAccountSecret()
-      if (!acct) return null
-      const secretStr = createHash('sha256').update(`${acct}:${id}`).digest('hex')
-      return pbkdf2Sync(secretStr, 'saltysalt', 1003, 16, 'sha1')
-    }
     if (process.platform === 'darwin') {
-      // System Google Chrome → the "Chrome Safe Storage" keychain password. It's the
-      // SAME key for every profile on this Mac (stock Chrome knows nothing about
-      // per-profile keys), so read + cache it once per process. The keychain item's ACL
-      // trusts only Chrome, so the FIRST read shows a macOS prompt — give the user time
-      // to click "Always Allow" (90s) rather than SIGKILLing it with a short timeout.
+      // The dedicated engine is Chromium-branded, so it uses these exact Keychain names.
+      // Never fall back to Google Chrome's item: a valid but wrong key would make imported
+      // credentials unreadable. The first read may show a macOS permission prompt.
       if (macKeyCache !== undefined) return macKeyCache
       let pw = ''
       try {
         pw = execFileSync(
           'security',
-          ['find-generic-password', '-w', '-s', 'Chrome Safe Storage', '-a', 'Chrome'],
+          ['find-generic-password', '-w', '-s', 'Chromium Safe Storage', '-a', 'Chromium'],
           { encoding: 'utf8', timeout: 90000 }
         ).trim()
       } catch {
-        try {
-          pw = execFileSync('security', ['find-generic-password', '-w', '-s', 'Chrome Safe Storage'], {
-            encoding: 'utf8',
-            timeout: 90000
-          }).trim()
-        } catch {
-          pw = ''
-        }
+        pw = ''
       }
       macKeyCache = pw ? pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1') : null
       if (!macKeyCache) console.error('[vgc-pw] macOS keychain key unavailable — grant "Always Allow" once')
@@ -130,15 +127,23 @@ function decryptV10(blob: Buffer, key: Buffer): string | null {
 }
 
 function encryptV10(plain: string, key: Buffer): Buffer {
+  return encryptV10Bytes(Buffer.from(plain, 'utf8'), key)
+}
+
+function encryptV10Bytes(plain: Buffer, key: Buffer): Buffer {
   const c = createCipheriv('aes-128-cbc', key, FIXED_IV)
-  return Buffer.concat([V10, c.update(Buffer.from(plain, 'utf8')), c.final()])
+  return Buffer.concat([V10, c.update(plain), c.final()])
 }
 
 // AES-256-GCM v10 encrypt (the Windows machine-key format). "v10" + nonce[12] + ct + tag[16].
 function encryptV10Gcm(plain: string, key: Buffer): Buffer {
+  return encryptV10GcmBytes(Buffer.from(plain, 'utf8'), key)
+}
+
+function encryptV10GcmBytes(plain: Buffer, key: Buffer): Buffer {
   const nonce = randomBytes(12)
   const c = createCipheriv('aes-256-gcm', key, nonce)
-  const ct = Buffer.concat([c.update(Buffer.from(plain, 'utf8')), c.final()])
+  const ct = Buffer.concat([c.update(plain), c.final()])
   return Buffer.concat([V10, nonce, ct, c.getAuthTag()])
 }
 
@@ -146,18 +151,18 @@ function encryptV10Gcm(plain: string, key: Buffer): Buffer {
 // The VGC Core engine does NOT apply the portable --vgc-crypt-secret key (verified: it
 // keeps writing the per-machine DPAPI key). So the bridge decrypts/encrypts with the SAME
 // per-machine key the engine uses — Windows: DPAPI AES-256-GCM (from Local State); macOS:
-// system-Chrome "Chrome Safe Storage" keychain AES-128-CBC. That makes each machine keep
+// Chromium Safe Storage keychain AES-128-CBC. That makes each machine keep
 // its own stable session AND lets the bridge translate cookies/passwords across machines
 // (decrypt local → plaintext cloud → re-encrypt with the TARGET machine's key), no engine
 // rebuild needed.
 type EngKey = { key: Buffer; gcm: boolean }
-async function engineKey(userDataDir: string, id: string): Promise<EngKey | null> {
+async function engineKey(userDataDir: string): Promise<EngKey | null> {
   if (process.platform === 'win32') {
     const k = windowsMachineKey(userDataDir)
     return k ? { key: k, gcm: true } : null
   }
   if (process.platform === 'darwin') {
-    const k = await localKey(id) // macOS localKey = the keychain (machine) key, AES-128-CBC
+    const k = await localKey() // macOS localKey = the keychain (machine) key, AES-128-CBC
     return k ? { key: k, gcm: false } : null
   }
   return null
@@ -169,12 +174,125 @@ function encryptEngine(plain: string, ek: EngKey): Buffer {
   return ek.gcm ? encryptV10Gcm(plain, ek.key) : encryptV10(plain, ek.key)
 }
 
+function encryptEngineBytes(plain: Buffer, ek: EngKey): Buffer {
+  return ek.gcm ? encryptV10GcmBytes(plain, ek.key) : encryptV10Bytes(plain, ek.key)
+}
+
 function safeRm(p: string): void {
   try {
     rmSync(p, { force: true })
   } catch {
     /* best-effort */
   }
+}
+
+function hasPendingSqliteWrites(path: string): boolean {
+  try {
+    return ['-journal', '-wal'].some((suffix) => {
+      const sidecar = path + suffix
+      if (!existsSync(sidecar)) return false
+      const stat = lstatSync(sidecar)
+      return !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 0
+    })
+  } catch {
+    return true
+  }
+}
+
+function readBoundedFile(path: string, maxBytes: number): Buffer {
+  let fd: number | null = null
+  try {
+    const before = lstatSync(path)
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) {
+      throw new Error('Refusing unsafe database path')
+    }
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size <= 0 || stat.size > maxBytes) {
+      throw new Error(`Refusing unexpected database size: ${stat.size}`)
+    }
+    const bytes = readFileSync(fd)
+    if (bytes.length <= 0 || bytes.length > maxBytes) {
+      throw new Error(`Refusing unexpected database bytes: ${bytes.length}`)
+    }
+    return bytes
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
+function replaceDbAtomically(path: string, bytes: Buffer, maxBytes: number): void {
+  if (bytes.length <= 0 || bytes.length > maxBytes) {
+    throw new Error(`Refusing unexpected database output size: ${bytes.length}`)
+  }
+  const tmp = `${path}.vgcnew.${process.pid}.${randomBytes(8).toString('hex')}`
+  try {
+    const current = lstatSync(path)
+    if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1) {
+      throw new Error('Refusing unsafe database destination')
+    }
+    writeFileSync(tmp, bytes, { flag: 'wx', mode: 0o600 })
+    renameSync(tmp, path)
+  } finally {
+    safeRm(tmp)
+  }
+}
+
+function boundedString(value: unknown, max: number): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\0/g, '').slice(0, max)
+}
+
+function boundedSecret(value: unknown): string {
+  return typeof value === 'string' ? value.slice(0, MAX_SECRET_CHARS) : ''
+}
+
+function boundedInteger(value: unknown, fallback = 0): number {
+  const n = Number(value)
+  return Number.isFinite(n) && Math.abs(n) <= 9e18 ? Math.trunc(n) : fallback
+}
+
+function sanitizeLogin(value: unknown): SavedLogin | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Partial<SavedLogin>
+  const origin = boundedString(row.origin_url, 4096)
+  const realm = boundedString(row.signon_realm, 4096)
+  const password = boundedSecret(row.password)
+  if (!origin || !realm || !password) return null
+  return {
+    origin_url: origin,
+    signon_realm: realm,
+    password,
+    action_url: boundedString(row.action_url, 4096),
+    username_element: boundedString(row.username_element, 1024),
+    username_value: boundedString(row.username_value, 4096),
+    password_element: boundedString(row.password_element, 1024),
+    scheme: boundedInteger(row.scheme),
+    date_created: boundedInteger(row.date_created),
+    date_password_modified: boundedInteger(row.date_password_modified),
+    times_used: Math.max(0, boundedInteger(row.times_used)),
+    blacklisted_by_user: row.blacklisted_by_user === 1 ? 1 : 0
+  }
+}
+
+function sanitizeSavedCookie(value: unknown): SavedCookie | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Partial<SavedCookie>
+  if (!row.cols || typeof row.cols !== 'object' || Array.isArray(row.cols)) return null
+  const cols: Record<string, string | number> = {}
+  for (const [key, raw] of Object.entries(row.cols).slice(0, 128)) {
+    if (!SAFE_COLUMN_RE.test(key)) continue
+    if (typeof raw === 'number') {
+      if (Number.isFinite(raw) && Math.abs(raw) <= 9e18) cols[key] = Math.trunc(raw)
+    } else if (typeof raw === 'string') {
+      cols[key] = boundedString(raw, MAX_SECRET_CHARS)
+    }
+  }
+  cols.host_key = boundedString(cols.host_key, 255)
+  cols.name = boundedString(cols.name, 1024)
+  cols.path = boundedString(cols.path, 2048) || '/'
+  if (!cols.host_key || !cols.name) return null
+  return { value: boundedString(row.value, MAX_SECRET_CHARS), cols }
 }
 
 const SELECT_COLS = [
@@ -196,31 +314,33 @@ const SELECT_COLS = [
  * Read + DECRYPT the profile's saved logins with the LOCAL key. Returns [] on any
  * problem (no engine key, no DB, WASM missing). Read-only — never touches the file.
  */
-export async function exportLogins(userDataDir: string, id: string): Promise<SavedLogin[]> {
+export async function exportLogins(userDataDir: string, _id: string): Promise<SavedLogin[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Sql = (await getSQL()) as any
   if (!Sql) return []
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return []
-  const ek = await engineKey(userDataDir, id)
+  if (hasPendingSqliteWrites(ld)) return []
+  const ek = await engineKey(userDataDir)
   if (!ek) return []
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
   try {
-    db = new Sql.Database(readFileSync(ld))
+    db = new Sql.Database(readBoundedFile(ld, MAX_LOGIN_DB_BYTES))
     const res = db.exec(`SELECT ${SELECT_COLS.join(', ')} FROM logins`)
     const out: SavedLogin[] = []
     if (res.length) {
       const cols: string[] = res[0].columns
       const idx = (c: string): number => cols.indexOf(c)
       for (const row of res[0].values as unknown[][]) {
+        if (out.length >= MAX_LOGIN_ROWS) break
         const pv = row[idx('password_value')] as Uint8Array | null
         if (!pv || !pv.length) continue // blacklist "never save" rows have no password
         const pb = decryptEngine(Buffer.from(pv), ek)
         const plain = pb === null ? null : pb.toString('utf8')
         if (plain == null || plain === '') continue // couldn't decrypt / empty → skip
-        out.push({
+        const login = sanitizeLogin({
           origin_url: String(row[idx('origin_url')] ?? ''),
           signon_realm: String(row[idx('signon_realm')] ?? ''),
           password: plain,
@@ -234,9 +354,10 @@ export async function exportLogins(userDataDir: string, id: string): Promise<Sav
           times_used: Number(row[idx('times_used')] ?? 0),
           blacklisted_by_user: Number(row[idx('blacklisted_by_user')] ?? 0)
         })
+        if (login) out.push(login)
       }
     }
-    return out.filter((l) => l.origin_url && l.signon_realm)
+    return out
   } catch (e) {
     console.error('[vgc-pw] exportLogins failed:', e)
     return []
@@ -258,42 +379,59 @@ export async function exportLogins(userDataDir: string, id: string): Promise<Sav
  */
 export async function importLogins(
   userDataDir: string,
-  id: string,
+  _id: string,
   logins: SavedLogin[]
 ): Promise<number> {
-  if (!logins?.length) return 0
+  if (!Array.isArray(logins) || !logins.length) return 0
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Sql = (await getSQL()) as any
   if (!Sql) return 0
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return 0 // no schema to merge into (engine makes it on first run)
-  const ek = await engineKey(userDataDir, id)
+  const ek = await engineKey(userDataDir)
   if (!ek) return 0
 
-  // A leftover hot rollback journal means an interrupted transaction that a real SQLite
-  // open would ROLL BACK; sql.js reads only the main file and can't, so skip this round
-  // (no-op) rather than persist a half-state. It merges cleanly on the next open.
-  try {
-    const j = ld + '-journal'
-    if (existsSync(j) && statSync(j).size > 0) return 0
-  } catch {
-    /* ignore */
-  }
+  // sql.js reads only the main file. Skip while a rollback journal or WAL has pending
+  // bytes so a merge cannot discard a transaction Chromium has not checkpointed yet.
+  if (hasPendingSqliteWrites(ld)) return 0
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
   try {
-    db = new Sql.Database(readFileSync(ld))
+    db = new Sql.Database(readBoundedFile(ld, MAX_LOGIN_DB_BYTES))
 
-    // Only write columns that exist in THIS engine's schema (macOS system Chrome may be
-    // a different version) — the rest fall back to their SQLite defaults.
+    // Only write known columns that exist in this VGC Core schema; extra columns retain
+    // SQLite defaults. Reject malformed schemas before constructing any SQL from them.
     const ti = db.exec('PRAGMA table_info(logins)')
     if (!ti.length) {
       db.close()
       return 0
     }
     const nameIdx = (ti[0].columns as string[]).indexOf('name')
-    const cols = new Set<string>((ti[0].values as unknown[][]).map((v) => String(v[nameIdx])))
+    if (nameIdx < 0 || ti[0].values.length > 128) {
+      db.close()
+      return 0
+    }
+    const schemaColumns = (ti[0].values as unknown[][]).map((v) => String(v[nameIdx]))
+    if (schemaColumns.some((column) => !SAFE_COLUMN_RE.test(column))) {
+      db.close()
+      return 0
+    }
+    const cols = new Set<string>(schemaColumns)
+    const requiredColumns = [
+      'id',
+      'origin_url',
+      'username_element',
+      'username_value',
+      'password_element',
+      'password_value',
+      'signon_realm',
+      'date_password_modified'
+    ]
+    if (requiredColumns.some((column) => !cols.has(column))) {
+      db.close()
+      return 0
+    }
     const wanted = [
       'origin_url',
       'action_url',
@@ -324,8 +462,9 @@ export async function importLogins(
     let changed = 0
     db.exec('BEGIN')
     try {
-      for (const r of logins) {
-        if (!r.origin_url || !r.signon_realm || !r.password) continue
+      for (const raw of logins.slice(0, MAX_LOGIN_ROWS)) {
+        const r = sanitizeLogin(raw)
+        if (!r) continue
         const ue = r.username_element ?? ''
         const pe = r.password_element ?? ''
         const uv = r.username_value ?? ''
@@ -418,9 +557,8 @@ export async function importLogins(
     // Atomic replace: write a sibling then rename over the original so a crash mid-write
     // can never leave a truncated Login Data. Drop stale journal/WAL siblings so the
     // engine reads exactly our merged DB.
-    const tmp = ld + '.vgcnew'
-    writeFileSync(tmp, outBytes)
-    renameSync(tmp, ld)
+    if (hasPendingSqliteWrites(ld)) throw new Error('Login Data changed during merge')
+    replaceDbAtomically(ld, outBytes, MAX_LOGIN_DB_BYTES)
     safeRm(ld + '-wal')
     safeRm(ld + '-shm')
     safeRm(ld + '-journal')
@@ -436,28 +574,16 @@ export async function importLogins(
   }
 }
 
-// ── Cookies (login SESSION) — decrypt-on-source, write-plaintext-on-target ────
+// ── Cookies (login SESSION) — decrypt on source, re-encrypt on target ─────────
 // The `cookies` table's `encrypted_value` is os_crypt v10 with, since DB version 24, a
 // SHA256(host_key) prefix on the decrypted plaintext (net/extras/sqlite/sqlite_persistent
 // _cookie_store.cc:213,992-999). We decrypt with the LOCAL key + strip that prefix on
-// export; on import we write the value into the plaintext `value` column with an EMPTY
-// `encrypted_value`, so the target Chrome loads it directly (line 980 there) and re-seals
-// it with ITS key on next save — no target-side re-encryption/hashing needed. All cookie
-// columns are NOT NULL, so we carry every column and default anything a target adds.
+// export; on import we restore the prefix and encrypt immediately with the target's LOCAL
+// key. Cookie secrets therefore never need to sit in SQLite's plaintext `value` column.
 
 function cookiesDbPath(userDataDir: string): string {
   return join(userDataDir, 'Default', 'Network', 'Cookies')
 }
-
-// ── One-time migration: OLD machine key → portable key ────────────────────────
-// Before the --vgc-crypt-secret switch fix, the engine silently used its per-machine
-// DPAPI key (AES-256-GCM, tag "v10"). After the fix it uses the portable key
-// (AES-128-CBC). So existing cookies/passwords can't be read by the now-portable engine
-// → mass re-login. This migrates them: decrypt with the OLD machine key (auth-tag-
-// verified GCM = reliably a machine-key blob), then re-seal for the portable engine —
-// cookies as PLAINTEXT (empty encrypted_value, engine re-seals on save), passwords by
-// re-encrypting to portable CBC. Windows only (macOS runs stock Chrome/keychain). It is
-// self-terminating (once migrated, GCM decrypt returns null → no-op) and fail-safe.
 
 /** AES-256-GCM v10 decrypt (the Windows machine DPAPI key format). A non-null result
  *  means the auth tag verified → the blob was written by the machine key. */
@@ -484,9 +610,11 @@ function windowsMachineKey(userDataDir: string): Buffer | null {
   try {
     const ls = join(userDataDir, 'Local State')
     if (existsSync(ls)) {
-      const j = JSON.parse(readFileSync(ls, 'utf-8')) as { os_crypt?: { encrypted_key?: string } }
+      const j = JSON.parse(readBoundedFile(ls, MAX_LOCAL_STATE_BYTES).toString('utf8')) as {
+        os_crypt?: { encrypted_key?: string }
+      }
       const b64 = j.os_crypt?.encrypted_key
-      if (b64) {
+      if (b64 && b64.length <= 16 * 1024 && /^[a-z0-9+/]+=*$/i.test(b64)) {
         const raw = Buffer.from(b64, 'base64')
         if (raw.subarray(0, 5).toString('latin1') === 'DPAPI') {
           const dpapiB64 = raw.subarray(5).toString('base64')
@@ -507,185 +635,41 @@ function windowsMachineKey(userDataDir: string): Buffer | null {
   return key
 }
 
-/** Re-seal machine-key cookies as plaintext so the portable-key engine keeps the session. */
-export async function migrateCookiesToPortable(userDataDir: string, id: string): Promise<number> {
-  if (process.platform !== 'win32') return 0
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Sql = (await getSQL()) as any
-  if (!Sql) return 0
-  const ck = cookiesDbPath(userDataDir)
-  if (!existsSync(ck)) return 0
-  const mkey = windowsMachineKey(userDataDir)
-  if (!mkey) return 0
-  try {
-    const j = ck + '-journal'
-    if (existsSync(j) && statSync(j).size > 0) return 0
-  } catch {
-    /* ignore */
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let db: any = null
-  try {
-    db = new Sql.Database(readFileSync(ck))
-    const res = db.exec('SELECT rowid, host_key, encrypted_value FROM cookies WHERE length(encrypted_value)>30')
-    if (!res.length) {
-      db.close()
-      return 0
-    }
-    let n = 0
-    db.exec('BEGIN')
-    try {
-      for (const row of res[0].values as unknown[][]) {
-        const rowid = row[0]
-        const host = String(row[1] ?? '')
-        const pt = decryptV10Gcm(Buffer.from(row[2] as Uint8Array), mkey)
-        if (!pt) continue // not a machine-key blob (already portable / not ours)
-        const sha = createHash('sha256').update(host).digest()
-        const value =
-          pt.length >= 32 && pt.subarray(0, 32).equals(sha) ? pt.subarray(32).toString('utf8') : pt.toString('utf8')
-        db.run('UPDATE cookies SET encrypted_value=$e, value=$v WHERE rowid=$r', {
-          $e: new Uint8Array(0),
-          $v: value,
-          $r: rowid
-        })
-        n++
-      }
-      db.exec('COMMIT')
-    } catch (e) {
-      try {
-        db.exec('ROLLBACK')
-      } catch {
-        /* ignore */
-      }
-      throw e
-    }
-    if (n === 0) {
-      db.close()
-      return 0
-    }
-    const integ = db.exec('PRAGMA integrity_check')
-    if (!(integ.length && String(integ[0].values[0][0]) === 'ok')) {
-      db.close()
-      return 0
-    }
-    const out = Buffer.from(db.export() as Uint8Array)
-    db.close()
-    db = null
-    const tmp = ck + '.vgcnew'
-    writeFileSync(tmp, out)
-    renameSync(tmp, ck)
-    safeRm(ck + '-wal')
-    safeRm(ck + '-shm')
-    safeRm(ck + '-journal')
-    return n
-  } catch (e) {
-    console.error('[vgc-pw] migrateCookiesToPortable failed:', e)
-    try {
-      db?.close()
-    } catch {
-      /* ignore */
-    }
-    return 0
-  }
-}
-
-/** Re-encrypt machine-key saved passwords to the portable key so autofill survives. */
-export async function migrateLoginsToPortable(userDataDir: string, id: string): Promise<number> {
-  if (process.platform !== 'win32') return 0
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Sql = (await getSQL()) as any
-  if (!Sql) return 0
-  const ld = loginDataPath(userDataDir)
-  if (!existsSync(ld)) return 0
-  const portable = await localKey(id)
-  const mkey = windowsMachineKey(userDataDir)
-  if (!portable || !mkey) return 0
-  try {
-    const j = ld + '-journal'
-    if (existsSync(j) && statSync(j).size > 0) return 0
-  } catch {
-    /* ignore */
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let db: any = null
-  try {
-    db = new Sql.Database(readFileSync(ld))
-    const res = db.exec('SELECT rowid, password_value FROM logins WHERE length(password_value)>30')
-    if (!res.length) {
-      db.close()
-      return 0
-    }
-    let n = 0
-    db.exec('BEGIN')
-    try {
-      for (const row of res[0].values as unknown[][]) {
-        const rowid = row[0]
-        const pt = decryptV10Gcm(Buffer.from(row[1] as Uint8Array), mkey)
-        if (!pt) continue
-        const reenc = encryptV10(pt.toString('utf8'), portable)
-        db.run('UPDATE logins SET password_value=$p WHERE rowid=$r', { $p: reenc, $r: rowid })
-        n++
-      }
-      db.exec('COMMIT')
-    } catch (e) {
-      try {
-        db.exec('ROLLBACK')
-      } catch {
-        /* ignore */
-      }
-      throw e
-    }
-    if (n === 0) {
-      db.close()
-      return 0
-    }
-    const integ = db.exec('PRAGMA integrity_check')
-    if (!(integ.length && String(integ[0].values[0][0]) === 'ok')) {
-      db.close()
-      return 0
-    }
-    const out = Buffer.from(db.export() as Uint8Array)
-    db.close()
-    db = null
-    const tmp = ld + '.vgcnew'
-    writeFileSync(tmp, out)
-    renameSync(tmp, ld)
-    safeRm(ld + '-wal')
-    safeRm(ld + '-shm')
-    safeRm(ld + '-journal')
-    return n
-  } catch (e) {
-    console.error('[vgc-pw] migrateLoginsToPortable failed:', e)
-    try {
-      db?.close()
-    } catch {
-      /* ignore */
-    }
-    return 0
-  }
-}
-
 /** Read + DECRYPT the profile's cookies with the LOCAL key. [] on any problem. */
-export async function exportCookies(userDataDir: string, id: string): Promise<SavedCookie[]> {
+export async function exportCookies(userDataDir: string, _id: string): Promise<SavedCookie[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Sql = (await getSQL()) as any
   if (!Sql) return []
   const ck = cookiesDbPath(userDataDir)
   if (!existsSync(ck)) return []
-  const ek = await engineKey(userDataDir, id)
+  if (hasPendingSqliteWrites(ck)) return []
+  const ek = await engineKey(userDataDir)
   if (!ek) return []
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
   try {
-    db = new Sql.Database(readFileSync(ck))
+    db = new Sql.Database(readBoundedFile(ck, MAX_COOKIE_DB_BYTES))
     const ti = db.exec('PRAGMA table_info(cookies)')
     if (!ti.length) {
       db.close()
       return []
     }
     const nIdx = (ti[0].columns as string[]).indexOf('name')
+    if (nIdx < 0) {
+      db.close()
+      return []
+    }
     const allCols = (ti[0].values as unknown[][]).map((v) => String(v[nIdx]))
+    const required = ['host_key', 'name', 'value', 'encrypted_value']
+    if (
+      allCols.length > 128 ||
+      allCols.some((column) => !SAFE_COLUMN_RE.test(column)) ||
+      required.some((column) => !allCols.includes(column))
+    ) {
+      db.close()
+      return []
+    }
     const res = db.exec(`SELECT ${allCols.map((c) => `"${c}"`).join(',')} FROM cookies`)
     const out: SavedCookie[] = []
     if (res.length) {
@@ -695,6 +679,7 @@ export async function exportCookies(userDataDir: string, id: string): Promise<Sa
       const evI = ix('encrypted_value')
       const valI = ix('value')
       for (const row of res[0].values as unknown[][]) {
+        if (out.length >= MAX_COOKIE_ROWS) break
         const host = String(row[hostI] ?? '')
         const ev = row[evI] as Uint8Array | null
         let value: string
@@ -715,7 +700,8 @@ export async function exportCookies(userDataDir: string, id: string): Promise<Sa
           const v = row[ix(col)]
           c[col] = typeof v === 'number' ? v : v == null ? '' : String(v)
         }
-        out.push({ value, cols: c })
+        const cookie = sanitizeSavedCookie({ value, cols: c })
+        if (cookie) out.push(cookie)
       }
     }
     return out
@@ -731,31 +717,28 @@ export async function exportCookies(userDataDir: string, id: string): Promise<Sa
   }
 }
 
-/** MERGE cloud cookies into the local Cookies DB as PLAINTEXT (encrypted_value empty).
+/** MERGE cloud cookies into the local Cookies DB, encrypted with the target machine key.
  *  INSERT-OR-REPLACE by the cookie unique index. Fail-safe atomic write. Returns count. */
 export async function importCookies(
   userDataDir: string,
-  id: string,
+  _id: string,
   cookies: SavedCookie[]
 ): Promise<number> {
-  if (!cookies?.length) return 0
+  if (!Array.isArray(cookies) || !cookies.length) return 0
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Sql = (await getSQL()) as any
   if (!Sql) return 0
   const ck = cookiesDbPath(userDataDir)
   if (!existsSync(ck)) return 0 // engine creates it on first run
+  const ek = await engineKey(userDataDir)
+  if (!ek) return 0
 
-  try {
-    const j = ck + '-journal'
-    if (existsSync(j) && statSync(j).size > 0) return 0
-  } catch {
-    /* ignore */
-  }
+  if (hasPendingSqliteWrites(ck)) return 0
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
   try {
-    db = new Sql.Database(readFileSync(ck))
+    db = new Sql.Database(readBoundedFile(ck, MAX_COOKIE_DB_BYTES))
     const ti = db.exec('PRAGMA table_info(cookies)')
     if (!ti.length) {
       db.close()
@@ -764,7 +747,31 @@ export async function importCookies(
     const pcols = ti[0].columns as string[]
     const nIdx = pcols.indexOf('name')
     const tIdx = pcols.indexOf('type')
+    if (nIdx < 0 || tIdx < 0) {
+      db.close()
+      return 0
+    }
     const targetCols = (ti[0].values as unknown[][]).map((v) => String(v[nIdx]))
+    const required = [
+      'host_key',
+      'top_frame_site_key',
+      'has_cross_site_ancestor',
+      'name',
+      'path',
+      'source_scheme',
+      'source_port',
+      'last_update_utc',
+      'value',
+      'encrypted_value'
+    ]
+    if (
+      targetCols.length > 128 ||
+      targetCols.some((column) => !SAFE_COLUMN_RE.test(column)) ||
+      required.some((column) => !targetCols.includes(column))
+    ) {
+      db.close()
+      return 0
+    }
     const colIsInt: Record<string, boolean> = {}
     for (const v of ti[0].values as unknown[][]) {
       colIsInt[String(v[nIdx])] = String(v[tIdx]).toUpperCase().includes('INT')
@@ -785,8 +792,9 @@ export async function importCookies(
     let changed = 0
     db.exec('BEGIN')
     try {
-      for (const r of cookies) {
-        if (!r || !r.cols || !r.cols.host_key || !r.cols.name) continue
+      for (const raw of cookies.slice(0, MAX_COOKIE_ROWS)) {
+        const r = sanitizeSavedCookie(raw)
+        if (!r) continue
         findStmt.bind({
           $hk: r.cols.host_key,
           $tf: String(r.cols.top_frame_site_key ?? ''),
@@ -804,10 +812,15 @@ export async function importCookies(
           continue // local cookie is newer → keep it (don't clobber a fresh session)
         }
         const params: Record<string, unknown> = {}
+        const host = String(r.cols.host_key)
+        const protectedValue = encryptEngineBytes(
+          Buffer.concat([createHash('sha256').update(host).digest(), Buffer.from(r.value, 'utf8')]),
+          ek
+        )
         for (const c of targetCols) {
-          if (c === 'value') params['$' + c] = r.value ?? ''
-          else if (c === 'encrypted_value') params['$' + c] = new Uint8Array(0) // empty → plaintext
-          else if (c in r.cols) params['$' + c] = r.cols[c]
+          if (c === 'value') params['$' + c] = ''
+          else if (c === 'encrypted_value') params['$' + c] = protectedValue
+          else if (Object.prototype.hasOwnProperty.call(r.cols, c)) params['$' + c] = r.cols[c]
           else params['$' + c] = colIsInt[c] ? 0 : '' // NOT NULL default for a target-only column
         }
         db.run(insSql, params)
@@ -839,9 +852,8 @@ export async function importCookies(
     const outBytes = Buffer.from(db.export() as Uint8Array)
     db.close()
     db = null
-    const tmp = ck + '.vgcnew'
-    writeFileSync(tmp, outBytes)
-    renameSync(tmp, ck)
+    if (hasPendingSqliteWrites(ck)) throw new Error('Cookies DB changed during merge')
+    replaceDbAtomically(ck, outBytes, MAX_COOKIE_DB_BYTES)
     safeRm(ck + '-wal')
     safeRm(ck + '-shm')
     safeRm(ck + '-journal')

@@ -15,10 +15,13 @@
 // importantly — treat a SUCCESSFUL TUNNEL as alive even when the geo body can't be read.
 
 import http from 'http'
+import https from 'https'
 import net from 'net'
 import tls from 'tls'
 import { SocksClient } from 'socks'
 import type { ProxyConfig, ProxyCheckResult } from '../shared/types'
+import { sanitizeProxyConfig } from './validation'
+import { readLimitedResponseJson } from './http-limit'
 
 interface GeoProvider {
   host: string
@@ -73,6 +76,7 @@ const GEO_PROVIDERS: GeoProvider[] = [
 const CONNECT_TIMEOUT = 12000
 const READ_TIMEOUT = 12000
 const ATTEMPTS = 3
+const MAX_GEO_RESPONSE = 1024 * 1024
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -123,13 +127,22 @@ function connectTunnel(proxy: ProxyConfig, host: string, port: number): Promise<
       const token = Buffer.from(`${proxy.username}:${proxy.password ?? ''}`).toString('base64')
       headers['Proxy-Authorization'] = `Basic ${token}`
     }
-    const req = http.request({
+    const request = proxy.type === 'https' ? https.request : http.request
+    const req = request({
       host: proxy.host,
       port: proxy.port,
       method: 'CONNECT',
       path: `${host}:${port}`,
       headers,
-      timeout: CONNECT_TIMEOUT
+      timeout: CONNECT_TIMEOUT,
+      maxHeaderSize: 32 * 1024,
+      ...(proxy.type === 'https'
+        ? {
+            servername: proxy.host && net.isIP(proxy.host) === 0 ? proxy.host : undefined,
+            rejectUnauthorized: true,
+            minVersion: 'TLSv1.2' as const
+          }
+        : {})
     })
     req.on('connect', (res, socket) => {
       if (res.statusCode !== 200) {
@@ -138,6 +151,10 @@ function connectTunnel(proxy: ProxyConfig, host: string, port: number): Promise<
         return
       }
       resolve(socket)
+    })
+    req.on('response', (res) => {
+      res.resume()
+      reject(new Error(`Proxy CONNECT lỗi ${res.statusCode ?? 0}`))
     })
     req.on('error', reject)
     req.on('timeout', () => req.destroy(new Error('Proxy timeout')))
@@ -193,7 +210,7 @@ export async function pokeProxy(proxy: ProxyConfig): Promise<boolean> {
 /** TLS over the tunneled socket, send an HTTPS GET, return the raw response. */
 function httpsOver(socket: net.Socket, host: string, path: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const t = tls.connect({ socket, servername: host, rejectUnauthorized: false }, () => {
+    const t = tls.connect({ socket, servername: host, rejectUnauthorized: true }, () => {
       t.write(
         `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: application/json\r\nConnection: close\r\n\r\n`
       )
@@ -202,6 +219,9 @@ function httpsOver(socket: net.Socket, host: string, path: string): Promise<stri
     t.setEncoding('utf8')
     t.setTimeout(READ_TIMEOUT, () => t.destroy(new Error('Proxy timeout')))
     t.on('data', (d) => (data += d))
+    t.on('data', () => {
+      if (Buffer.byteLength(data, 'utf8') > MAX_GEO_RESPONSE) t.destroy(new Error('Geo response too large'))
+    })
     t.on('end', () => resolve(data))
     t.on('close', () => resolve(data))
     t.on('timeout', () => t.destroy(new Error('Proxy timeout')))
@@ -222,9 +242,11 @@ export async function directGeo(): Promise<ProxyCheckResult> {
       const timer = setTimeout(() => ctrl.abort(), 8000)
       const res = await fetch(`https://${gp.host}${gp.path}`, {
         signal: ctrl.signal,
-        headers: { Accept: 'application/json' }
+        headers: { Accept: 'application/json' },
+        redirect: 'error'
       }).finally(() => clearTimeout(timer))
-      const j = (await res.json()) as Record<string, unknown>
+      if (!res.ok) continue
+      const j = await readLimitedResponseJson<Record<string, unknown>>(res, MAX_GEO_RESPONSE)
       const parsed = gp.parse(j)
       if (parsed?.ip) return { ok: true, ...parsed, latencyMs: Date.now() - t0 }
     } catch {
@@ -235,6 +257,7 @@ export async function directGeo(): Promise<ProxyCheckResult> {
 }
 
 export async function checkProxy(proxy: ProxyConfig): Promise<ProxyCheckResult> {
+  proxy = sanitizeProxyConfig(proxy)
   if (proxy.type === 'none' || !proxy.host || !proxy.port) {
     return { ok: false, error: 'Chưa cấu hình proxy' }
   }

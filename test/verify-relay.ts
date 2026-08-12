@@ -8,7 +8,12 @@
 //               --format=cjs --outfile=test/relay.cjs && node test/relay.cjs
 
 import http from 'node:http'
+import https from 'node:https'
 import net from 'node:net'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { startRelay } from '../src/main/proxy-relay'
 
 const USER = 'vgc'
@@ -30,19 +35,21 @@ function connectViaRelay(relayPort: number, target: string): Promise<string> {
       sock.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`)
     })
     let data = ''
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      sock.destroy()
+      resolve(data)
+    }
     sock.setEncoding('utf8')
     sock.on('data', (d) => {
       data += d
-      if (data.includes(BANNER) || data.includes('502')) {
-        sock.end()
-        resolve(data)
-      }
+      if (data.includes(BANNER) || data.includes('502')) finish()
     })
     sock.on('error', reject)
-    setTimeout(() => {
-      sock.end()
-      resolve(data)
-    }, 4000)
+    const timer = setTimeout(finish, 4000)
   })
 }
 
@@ -70,6 +77,26 @@ async function main(): Promise<void> {
     up.on('error', () => clientSocket.end())
   })
   const upstreamPort = await listen(upstream)
+
+  // A self-signed HTTPS proxy lets us prove the relay actually performs TLS and
+  // refuses an untrusted upstream certificate instead of silently using plaintext.
+  const certDir = mkdtempSync(join(tmpdir(), 'vgc-relay-cert-'))
+  const keyPath = join(certDir, 'key.pem')
+  const certPath = join(certDir, 'cert.pem')
+  execFileSync(
+    'openssl',
+    ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', keyPath, '-out', certPath],
+    { stdio: 'ignore' }
+  )
+  const tlsUpstream = https.createServer({
+    key: readFileSync(keyPath),
+    cert: readFileSync(certPath)
+  })
+  let tlsHandshakeSeen = false
+  tlsUpstream.on('tlsClientError', () => {
+    tlsHandshakeSeen = true
+  })
+  const tlsUpstreamPort = await listen(tlsUpstream)
 
   console.log('\n=== VGC relay verification ===')
   let pass = 0
@@ -102,10 +129,27 @@ async function main(): Promise<void> {
   if (ok2) pass++
   bad.close()
 
+  // 3. HTTPS means TLS-to-proxy, with normal CA/hostname verification enabled.
+  const untrustedTls = await startRelay({
+    type: 'https',
+    host: 'localhost',
+    port: tlsUpstreamPort,
+    username: USER,
+    password: PASS
+  })
+  const r3 = await connectViaRelay(untrustedTls.port, `127.0.0.1:${originPort}`)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  const ok3 = r3.includes('502') && tlsHandshakeSeen && !r3.includes(BANNER)
+  console.log(`${ok3 ? 'PASS' : 'FAIL'}  untrusted HTTPS proxy rejected`)
+  if (ok3) pass++
+  untrustedTls.close()
+
   origin.close()
   upstream.close()
-  console.log(`\n${pass}/2 checks passed.`)
-  process.exitCode = pass === 2 ? 0 : 1
+  tlsUpstream.close()
+  rmSync(certDir, { recursive: true, force: true })
+  console.log(`\n${pass}/3 checks passed.`)
+  process.exitCode = pass === 3 ? 0 : 1
 }
 
 main().catch((e) => {
