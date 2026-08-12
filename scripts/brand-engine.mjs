@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import peSignature from './pe-signature.cjs'
+
+const { isUnsignedPe } = peSignature
 
 if (process.platform !== 'win32') {
   throw new Error('Kiểm tra engine Windows phải chạy trên Windows.')
@@ -22,7 +25,13 @@ if (!existsSync(exe) || !existsSync(dll)) {
 }
 
 for (const file of [exe, dll]) {
+  if (allowUnsigned) {
+    if (!isUnsignedPe(file)) throw new Error(`Engine phải unsigned: ${file}`)
+    continue
+  }
   const escaped = file.replace(/'/g, "''")
+  const childEnv = { ...process.env }
+  delete childEnv.PSModulePath
   const signature = JSON.parse(
     execFileSync(
       'powershell.exe',
@@ -32,13 +41,10 @@ for (const file of [exe, dll]) {
         '-Command',
         `$s=Get-AuthenticodeSignature -LiteralPath '${escaped}'; [pscustomobject]@{Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject}|ConvertTo-Json -Compress`
       ],
-      { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 }
+      { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024, env: childEnv }
     )
   )
-  if (allowUnsigned && (signature.Status !== 'NotSigned' || signature.Subject)) {
-    throw new Error(`Engine phải unsigned: ${file}`)
-  }
-  if (!allowUnsigned && (signature.Status !== 'Valid' || signature.Subject !== expectedSigner)) {
+  if (signature.Status !== 'Valid' || signature.Subject !== expectedSigner) {
     throw new Error(`Authenticode hoặc nhà phát hành không hợp lệ sau đóng gói: ${file}`)
   }
 }

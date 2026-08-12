@@ -10,7 +10,11 @@ import {
   promises as fs,
   existsSync,
   createWriteStream,
-  createReadStream
+  createReadStream,
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync
 } from 'fs'
 import { join, resolve, sep } from 'path'
 import { execFileSync, spawnSync } from 'child_process'
@@ -317,40 +321,63 @@ function windowsSignature(filePath: string): WindowsSignature | null {
 function verifyWindowsBinary(exePath: string): boolean {
   if (process.platform !== 'win32') return true
   const dllPath = join(resolve(exePath, '..'), 'chrome.dll')
-  const engine = windowsSignature(exePath)
-  const host = windowsSignature(process.execPath)
-  const dll = windowsSignature(dllPath)
   if (engineRelease.windowsSigning === 'unsigned') {
-    const fileHash = (filePath: string): string | null => {
-      const escaped = filePath.replace(/'/g, "''")
+    const isUnsignedPe = (filePath: string): boolean => {
+      let fd: number | undefined
       try {
-        return execFileSync(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            `(Get-FileHash -Algorithm SHA256 -LiteralPath '${escaped}').Hash`
-          ],
-          { encoding: 'utf8', windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 }
+        fd = openSync(filePath, fsConstants.O_RDONLY)
+        const stat = fstatSync(fd)
+        if (!stat.isFile() || stat.size < 256) return false
+        const header = Buffer.alloc(Math.min(stat.size, 64 * 1024))
+        const bytesRead = readSync(fd, header, 0, header.length, 0)
+        if (bytesRead < 256 || header.readUInt16LE(0) !== 0x5a4d) return false
+        const peOffset = header.readUInt32LE(0x3c)
+        if (peOffset < 64 || peOffset + 24 > bytesRead) return false
+        if (header.toString('latin1', peOffset, peOffset + 4) !== 'PE\0\0') return false
+        const optionalHeader = peOffset + 24
+        const magic = header.readUInt16LE(optionalHeader)
+        const dataDirectory = optionalHeader + (magic === 0x20b ? 112 : magic === 0x10b ? 96 : -1)
+        const securityEntry = dataDirectory + 4 * 8
+        return (
+          dataDirectory >= optionalHeader &&
+          securityEntry + 8 <= bytesRead &&
+          header.readUInt32LE(securityEntry) === 0 &&
+          header.readUInt32LE(securityEntry + 4) === 0
         )
-          .trim()
-          .toLowerCase()
+      } catch {
+        return false
+      } finally {
+        if (fd !== undefined) closeSync(fd)
+      }
+    }
+    const fileHash = (filePath: string): string | null => {
+      let fd: number | undefined
+      try {
+        fd = openSync(filePath, fsConstants.O_RDONLY)
+        const hash = createHash('sha256')
+        const chunk = Buffer.allocUnsafe(1024 * 1024)
+        let bytesRead = 0
+        while ((bytesRead = readSync(fd, chunk, 0, chunk.length, null)) > 0) {
+          hash.update(chunk.subarray(0, bytesRead))
+        }
+        return hash.digest('hex')
       } catch {
         return null
+      } finally {
+        if (fd !== undefined) closeSync(fd)
       }
     }
     return Boolean(
-      engine?.Status === 'NotSigned' &&
-        !engine.Subject &&
-        host?.Status === 'NotSigned' &&
-        !host.Subject &&
-        dll?.Status === 'NotSigned' &&
-        !dll.Subject &&
+      isUnsignedPe(exePath) &&
+        isUnsignedPe(process.execPath) &&
+        isUnsignedPe(dllPath) &&
         fileHash(exePath) === engineRelease.windowsFiles['chrome.exe'] &&
         fileHash(dllPath) === engineRelease.windowsFiles['chrome.dll']
     )
   }
+  const engine = windowsSignature(exePath)
+  const host = windowsSignature(process.execPath)
+  const dll = windowsSignature(dllPath)
   return Boolean(
     engine?.Status === 'Valid' &&
       host?.Status === 'Valid' &&

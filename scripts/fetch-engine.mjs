@@ -16,6 +16,9 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { lstat, readdir } from 'node:fs/promises'
 import AdmZip from 'adm-zip'
+import peSignature from './pe-signature.cjs'
+
+const { isUnsignedPe } = peSignature
 
 const MAX_DOWNLOAD = 1_500 * 1024 * 1024
 const MAX_UNPACKED = 4 * 1024 * 1024 * 1024
@@ -73,10 +76,18 @@ function assertReleaseInputs() {
 }
 
 function verifyAuthenticode(exe) {
+  if (ALLOW_UNSIGNED) {
+    if (!isUnsignedPe(exe)) {
+      throw new Error('Engine phải hoàn toàn unsigned trong chế độ release unsigned.')
+    }
+    return
+  }
   if (process.platform !== 'win32') {
     throw new Error('Đóng gói engine Windows phải chạy trên Windows để xác minh Authenticode.')
   }
   const escaped = exe.replace(/'/g, "''")
+  const childEnv = { ...process.env }
+  delete childEnv.PSModulePath
   const signature = JSON.parse(
     execFileSync(
       'powershell.exe',
@@ -86,15 +97,9 @@ function verifyAuthenticode(exe) {
         '-Command',
         `$s=Get-AuthenticodeSignature -LiteralPath '${escaped}'; [pscustomobject]@{Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject}|ConvertTo-Json -Compress`
       ],
-      { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 }
+      { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024, env: childEnv }
     )
   )
-  if (ALLOW_UNSIGNED) {
-    if (signature.Status !== 'NotSigned' || signature.Subject) {
-      throw new Error('Engine phải hoàn toàn unsigned trong chế độ release unsigned.')
-    }
-    return
-  }
   if (signature.Status !== 'Valid' || signature.Subject !== ENGINE_SIGNER) {
     throw new Error('Engine không do đúng nhà phát hành Authenticode ký.')
   }
@@ -102,10 +107,12 @@ function verifyAuthenticode(exe) {
 
 function verifyEngineVersion(exe) {
   const escaped = exe.replace(/'/g, "''")
+  const childEnv = { ...process.env }
+  delete childEnv.PSModulePath
   const version = execFileSync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-Command', `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`],
-    { encoding: 'utf8', windowsHide: true }
+    { encoding: 'utf8', windowsHide: true, env: childEnv }
   ).trim()
   if (version !== ENGINE_VERSION) {
     throw new Error(`Engine ${version || '<unknown>'} không khớp manifest ${ENGINE_VERSION}.`)

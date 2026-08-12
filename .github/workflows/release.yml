@@ -52,10 +52,7 @@ jobs:
         run: |
           $installer = @(Get-ChildItem release -Filter 'VGC-Browser-Setup-*.exe')
           if ($installer.Count -ne 1) { throw "Expected one Windows installer, found $($installer.Count)" }
-          $signature = Get-AuthenticodeSignature -LiteralPath $installer[0].FullName
-          if ($signature.Status -ne 'NotSigned' -or $signature.SignerCertificate) {
-            throw "Windows installer is not unsigned as configured: $($signature.Status)"
-          }
+          node scripts/pe-signature.cjs $installer[0].FullName
           $version = (Get-Content package.json | ConvertFrom-Json).version
           if (-not (Select-String -LiteralPath release/latest.yml -Pattern "^version: $([regex]::Escape($version))$" -Quiet)) {
             throw 'latest.yml version does not match package.json'
