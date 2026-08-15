@@ -6,6 +6,7 @@ import { build } from 'esbuild'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const tests = [
+  ['hi-extension', false],
   ['guard', true],
   ['api', false],
   ['relay', true],

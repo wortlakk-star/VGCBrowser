@@ -14,13 +14,30 @@ const HI_FILES: Readonly<Record<string, string>> = {
   'popup.js': 'fd3e8fad4c080018812eb9237ba92bd02910d7b1d6e986526e5672726decde49'
 }
 
-function sha256(contents: Buffer): string {
-  return createHash('sha256').update(contents).digest('hex')
+function canonicalizeCrLf(contents: Buffer): Buffer {
+  // Git may check text files out as CRLF on Windows even though the committed
+  // extension uses LF. Chromium treats both line-ending styles equivalently, so
+  // canonicalize only those exact byte pairs; every other byte remains covered
+  // by the integrity hash. .gitattributes keeps future checkouts stable as well.
+  const normalized = Buffer.allocUnsafe(contents.length)
+  let writeOffset = 0
+  for (let readOffset = 0; readOffset < contents.length; readOffset += 1) {
+    const byte = contents[readOffset]
+    if (byte === 0x0d && contents[readOffset + 1] === 0x0a) continue
+    normalized[writeOffset] = byte
+    writeOffset += 1
+  }
+  return normalized.subarray(0, writeOffset)
+}
+
+function sha256CanonicalText(contents: Buffer): string {
+  return createHash('sha256').update(canonicalizeCrLf(contents)).digest('hex')
 }
 
 /**
- * Return the HI unpacked-extension directory after verifying its exact shipped
- * contents. This keeps a modified loose resource from reading cookies in profiles.
+ * Return the HI unpacked-extension directory after verifying its approved contents
+ * (with platform line endings canonicalized). This keeps a modified loose resource
+ * from reading cookies in profiles.
  */
 export function validateBundledHiExtension(dir: string): string {
   const dirStat = lstatSync(dir)
@@ -36,7 +53,7 @@ export function validateBundledHiExtension(dir: string): string {
       throw new Error(`File extension HI không an toàn: ${name}`)
     }
     const contents = readFileSync(file)
-    if (sha256(contents) !== expectedHash) {
+    if (sha256CanonicalText(contents) !== expectedHash) {
       throw new Error(`Extension HI đã bị thay đổi: ${name}`)
     }
     if (name === 'manifest.json') manifestText = contents.toString('utf8')

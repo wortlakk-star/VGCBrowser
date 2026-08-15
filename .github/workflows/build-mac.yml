@@ -34,6 +34,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Verify bundled HI extension
+        run: npm run verify:hi-extension
+
       - name: Build macOS app (.dmg + .zip + latest-mac.yml)
         run: npm run dist:mac
 

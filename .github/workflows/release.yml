@@ -37,6 +37,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run verify:hi-extension
       # Pre-fetch the ~357MB engine with retries — a flaky download from the host was
       # the most likely cause of build-win failing on every release after 0.1.58
       # (Mac, which doesn't fetch the engine, kept publishing fine). npm run dist's
@@ -98,6 +99,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run verify:hi-extension
       - run: npm run dist:mac # electron-vite build && electron-builder --mac (dmg + zip)
       - name: Collect macOS artifacts
         run: |

@@ -1,0 +1,3 @@
+# The bundled HI extension is integrity-checked at runtime. Keep its text assets
+# byte-stable when the repository is checked out on Windows or macOS.
+resources/extensions/HI/** text eol=lf
