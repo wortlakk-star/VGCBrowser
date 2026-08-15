@@ -52,7 +52,6 @@ import {
   importLogins
 } from './password-bridge'
 import { dbg } from './dbg'
-import { validateBundledHiExtension } from './bundled-hi-extension'
 import { ensureNativeGuardExtension } from './webrtc-guard'
 import { getCloudSession, getCloudEmail } from './session'
 import { refreshLicense, isLicensed, licenseState } from './license'
@@ -831,12 +830,6 @@ async function launchProfileImpl(
   // browser settings, not page-level shims, so CDP pages and workers receive the same policy.
   const guardFp: Fingerprint = { ...fp, webrtc: hasProxy ? 'proxy' : 'real' }
   const guardExt = ensureNativeGuardExtension(userDataDir, guardFp)
-  // HI is shipped with the app and loaded into every profile. Its files are verified before
-  // launch because this extension can read/write cookies when the user opens its popup.
-  const hiRoot = app.isPackaged
-    ? join(process.resourcesPath, 'extensions', 'HI')
-    : join(app.getAppPath(), 'resources', 'extensions', 'HI')
-  const hiExt = validateBundledHiExtension(hiRoot)
   const safeExtensions = (profile.extensions ?? []).filter((candidate) => {
     if (!isAbsolute(candidate) || candidate.includes(',') || candidate.includes('\0')) return false
     try {
@@ -855,7 +848,7 @@ async function launchProfileImpl(
       return false
     }
   })
-  const extList = [guardExt, hiExt, ...safeExtensions]
+  const extList = [guardExt, ...safeExtensions]
   if (extList.length > 0) {
     const list = extList.join(',')
     args.push(`--load-extension=${list}`, `--disable-extensions-except=${list}`)

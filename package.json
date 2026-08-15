@@ -1,6 +1,6 @@
 {
   "name": "vgc-browser",
-  "version": "2.1.70",
+  "version": "2.1.71",
   "description": "VGC Browser - secure multi-account profile manager by VGC Group",
   "author": "VGC Group",
   "license": "UNLICENSED",
@@ -14,7 +14,6 @@
     "download-engine": "node scripts/download-engine.mjs",
     "verify": "node scripts/verify.mjs",
     "verify:guard": "esbuild test/verify-guard.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/guard.cjs && node test/guard.cjs",
-    "verify:hi-extension": "esbuild test/verify-hi-extension.ts --bundle --platform=node --format=cjs --outfile=test/hi-extension.cjs && node test/hi-extension.cjs",
     "verify:correlation": "esbuild test/verify-correlation.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/correlation.cjs && node test/correlation.cjs",
     "verify:deep": "esbuild test/verify-deep.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/deep.cjs && node test/deep.cjs",
     "verify:tostring": "esbuild test/verify-tostring.ts --bundle --platform=node --format=cjs --external:bufferutil --external:utf-8-validate --outfile=test/tostring.cjs && node test/tostring.cjs",
@@ -55,10 +54,6 @@
         {
           "from": "resources/app.ico",
           "to": "app.ico"
-        },
-        {
-          "from": "resources/extensions/HI",
-          "to": "extensions/HI"
         }
       ]
     },
@@ -69,12 +64,6 @@
       ],
       "category": "public.app-category.utilities",
       "icon": "resources/icon.png",
-      "extraResources": [
-        {
-          "from": "resources/extensions/HI",
-          "to": "extensions/HI"
-        }
-      ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "notarize": true,

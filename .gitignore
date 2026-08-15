@@ -20,4 +20,3 @@ test/tostring.cjs
 test/rectbase.ts
 test/rectbase.cjs
 test/deep.cjs
-test/hi-extension.cjs
