@@ -43,7 +43,8 @@ import {
   downloadProfileCookiesDb,
   uploadProfilePasswords,
   downloadProfilePasswords,
-  ensureSafeProfileDestination
+  ensureSafeProfileDestination,
+  getSessionSyncTag
 } from './cloud-data'
 import {
   exportCookies,
@@ -58,6 +59,13 @@ import { refreshLicense, isLicensed, licenseState } from './license'
 import { cohereFingerprint, hostOs, sanitizeStartUrls } from './profiles-service'
 import { requireProfileId } from './validation'
 import { accountTransitionInProgress, runAccountOperation } from './account-operations'
+import {
+  claimProfileLock,
+  pollProfileLock,
+  releaseProfileLock,
+  publishSessionTag,
+  waitForHandoff
+} from './profile-lock'
 
 export interface LaunchProfileOptions {
   headless?: boolean
@@ -77,12 +85,31 @@ interface RunningProfile {
   automationConn?: CdpConnection
   /** Interval that polls + persists open tabs for cross-machine tab sync. */
   tabPoll?: ReturnType<typeof setInterval>
+  /** Interval that polls the cloud lock to detect a takeover by another machine. */
+  lockPoll?: ReturnType<typeof setInterval>
+  /** The lock epoch (generation) this open holds — its identity for poll/release/tag. */
+  lockEpoch?: number
+  /** The takeover epoch observed when this open was kicked — the generation to publish the
+   *  fresh session tag for (so the taking-over open, not a straggler, picks it up). */
+  takeoverEpoch?: number
+  /** Set once this profile has been taken over by another open (we are closing because of the
+   *  kick, not a user-initiated close) → the close path publishes the fresh session tag for the
+   *  waiting machine and does NOT release the lock (the other open holds a higher epoch). */
+  takenOver?: boolean
+  /** Guards against a second kick handler firing while the first is still saving+closing. */
+  kicking?: boolean
+  /** In-flight guard so a slow poll can't stack multiple concurrent RPCs per open profile. */
+  pollInFlight?: boolean
 }
 
 /** Default fingerprint validation target opened by "Kiểm tra fingerprint". */
 const DEFAULT_TEST_URL = 'https://abrahamjuliot.github.io/creepjs/'
 
 const running = new Map<string, RunningProfile>()
+
+/** How often an open profile checks the cloud lock to see if another machine took it over.
+ *  Also the holder's heartbeat cadence. Small payload, only while a profile is open. */
+const LOCK_HOLD_POLL_MS = 6000
 
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -216,7 +243,14 @@ async function clearChromiumSession(id: string): Promise<void> {
 
 function broadcast(state: ProfileRuntimeState): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send('profile:status', state)
+    // A window closing mid-launch can destroy its webContents → send() throws. Never let that
+    // unwind into launch flow: broadcast() runs before the proc handlers are attached, so a throw
+    // there would trip the lock-safety catch and free the lock while the engine is actually running.
+    try {
+      win.webContents.send('profile:status', state)
+    } catch {
+      /* window/webContents destroyed — ignore */
+    }
   }
 }
 
@@ -316,15 +350,103 @@ async function syncDataOnClose(id: string, expectedUid: string | null): Promise<
       broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
       // Uploads Local Storage / IndexedDB / Preferences etc. — NOT Cookies/Login Data
       // (excluded via SKIP_FILES; those stay per-machine so the session never churns).
-      await uploadProfileData(id)
-      // Cross-machine cookies + saved passwords (decrypt-locally → cloud → re-encrypt on B).
-      await uploadCredentials(id, expectedUid)
-      dbg(`[close ${id}] uploaded zip + credentials bridge`)
+      let sessionAdvanced = false
+      try {
+        await uploadProfileData(id)
+      } catch (e) {
+        // Anti-clobber fired (cloud session is newer than ours) → OUR cookies/passwords are
+        // equally stale, so skip the credentials bridge too rather than clobber the fresh ones.
+        // Any OTHER upload failure is isolated so the best-effort credentials bridge still runs.
+        sessionAdvanced = (e as { code?: string })?.code === 'CLOUD_ADVANCED'
+        broadcastData({ id, phase: 'error', message: e instanceof Error ? e.message : String(e) })
+      }
+      if (!sessionAdvanced) {
+        // Cross-machine cookies + saved passwords (decrypt-locally → cloud → re-encrypt on B).
+        await uploadCredentials(id, expectedUid)
+        dbg(`[close ${id}] session save done (+ credentials bridge)`)
+      }
     })
     broadcastData({ id, phase: 'done' })
   } catch (err) {
     broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
   }
+}
+
+/**
+ * Close-time cloud settle for the cross-machine lock. Uploads the freshest session
+ * (syncDataOnClose), then EITHER — on a takeover — publishes the fresh session ETag so the
+ * machine that kicked us knows the session is ready to download (and we keep the lock, which
+ * that machine now holds); OR — on a normal close — releases the lock so the profile no longer
+ * shows as open on this machine.
+ */
+async function syncAndUnlockOnClose(id: string, entry: RunningProfile): Promise<void> {
+  await syncDataOnClose(id, entry.accountUid)
+  if (entry.takenOver) {
+    // Publish the session ETag for the TAKEOVER epoch we observed, so the open that kicked us
+    // (not a straggler from an older cycle) knows the fresh session is ready. Keep the lock —
+    // that open holds a higher epoch now.
+    if (entry.takeoverEpoch != null) {
+      try {
+        const tag = await getSessionSyncTag(id)
+        if (tag) await publishSessionTag(id, entry.takeoverEpoch, tag)
+      } catch {
+        /* best-effort — the taking-over open falls back to the last cloud session on timeout */
+      }
+    }
+  } else if (entry.lockEpoch != null) {
+    // Normal close: release our epoch (server no-ops if a newer open already took over), so the
+    // profile no longer shows as open on this machine.
+    try {
+      await releaseProfileLock(id, entry.lockEpoch)
+    } catch {
+      /* best-effort — a stale lock self-heals the next time any open claims it */
+    }
+  }
+}
+
+/**
+ * Hold-poll tick while a profile is open here: if the cloud lock's epoch is now HIGHER than the
+ * one this open holds, another open has taken this profile over → close the browser here (the
+ * 'exit' handler then saves + publishes the session via syncAndUnlockOnClose). Fires at most once
+ * per open, is re-entrancy-guarded (a slow poll can't stack), re-checks that THIS same open is
+ * still current after the await (a close+reopen can swap the entry), and NEVER kicks on a
+ * transient error or a missing lock row.
+ */
+async function checkKicked(id: string): Promise<void> {
+  const entry = running.get(id)
+  if (!entry || entry.kicking || entry.pollInFlight || entry.lockEpoch == null) return
+  entry.pollInFlight = true
+  const poll = await pollProfileLock(id, entry.lockEpoch).finally(() => {
+    entry.pollInFlight = false
+  })
+  // Only act if THIS exact open is still the current one (a close+reopen may have replaced it).
+  if (running.get(id) !== entry || entry.kicking) return
+  if (!poll.ok || poll.epoch == null) return // transient error / row gone → never kick
+  if (poll.epoch === entry.lockEpoch) return // the epoch is still ours → we still hold it
+  // A higher epoch holds it now → taken over.
+  entry.kicking = true
+  entry.takenOver = true
+  entry.takeoverEpoch = poll.epoch
+  broadcastData({
+    id,
+    phase: 'upload',
+    message: 'Profile được mở ở máy khác — đang lưu phiên & đóng ở đây…'
+  })
+  stopProfile(id) // SIGTERM → 'exit' handler uploads the session, publishes the tag, keeps the lock
+  // Escalate to SIGKILL if the kicked engine ignores SIGTERM (a hung/modal Chromium): a browser
+  // that won't exit means a prolonged DUAL-RUN of the same profile on two machines. Mirror the
+  // quit-path force-kill. The 'exit' handler still runs on SIGKILL, so the save/publish/close flow
+  // is unchanged — we only guarantee it actually happens.
+  const kickedProc = entry.proc
+  setTimeout(() => {
+    if (running.get(id) === entry) {
+      try {
+        kickedProc.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+  }, 6000)
 }
 
 /**
@@ -593,8 +715,32 @@ async function launchProfileImpl(
   // the source of truth. 404 (nothing uploaded yet, e.g. a brand-new profile) is
   // fine and we just open with whatever is local.
   let syncedCookies: Cookie[] = []
+  // Whether the cross-machine lock was successfully claimed for this open + the epoch (identity)
+  // it holds. Stays false/0 on fail-open so we never poll or release a lock that isn't ours.
+  let lockClaimed = false
+  let lockEpoch = 0
   if (getCloudSession()) {
     try {
+      // Cross-machine EXCLUSIVE lock: claim this profile (bumps the epoch) so any OTHER open
+      // currently running it detects the higher epoch on its next poll, saves its session, and
+      // closes. Wait for a live previous holder to hand off BEFORE we download — so we always
+      // pull the newest session, never a stale one. Fail-open: a null claim (not signed in / lock
+      // service unreachable / migration not applied) just opens without cross-machine protection.
+      const claim = await claimProfileLock(id)
+      if (claim) {
+        lockClaimed = true
+        lockEpoch = claim.epoch
+        // Wait whenever a previous holder existed — even a STALE heartbeat can be a live machine
+        // whose polls briefly failed (a false "not fresh" would otherwise skip the wait and load a
+        // stale session). Fresh → long budget (slow / egress-throttled uploads); stale → short
+        // grace. On timeout we open with the last cloud session; the close-side anti-clobber guard
+        // (cloud-data.ts) still prevents overwriting a newer session we never downloaded.
+        if (claim.previousHolder) {
+          const handoffBudget = claim.previousFresh ? 30_000 : 6_000
+          broadcastData({ id, phase: 'download', message: 'Máy khác đang mở — chờ lưu phiên…' })
+          await waitForHandoff(id, handoffBudget)
+        }
+      }
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
       // Held under the per-profile data lock so a still-running close-upload of the
       // SAME profile finishes before we extract the cloud zip over its dir.
@@ -614,10 +760,37 @@ async function launchProfileImpl(
     }
   }
 
-  // CDP mode: the injector reopens tabs itself, so strip Chromium's own restore state
-  // to avoid opening every tab TWICE. Native mode (no injector): KEEP the session so
-  // Chrome restores the user's own tabs (via --restore-last-session below).
-  if (!skipCdp) await clearChromiumSession(id)
+  // If a NEWER open claimed this profile while we prepared / waited for the hand-off (the cloud
+  // download is a long window), we were SUPERSEDED — the latest opener wins. Don't launch a stale
+  // generation: our epoch is no longer current, so the lock row belongs to that open and an
+  // epoch-gated release would no-op — nothing to clean up here.
+  if (lockClaimed) {
+    const cur = await pollProfileLock(id, lockEpoch)
+    if (cur.ok && cur.epoch != null && cur.epoch !== lockEpoch) {
+      const msg = 'Profile vừa được mở ở máy/cửa sổ khác — không mở lại ở đây.'
+      broadcast({ id, status: 'error', error: msg })
+      throw new Error(msg)
+    }
+  }
+
+  // ── Lock-safety region ──────────────────────────────────────────────────────
+  // Everything from here until the process is registered in `running` + its handlers are attached
+  // prepares + spawns the engine. If ANY step throws before that point (startRelay,
+  // ensureNativeGuardExtension, the account-changed guard, spawnAndWait, …) the process is never
+  // registered, so its 'exit'/'error' handlers never run → the catch at the end of this try
+  // releases the just-claimed lock (epoch-gated → no-ops if a newer open superseded us) so a claim
+  // that may have already KICKED another machine is never left dangling. Once `registered` flips
+  // true, the proc handlers own cleanup and the catch leaves the lock alone.
+  let registered = false
+  // Declared OUTSIDE the try so the lock-safety catch can close it if a pre-registration throw
+  // (ensureNativeGuardExtension / account-changed guard / …) unwinds after startRelay opened it —
+  // otherwise the relay's 127.0.0.1 listener + upstream sockets leak for the life of the process.
+  let relay: RelayHandle | undefined
+  try {
+    // CDP mode: the injector reopens tabs itself, so strip Chromium's own restore state
+    // to avoid opening every tab TWICE. Native mode (no injector): KEEP the session so
+    // Chrome restores the user's own tabs (via --restore-last-session below).
+    if (!skipCdp) await clearChromiumSession(id)
 
   // ── Fingerprint coherence: align timezone / geolocation / WebRTC IP to
   // the proxy's EXIT IP so they can't contradict each other. A US proxy reporting a
@@ -806,7 +979,6 @@ async function launchProfileImpl(
   // Per-profile proxy. Authenticated (and SOCKS5-auth) proxies go through a local
   // relay because Chromium can't pass credentials via the flag; no-auth proxies
   // are handed to Chromium directly.
-  let relay: RelayHandle | undefined
   const hasProxy = profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
   if (hasProxy) {
     if (proxyNeedsRelay(profile.proxy)) {
@@ -920,7 +1092,13 @@ async function launchProfileImpl(
     pid: proc.pid,
     startedAt: new Date().toISOString()
   }
-  const entry: RunningProfile = { proc, state, relay, accountUid: launchAccountUid }
+  const entry: RunningProfile = {
+    proc,
+    state,
+    relay,
+    accountUid: launchAccountUid,
+    lockEpoch: lockClaimed ? lockEpoch : undefined
+  }
   running.set(id, entry)
   broadcast(state)
 
@@ -928,26 +1106,44 @@ async function launchProfileImpl(
   // during the patchProfile await below is still cleaned up (never left in `running`).
   proc.on('exit', () => {
     if (entry.tabPoll) clearInterval(entry.tabPoll)
+    if (entry.lockPoll) clearInterval(entry.lockPoll)
     entry.injector?.dispose()
     entry.automationConn?.close()
     entry.relay?.close()
     running.delete(id)
     lastCookieSnapshot.delete(id) // don't retain the profile's cookie snapshot after it closes
     broadcast({ id, status: 'stopped' })
-    // GoLogin-style sync-on-close: push the freshest session back to the cloud.
-    void runAccountOperation(() => syncDataOnClose(id, entry.accountUid)).catch(() => {})
+    // GoLogin-style sync-on-close: push the freshest session back to the cloud, then settle
+    // the cross-machine lock (publish the fresh tag for a taking-over machine, or release it).
+    void runAccountOperation(() => syncAndUnlockOnClose(id, entry)).catch(() => {})
   })
   proc.on('error', (err) => {
     // Mirror the 'exit' cleanup: the tabPoll interval would otherwise keep firing every 5s
     // forever against a dead CDP connection once the entry is removed from `running`.
     if (entry.tabPoll) clearInterval(entry.tabPoll)
+    if (entry.lockPoll) clearInterval(entry.lockPoll)
     entry.injector?.dispose()
     entry.automationConn?.close()
     entry.relay?.close()
     running.delete(id)
     lastCookieSnapshot.delete(id)
     broadcast({ id, status: 'error', error: String(err) })
+    // We may have claimed the lock (and even kicked another machine) before the spawn failed;
+    // free it so the profile isn't left showing as "open here".
+    if (lockClaimed) void releaseProfileLock(id, lockEpoch).catch(() => {})
   })
+
+  // The process is now registered in `running` with both handlers attached → they own cleanup +
+  // lock release from here on, so the lock-safety catch must NOT also release.
+  registered = true
+
+  // Cross-machine lock hold-poll: while this profile is open here, check every few seconds
+  // whether another machine has taken it over; if so, checkKicked() saves the session and
+  // closes it here. Runs in BOTH native and CDP mode (independent of the tab injector). Only
+  // when the lock was actually claimed (fail-open opens skip it). Cleared in exit/error.
+  if (lockClaimed) {
+    entry.lockPoll = setInterval(() => void checkKicked(id), LOCK_HOLD_POLL_MS)
+  }
 
   if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
     try {
@@ -1028,6 +1224,17 @@ async function launchProfileImpl(
   }
 
   return state
+  } catch (lockGuardErr) {
+    // A throw anywhere in the lock-safety region BEFORE `registered` flipped true → the process
+    // was never registered in `running`, so no proc handler will release the lock. Release the
+    // just-claimed lock (epoch-gated → no-ops if a newer open superseded us) so a claim that may
+    // have already kicked another machine is not left dangling, then rethrow.
+    if (lockClaimed && !registered) void releaseProfileLock(id, lockEpoch).catch(() => {})
+    // The process was never registered, so no proc handler will tear down the proxy relay — close
+    // it here (a no-op if startRelay never ran). Mirrors the spawnAndWait catch.
+    if (!registered) relay?.close()
+    throw lockGuardErr
+  }
 }
 
 export function launchProfile(

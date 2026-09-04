@@ -331,6 +331,15 @@ async function readSyncTag(uid: string, id: string): Promise<string> {
   }
 }
 
+/** The storage ETag we last synced for this profile under the current account ('' if none).
+ *  The cross-machine profile lock publishes this after a kick-upload so the taking-over
+ *  machine can wait for the FRESH session before it downloads (see profile-lock.ts). */
+export async function getSessionSyncTag(id: string): Promise<string> {
+  const session = getCloudSession()
+  if (!session) return ''
+  return readSyncTag(session.uid, id)
+}
+
 async function writeSyncTag(uid: string, id: string, tag: string): Promise<void> {
   const safeTag = tag.replace(/[^a-z0-9._:+\/-]/gi, '').slice(0, 512)
   if (!safeTag) return
@@ -362,24 +371,67 @@ async function getCloudObjectInfo(
   objUrl: string,
   token: string,
   anon: string
-): Promise<{ etag: string; encrypted: boolean; bound: boolean }> {
+): Promise<{ etag: string; encrypted: boolean; bound: boolean; status: number }> {
+  // `status`: the HTTP status (200/206 = present, 404 = definitely absent, other = server error,
+  //  0 = network/thrown). Callers that must NOT clobber use it to distinguish "no object yet"
+  //  (safe to overwrite) from "couldn't read" (unsafe — the object may exist).
   try {
     const r = await cloudFetch(objUrl, {
       headers: { Authorization: `Bearer ${token}`, apikey: anon, Range: 'bytes=0-7' }
     })
     if (!r.ok && r.status !== 206) {
       await r.body?.cancel().catch(() => {})
-      return { etag: '', encrypted: false, bound: false }
+      return { etag: '', encrypted: false, bound: false, status: r.status }
     }
     const prefix = await responseBuffer(r, 8)
     const bound = isBoundSession(prefix)
     return {
       etag: (r.headers.get('etag') || '').replace(/"/g, ''),
       encrypted: bound || isEncryptedBytes(prefix),
-      bound
+      bound,
+      status: r.status
     }
   } catch {
-    return { etag: '', encrypted: false, bound: false }
+    return { etag: '', encrypted: false, bound: false, status: 0 }
+  }
+}
+
+/** Would uploading `id`'s session right now OVERWRITE a cloud session this machine has never
+ *  synced? True (block the upload) when the cloud holds a session whose ETag differs from our
+ *  last-synced tag, OR when the cloud holds a session but we have no sync tag at all (we opened
+ *  on stale/failed-download data), OR when the cloud object's status could not be read (fail
+ *  CLOSED — a failed read usually coincides with a failed upload anyway, and never overwriting is
+ *  the safe default). False (allow) only when the cloud is DEFINITELY absent (404) or holds
+ *  exactly the version we last synced. */
+export async function cloudSessionAdvanced(id: string): Promise<boolean> {
+  const session = getCloudSession()
+  if (!session) return false // not signed in → no cloud object to protect
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return false
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
+  const localTag = await readSyncTag(session.uid, id)
+  const info = await getCloudObjectInfo(url, session.accessToken, s.supabaseAnonKey)
+  // Supabase Storage returns 400 (not only 404) for a MISSING object — the download paths already
+  // treat 400 as "not uploaded yet". Match that here: a truly-present object always answers the
+  // Range GET with 200/206, so allowing on 400/404 can never clobber real data; it only prevents a
+  // permanently-blocked FIRST upload.
+  if (info.status === 404 || info.status === 400) return false // nothing there → safe to upload
+  if (info.status === 200 || info.status === 206) {
+    // Cloud holds a session. Safe ONLY if it is exactly the one we last synced.
+    return !localTag || !info.etag || info.etag !== localTag
+  }
+  return true // unreadable (server error / network) → fail closed, never risk a clobber
+}
+
+/** Thrown by uploadProfileData when the cloud session advanced past ours (anti-clobber). Tagged
+ *  so close-time callers can skip the credentials bridge too (also stale) without touching other
+ *  failures. */
+export class CloudAdvancedError extends Error {
+  readonly code = 'CLOUD_ADVANCED'
+  constructor(message: string) {
+    super(message)
+    this.name = 'CloudAdvancedError'
   }
 }
 
@@ -574,6 +626,19 @@ export async function uploadProfileData(id: string): Promise<void> {
   if (body.length > MAX_CLOUD_OBJECT_BYTES) throw new Error('Dữ liệu phiên mã hoá vượt giới hạn 64 MB.')
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
+
+  // ── Anti-clobber ─────────────────────────────────────────────────────────
+  // NEVER overwrite a cloud session that advanced past the one this machine last synced. If we
+  // opened on a stale session (e.g. a cross-machine hand-off timed out — see profile-lock.ts),
+  // overwriting would permanently destroy the other machine's fresh session — the exact data loss
+  // the profile lock exists to prevent. cloudSessionAdvanced() fails CLOSED on an unreadable cloud
+  // object and allows a first upload to an empty (404) key.
+  if (await cloudSessionAdvanced(id)) {
+    throw new CloudAdvancedError(
+      'Bỏ qua lưu phiên: bản cloud đã mới hơn hoặc không đọc được — không ghi đè để tránh mất dữ liệu.'
+    )
+  }
+
   const res = await cloudFetch(url, {
     method: 'POST',
     headers: {
