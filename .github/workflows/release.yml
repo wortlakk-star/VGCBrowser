@@ -28,7 +28,7 @@ jobs:
   build-win:
     runs-on: windows-latest
     env:
-      VGC_ENGINE_SHA256: 4c0d6fa647740ce26e92c1be6c5a432b219c6ca41d3896b393d6720ad2abb6d2
+      VGC_ENGINE_SHA256: 51bf06becf542b9d4ed251026d660e19b35905732e407f8f8229b891767f7d26
       VGC_ALLOW_UNSIGNED_BUILD: '1'
     steps:
       - uses: actions/checkout@v4

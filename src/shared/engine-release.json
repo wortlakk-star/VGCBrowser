@@ -3,7 +3,7 @@
   "chromeVersion": "151.0.7902.0",
   "windowsSigning": "unsigned",
   "windowsFiles": {
-    "chrome.exe": "8a3f63e7c17e23c2d324715528a224b42e74687abec40cf2e4fa0cd07c291743",
-    "chrome.dll": "cb4d4e1bd9b080d337472be508b47a2516aa78a8ea23d6375c3c6fca5b76a407"
+    "chrome.exe": "1d15ec6f1f99058f83c54f6a066227a6260116c525673c4d4c21dcf1aab0a1ba",
+    "chrome.dll": "d36c411373195c6a33dcb065c3bd65fb79ce31cbbd9cd1000acada7456555186"
   }
 }

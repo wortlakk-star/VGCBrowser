@@ -8,9 +8,9 @@ import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-stor
 export type { AppSettings }
 
 const ENGINE_MANIFEST = Object.freeze({
-  windowsUrl: 'https://vgcbrowser.com/dl/vgc-core-157.zip',
-  // Pinned SHA-256 for runtime downloads on Windows (from release artifact vgc-core-157.zip).
-  windowsSha256: '4c0d6fa647740ce26e92c1be6c5a432b219c6ca41d3896b393d6720ad2abb6d2',
+  windowsUrl: 'https://vgcbrowser.com/dl/vgc-core-158.zip',
+  // Pinned SHA-256 for runtime downloads on Windows (from release artifact vgc-core-158.zip).
+  windowsSha256: '51bf06becf542b9d4ed251026d660e19b35905732e407f8f8229b891767f7d26',
   macArm64Url: 'https://vgcbrowser.com/dl/vgc-core-mac-arm64-0.1.100.zip',
   macArm64Sha256: 'dcf605201b8e168a6ba4df8b88f2339c1d7a6fd67528e617470e686e4cf476aa'
 })
