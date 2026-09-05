@@ -44,8 +44,11 @@ jobs:
       - name: Fetch engine (with retry)
         shell: bash
         run: |
-          for i in 1 2 3 4; do
-            node scripts/fetch-engine.mjs && break || { echo "fetch attempt $i failed; retrying in 20s"; sleep 20; }
+          # The host (Hostinger/LiteSpeed) intermittently refuses GitHub's runners for a
+          # while; print what it answers and back off longer between attempts.
+          curl -sSI --max-time 30 "${VGC_ENGINE_URL:-https://vgcbrowser.com/dl/vgc-core-158.zip}" | head -3 || true
+          for i in 1 2 3 4 5 6 7 8; do
+            node scripts/fetch-engine.mjs && break || { echo "fetch attempt $i failed; retrying in $((i*30))s"; sleep $((i*30)); }
           done
           test -f engine/chromium/chrome.exe || { echo "engine still missing after retries"; exit 1; }
       - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
