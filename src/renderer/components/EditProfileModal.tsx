@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './Icon'
+import { gpuPool } from '../../shared/fingerprint'
 import type {
   AccountStatus,
   Cookie,
@@ -35,25 +36,6 @@ const TIMEZONES = [
 
 const SCREENS = ['1920x1080', '1366x768', '2560x1440', '1536x864', '1440x900']
 
-const GPUS = [
-  {
-    vendor: 'Google Inc. (NVIDIA)',
-    renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)'
-  },
-  {
-    vendor: 'Google Inc. (NVIDIA)',
-    renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)'
-  },
-  {
-    vendor: 'Google Inc. (Intel)',
-    renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)'
-  },
-  {
-    vendor: 'Google Inc. (AMD)',
-    renderer: 'ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)'
-  }
-]
-
 const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
   ? 'macos'
   : /Win/i.test(navigator.userAgent)
@@ -61,6 +43,9 @@ const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
     : /Android/i.test(navigator.userAgent)
       ? 'android'
       : 'linux'
+// The same pool the generator draws from (real Chrome strings, PCI ids included), so a
+// hand-picked GPU is never a string no real machine reports.
+const GPUS = gpuPool(HOST_OS)
 const OS_OPTIONS: OsType[] = [HOST_OS]
 const PROXY_TYPES: ProxyType[] = ['none', 'http', 'https', 'socks5']
 // Must stay in step with the generator's lists in src/shared/fingerprint.ts.

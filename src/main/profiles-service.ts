@@ -39,14 +39,18 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Dữ liệu profile không hợp lệ')
   const now = new Date().toISOString()
   const os = requireHostOs(input.os ?? hostOs())
+  const id = randomUUID()
   const profile: Profile = {
-    id: randomUUID(),
+    id,
     name: cleanText(input.name, 120).trim() || 'Profile mới',
     notes: cleanText(input.notes, 10_000),
     tags: sanitizeTags(input.tags),
     group: cleanText(input.group, 120).trim() || undefined,
     os,
-    fingerprint: cohereFingerprint(input.fingerprint),
+    // Hardware trio derived from the new id (per-profile, stable) unless the caller
+    // supplied explicit values; fpv marks it so the store never re-derives it.
+    fingerprint: cohereFingerprint(input.fingerprint, id),
+    fpv: 2,
     proxy: sanitizeProxyConfig(input.proxy),
     startUrls: sanitizeStartUrls(input.startUrls),
     account: sanitizeAccount(input.account),
@@ -69,7 +73,7 @@ export async function updateProfile(id: string, patch: Partial<Profile>): Promis
   if ('tags' in patch) safe.tags = sanitizeTags(patch.tags)
   if ('group' in patch) safe.group = cleanText(patch.group, 120).trim() || undefined
   if ('os' in patch && patch.os) safe.os = requireHostOs(patch.os)
-  if ('fingerprint' in patch) safe.fingerprint = cohereFingerprint(patch.fingerprint)
+  if ('fingerprint' in patch) safe.fingerprint = cohereFingerprint(patch.fingerprint, id)
   if ('proxy' in patch) safe.proxy = sanitizeProxyConfig(patch.proxy)
   if ('startUrls' in patch) safe.startUrls = sanitizeStartUrls(patch.startUrls)
   if ('cookies' in patch) safe.cookies = sanitizeCookies(patch.cookies)

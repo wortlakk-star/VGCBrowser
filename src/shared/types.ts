@@ -157,6 +157,10 @@ export interface Profile {
   group?: string
   os: OsType
   fingerprint: Fingerprint
+  /** Fingerprint VARIETY version. 2 = the hardware trio (cores · RAM · GPU) was chosen
+   *  per profile (deterministic from the id) instead of copied from the host, so profiles
+   *  on one machine no longer share it. Older/absent ⇒ migrated once on load. */
+  fpv?: number
   proxy: ProxyConfig
   startUrls: string[]
   /** Cookies imported into the profile; applied via CDP before first navigation. */

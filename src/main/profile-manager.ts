@@ -35,6 +35,8 @@ import type {
   SavedLogin
 } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
+import { engineHasWebGpuIdentity } from './engine-caps'
+import { adaptFingerprintToHost } from './host-fingerprint'
 import { checkProxy, directGeo } from './proxy-check'
 import { getProfile, patchProfile, listProfiles } from './store'
 import { getSettings } from './settings'
@@ -1549,7 +1551,7 @@ async function launchProfileImpl(
   // Vietnam timezone (or leaking the real public IP via WebRTC) is a classic bot
   // tell. Looked up live so it works with rotating residential proxies; capped at
   // 6s and falls back to the profile's stored fingerprint so launch never hangs.
-  let fp: Fingerprint = cohereFingerprint(profile.fingerprint)
+  let fp: Fingerprint = cohereFingerprint(profile.fingerprint, id)
   const hasProxyForGeo =
     !!profile.proxy && profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
   // Align timezone/geo to the EXIT IP — the proxy's when there is one, otherwise the
@@ -1583,11 +1585,18 @@ async function launchProfileImpl(
       // keep the profile's stored fingerprint — coherence is best-effort
     }
   }
-  // Persist host-coherent hardware/locale plus proxy timezone/geolocation. The
-  // current proxy exit IP is intentionally ephemeral and is not written to disk.
+  // Persist the sanitised fingerprint plus proxy timezone/geolocation. The current proxy
+  // exit IP is intentionally ephemeral and is not written to disk.
   const { webrtcPublicIp: _ephemeralIp, ...stableFp } = fp
   if (JSON.stringify(stableFp) !== JSON.stringify(profile.fingerprint)) {
     await patchProfile(id, { fingerprint: stableFp as Fingerprint }).catch(() => {})
+  }
+  // What the engine is LAUNCHED with: the profile's claims clamped to this host (cores /
+  // RAM it can back up, a GPU of the family it really renders with). Deliberately not
+  // persisted — see adaptFingerprintToHost.
+  fp = adaptFingerprintToHost(fp, id)
+  if (fp.webgl.renderer !== stableFp.webgl.renderer || fp.hardwareConcurrency !== stableFp.hardwareConcurrency) {
+    dbg(`[launch ${id}] host-adapted hw: ${fp.hardwareConcurrency}c/${fp.deviceMemory}g ${fp.webgl.renderer}`)
   }
 
   const defaultWindow = opts.headless
@@ -1605,16 +1614,16 @@ async function launchProfileImpl(
     '--disable-background-networking',
     '--disable-sync',
     // ── WebGPU leak guard ──────────────────────────────────────────────────────
-    // VGC Core spoofs the WebGL renderer (--vgc-webgl-renderer) but does NOT spoof the
-    // WebGPU adapter. navigator.gpu.requestAdapter().info therefore leaks the REAL host
-    // GPU's vendor + architecture (e.g. "nvidia"/"blackwell"), which (a) contradicts the
-    // spoofed WebGL GPU and (b) is IDENTICAL across every profile on one machine — a
-    // high-signal same-machine correlator and a proof-of-spoofing. Disabling the WebGPU
-    // feature (and its service) makes requestAdapter() resolve to null — the same state a
-    // machine with no WebGPU-capable GPU shows — so nothing real leaks and there is no
-    // WebGL/WebGPU contradiction. Antidetect accounts never need WebGPU. (Measured: with
-    // only --disable-features=WebGPU the adapter still resolved; WebGPUService is required.)
-    '--disable-features=WebGPU,WebGPUService',
+    // Engines from build 158 (Windows) / 0.1.101 (Mac) spoof the WebGPU adapter identity
+    // natively to match --vgc-webgl-* (engine-src/patches/vgc-webgpu-identity.patch), so
+    // navigator.gpu describes the same GPU as WebGL. Older engines do NOT: their
+    // navigator.gpu.requestAdapter().info leaks the REAL host GPU's vendor + architecture
+    // (e.g. "nvidia"/"blackwell"), which (a) contradicts the spoofed WebGL GPU and (b) is
+    // IDENTICAL across every profile on one machine. For those, disabling the WebGPU
+    // feature (and its service) makes requestAdapter() resolve to null — the state a
+    // machine with no WebGPU-capable GPU shows — so nothing real leaks. (Measured: with only
+    // --disable-features=WebGPU the adapter still resolved; WebGPUService is required.)
+    ...(engineHasWebGpuIdentity(enginePath, settings) ? [] : ['--disable-features=WebGPU,WebGPUService']),
     // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
     '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,

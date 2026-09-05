@@ -8,9 +8,12 @@ import { app } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'node:crypto'
 import type { Profile, Fingerprint } from '../shared/types'
-import { CHROME_BUILD } from '../shared/fingerprint'
+import { CHROME_BUILD, hardwareVariant } from '../shared/fingerprint'
 import { accountKey } from './session'
-import { cohereFingerprint, hostOs } from './host-fingerprint'
+import { cohereFingerprint, hostFingerprintEnvironment, hostOs } from './host-fingerprint'
+
+/** Bump when the per-profile hardware derivation changes and every profile must be re-derived. */
+const FP_VARIETY_VERSION = 2
 import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
 import {
   cleanText,
@@ -64,6 +67,7 @@ function normalizeProfiles(profiles: Profile[]): boolean {
   let changed = false
   const now = new Date().toISOString()
   const ids = new Set<string>()
+  let hostEnv: ReturnType<typeof hostFingerprintEnvironment> | undefined
   for (const p of profiles) {
     if (!p || typeof p !== 'object') continue
     if (!isUuid(p.id) || ids.has(p.id)) { p.id = randomUUID(); changed = true }
@@ -80,13 +84,25 @@ function normalizeProfiles(profiles: Profile[]): boolean {
     if (p.os !== host) { p.os = host; changed = true }
     const fp = p.fingerprint as Fingerprint | undefined
     if (!fp || !fp.userAgent || !fp.webgl || !fp.screen) {
-      p.fingerprint = cohereFingerprint(); changed = true
+      p.fingerprint = cohereFingerprint(undefined, p.id); changed = true
     } else {
-      const coherent = cohereFingerprint(fp)
+      const coherent = cohereFingerprint(fp, p.id)
       if (JSON.stringify(coherent) !== JSON.stringify(fp)) {
         p.fingerprint = coherent
         changed = true
       }
+    }
+    // One-time variety migration: older builds copied the HOST's cores / RAM / GPU into
+    // every profile, so all profiles on a machine shared one hardware signature (a
+    // same-machine correlator). Give each profile its own deterministic trio (from its
+    // id, within this host's family/limits) exactly once; afterwards the values are the
+    // profile's identity and are kept (and user edits respected).
+    if (p.fpv !== FP_VARIETY_VERSION) {
+      hostEnv ??= hostFingerprintEnvironment()
+      const variant = hardwareVariant(host, hostEnv, p.id)
+      p.fingerprint = { ...(p.fingerprint as Fingerprint), ...variant }
+      p.fpv = FP_VARIETY_VERSION
+      changed = true
     }
     // Keep the claimed Chrome version aligned with the VGC Core engine. A profile that
     // still claims Chrome 149 while the engine's UA-CH advertises 151 is a version

@@ -1,17 +1,23 @@
 # VGC Core patch artifacts
 
-Only these two source patches are authoritative:
+Only these three source patches are authoritative:
 
 - `vgc-native-all.patch`: native fingerprint surfaces, worker coherence, per-profile
   farbling, privacy behavior, and browser UI profile labels.
 - `vgc-uach-chrome-brand.patch`: UA Client Hints version/platform/architecture and
   coherent Chrome brand metadata.
+- `vgc-webgpu-identity.patch` (engine build 158+): `navigator.gpu` adapter identity
+  (vendor / architecture / subgroup sizes) derived from the same `--vgc-webgl-vendor` /
+  `--vgc-webgl-renderer` switches, so WebGPU and WebGL describe ONE GPU and the real
+  host adapter never leaks. Older engines: the app disables WebGPU instead
+  (src/main/engine-caps.ts gates on the zip build number).
 
 Apply both to the Chromium tag named by `src/shared/engine-release.json`.
 
 ```bash
 git apply --3way /path/VGCBrowser/engine-src/patches/vgc-native-all.patch
 git apply --3way /path/VGCBrowser/engine-src/patches/vgc-uach-chrome-brand.patch
+git apply --3way /path/VGCBrowser/engine-src/patches/vgc-webgpu-identity.patch
 ```
 
 The combined patch currently covers:

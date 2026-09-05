@@ -38,12 +38,13 @@ Keep local work in a branch. Do not use a reset script on a dirty Chromium tree.
 
 ## Apply the patches
 
-Copy this repository beside the Chromium checkout, then apply both authoritative
+Copy this repository beside the Chromium checkout, then apply the three authoritative
 patches:
 
 ```powershell
 git apply --3way C:\path\VGCBrowser\engine-src\patches\vgc-native-all.patch
 git apply --3way C:\path\VGCBrowser\engine-src\patches\vgc-uach-chrome-brand.patch
+git apply --3way C:\path\VGCBrowser\engine-src\patches\vgc-webgpu-identity.patch
 ```
 
 `vgc-native-all.patch` contains the native navigator, worker, language, screen,
@@ -54,7 +55,26 @@ idempotent and prevents the private CDP pipe from surfacing as `webdriver=true`.
 `vgc-uach-chrome-brand.patch` provides coherent UA Client Hints, including platform,
 architecture, bitness, full version, and the Google Chrome brand.
 
-Neither patch modifies os_crypt.
+`vgc-webgpu-identity.patch` (engine build 158+) makes `navigator.gpu` adapter info
+(vendor / architecture / subgroup sizes) follow `--vgc-webgl-vendor` /
+`--vgc-webgl-renderer`, so WebGPU and WebGL describe one GPU and the real host adapter
+never leaks. Bump the zip build number when shipping it: the app only stops disabling
+WebGPU for builds >= 158 (`src/main/engine-caps.ts`).
+
+None of the patches modifies os_crypt.
+
+## Source from the official tarball (slow git mirrors)
+
+When `fetch chromium` crawls (this VPS saw 64 KB/s from googlesource), use the
+official source export instead — it already contains every DEPS checkout:
+
+```
+https://commondatastorage.googleapis.com/chromium-browser-official/chromium-<version>.tar.xz
+```
+
+Extract, then fetch only the toolchain pieces the hooks would have downloaded
+(`tools/clang/scripts/update.py`, `tools/rust/update_rust.py`, node, gn, esbuild via
+cipd) before `gn gen`. See `D:\vgc-build\` on the build VPS for the scripts used.
 
 ## Configure and build
 

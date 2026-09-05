@@ -59,16 +59,67 @@ interface OsPreset {
   mobile: boolean
 }
 
+export type GpuFamily = 'NVIDIA' | 'AMD' | 'Intel' | 'Apple' | 'Qualcomm'
+
 export interface FingerprintEnvironment {
   language?: string
   languages?: string[]
+  /** Exact values — only when a caller really wants the host's own numbers. */
   hardwareConcurrency?: number
   deviceMemory?: number
+  /** Upper bounds from the real host: a profile may claim FEWER cores / less RAM than
+   *  the machine has (harmless), never more (a 16-core claim on a 4-core box is a tell). */
+  maxHardwareConcurrency?: number
+  maxDeviceMemory?: number
   devicePixelRatio?: number
   screen?: { width: number; height: number }
+  /** Exact GPU — forces one renderer string (rarely wanted; see webglFamily). */
   webgl?: { vendor: string; renderer: string }
+  /** GPU FAMILY of the real host. Each profile then claims a DIFFERENT model of the same
+   *  family, so the D3D11/Metal capabilities the engine really exposes stay plausible
+   *  while no two profiles on one machine share a renderer string. */
+  webglFamily?: GpuFamily
   platformVersion?: string
   timezone?: string
+  /** Deterministic seed (the profile id): the same profile gets the same hardware on every
+   *  load and on every machine of the same GPU family, instead of a fresh roll each time. */
+  seed?: string
+}
+
+/** FNV-1a 32-bit — the same derivation the engine uses for --vgc-seed. */
+export function hashSeed(value: string): number {
+  let h = 2166136261 >>> 0
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+export type Rng = () => number
+
+/** mulberry32: tiny, well-distributed PRNG for deterministic per-profile picks. */
+export function rngFor(seed: string | undefined): Rng {
+  if (!seed) return Math.random
+  let a = hashSeed(seed) || 1
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** Which GPU family a vendor/renderer string describes (undefined if unrecognised). */
+export function gpuFamilyOf(text: string | undefined | null): GpuFamily | undefined {
+  const s = (text || '').toLowerCase()
+  if (/nvidia|geforce|quadro/.test(s)) return 'NVIDIA'
+  if (/\bamd\b|radeon/.test(s)) return 'AMD'
+  if (/intel|\biris\b|uhd graphics|hd graphics/.test(s)) return 'Intel'
+  if (/apple/.test(s)) return 'Apple'
+  if (/adreno|qualcomm/.test(s)) return 'Qualcomm'
+  return undefined
 }
 
 // The full default Windows 10/11 font set. The universal fonts (also listed in
@@ -127,17 +178,47 @@ const OS_PRESETS: Record<OsType, OsPreset> = {
     platform: 'Win32',
     platformVersion: '15.0.0',
     fonts: WIN_FONTS,
+    // Real Chrome-on-Windows strings: since ~M105 the ANGLE renderer embeds the GPU's PCI
+    // device id ("(0x00002503)"). A string without it is itself a tell, so every pool
+    // entry carries the real id of that model. Pools are grouped by family so a host of
+    // one family gets a DIFFERENT model of the same family per profile (see gpuPool).
     gpus: [
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)' }
+      ...winGpus('NVIDIA', [
+        ['NVIDIA GeForce RTX 3050', '2507'],
+        ['NVIDIA GeForce RTX 3060', '2503'],
+        ['NVIDIA GeForce RTX 3060 Ti', '2489'],
+        ['NVIDIA GeForce RTX 3070', '2484'],
+        ['NVIDIA GeForce RTX 3080', '2206'],
+        ['NVIDIA GeForce RTX 4060', '2882'],
+        ['NVIDIA GeForce RTX 4060 Ti', '2803'],
+        ['NVIDIA GeForce RTX 4070', '2786'],
+        ['NVIDIA GeForce RTX 4070 SUPER', '2783'],
+        ['NVIDIA GeForce RTX 5070', '2F04'],
+        ['NVIDIA GeForce GTX 1650', '1F82'],
+        ['NVIDIA GeForce GTX 1660 SUPER', '21C4'],
+        ['NVIDIA GeForce GTX 1660 Ti', '2182'],
+        ['NVIDIA GeForce RTX 2060', '1F08'],
+        ['NVIDIA GeForce RTX 3050 Laptop GPU', '25A2'],
+        ['NVIDIA GeForce RTX 4060 Laptop GPU', '28E0']
+      ]),
+      ...winGpus('Intel', [
+        ['Intel(R) UHD Graphics 620', '5917'],
+        ['Intel(R) UHD Graphics 630', '3E9B'],
+        ['Intel(R) UHD Graphics 730', '4692'],
+        ['Intel(R) UHD Graphics 770', '4680'],
+        ['Intel(R) Iris(R) Xe Graphics', '9A49'],
+        ['Intel(R) Iris(R) Plus Graphics', '8A52']
+      ]),
+      ...winGpus('AMD', [
+        ['AMD Radeon RX 580 Series', '67DF'],
+        ['AMD Radeon RX 5700 XT', '731F'],
+        ['AMD Radeon RX 6600', '73FF'],
+        ['AMD Radeon RX 6700 XT', '73DF'],
+        ['AMD Radeon RX 7600', '7480'],
+        ['AMD Radeon RX 7800 XT', '747E'],
+        ['AMD Radeon 780M Graphics', '15BF'],
+        ['AMD Radeon(TM) Vega 8 Graphics', '15D8']
+      ])
     ],
     mobile: false
   },
@@ -160,9 +241,13 @@ const OS_PRESETS: Record<OsType, OsPreset> = {
       { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)' },
       { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)' },
       { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics OpenGL Engine, OpenGL 4.1)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 OpenGL Engine, OpenGL 4.1)' },
-      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon Pro 5300M OpenGL Engine, OpenGL 4.1)' }
+      { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)' },
+      { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)' },
+      // Intel/AMD Macs: Chrome's ANGLE backend on macOS is Metal, not OpenGL.
+      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics, Unspecified Version)' },
+      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) UHD Graphics 630, Unspecified Version)' },
+      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5300M, Unspecified Version)' },
+      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)' }
     ],
     mobile: false
   },
@@ -191,8 +276,53 @@ const OS_PRESETS: Record<OsType, OsPreset> = {
   }
 }
 
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]
+function pick<T>(arr: T[], rng: Rng = Math.random): T {
+  return arr[Math.floor(rng() * arr.length)]
+}
+
+/** Windows ANGLE D3D11 renderer strings for one family, with each model's PCI device id. */
+function winGpus(
+  family: 'NVIDIA' | 'Intel' | 'AMD',
+  models: Array<[name: string, deviceIdHex: string]>
+): Array<{ vendor: string; renderer: string }> {
+  return models.map(([name, id]) => ({
+    vendor: `Google Inc. (${family})`,
+    renderer: `ANGLE (${family}, ${name} (0x0000${id.toUpperCase()}) Direct3D11 vs_5_0 ps_5_0, D3D11)`
+  }))
+}
+
+/** Pool of plausible GPUs for an OS, narrowed to one family when known (falls back to
+ *  the whole pool when the family has no entries). */
+export function gpuPool(os: OsType, family?: GpuFamily): Array<{ vendor: string; renderer: string }> {
+  const all = (OS_PRESETS[os] ?? OS_PRESETS.windows).gpus
+  const same = family ? all.filter((g) => gpuFamilyOf(`${g.vendor} ${g.renderer}`) === family) : []
+  return same.length ? same : all
+}
+
+/**
+ * The hardware trio (cores · memory · GPU) a profile claims, chosen deterministically from
+ * its id within the host's limits — so two profiles on one machine claim DIFFERENT
+ * hardware (no shared renderer/core-count correlator), while one profile claims the SAME
+ * hardware every time it is opened and on every machine of the same GPU family.
+ */
+export function hardwareVariant(
+  os: OsType,
+  environment: FingerprintEnvironment,
+  seed: string
+): Pick<Fingerprint, 'hardwareConcurrency' | 'deviceMemory' | 'webgl'> {
+  const preset = OS_PRESETS[os] ?? OS_PRESETS.windows
+  const rng = rngFor(seed + ':hw')
+  const coreChoices = (preset.mobile ? [4, 6, 8] : CORES).filter(
+    (c) => !environment.maxHardwareConcurrency || c <= environment.maxHardwareConcurrency
+  )
+  const memChoices = (preset.mobile ? [4, 8] : MEMORY).filter(
+    (m) => !environment.maxDeviceMemory || m <= environment.maxDeviceMemory
+  )
+  return {
+    hardwareConcurrency: coreChoices.length ? pick(coreChoices, rng) : Math.min(...CORES),
+    deviceMemory: memChoices.length ? pick(memChoices, rng) : Math.min(...MEMORY),
+    webgl: environment.webgl ?? pick(gpuPool(os, environment.webglFamily), rng)
+  }
 }
 
 // Fonts present on essentially EVERY install of their OS. These are always exposed: every
@@ -225,8 +355,8 @@ const ALWAYS_KEEP_FONTS = new Set(
  * the engine's --vgc-fonts allowlist (which HIDES fonts outside this set), the width-probe /
  * measureText / canvas / FontFaceSet.check all report this per-profile set.
  */
-function fontSubset(all: string[]): string[] {
-  return all.filter((f) => ALWAYS_KEEP_FONTS.has(f.toLowerCase()) || Math.random() > 0.35)
+function fontSubset(all: string[], rng: Rng = Math.random): string[] {
+  return all.filter((f) => ALWAYS_KEEP_FONTS.has(f.toLowerCase()) || rng() > 0.35)
 }
 
 // Map an ISO-3166 country code (from the proxy's IP geo) to the locale a real user
@@ -261,10 +391,12 @@ export function generateFingerprint(
   environment: FingerprintEnvironment = {}
 ): Fingerprint {
   const preset = OS_PRESETS[os] ?? OS_PRESETS.windows
-  const build = pick(CHROME_BUILDS)
-  const gpu = environment.webgl ?? pick(preset.gpus)
-  const screen = environment.screen ?? (preset.mobile ? pick(MOBILE_SCREENS) : pick(DESKTOP_SCREENS))
-  const timezone = environment.timezone ?? pick(TIMEZONES)
+  const rng = rngFor(environment.seed)
+  const build = pick(CHROME_BUILDS, rng)
+  const hw = hardwareVariant(os, environment, environment.seed ?? String(rng()))
+  const screen =
+    environment.screen ?? (preset.mobile ? pick(MOBILE_SCREENS, rng) : pick(DESKTOP_SCREENS, rng))
+  const timezone = environment.timezone ?? pick(TIMEZONES, rng)
   const language = environment.language ?? 'en-US'
   const languages = environment.languages?.length
     ? environment.languages
@@ -280,9 +412,8 @@ export function generateFingerprint(
     platform: preset.platform,
     language,
     languages,
-    hardwareConcurrency:
-      environment.hardwareConcurrency ?? (preset.mobile ? pick([4, 6, 8]) : pick(CORES)),
-    deviceMemory: environment.deviceMemory ?? (preset.mobile ? pick([4, 8]) : pick(MEMORY)),
+    hardwareConcurrency: environment.hardwareConcurrency ?? hw.hardwareConcurrency,
+    deviceMemory: environment.deviceMemory ?? hw.deviceMemory,
     vendor: 'Google Inc.',
     screen: {
       ...screen,
@@ -291,7 +422,7 @@ export function generateFingerprint(
     },
     devicePixelRatio:
       environment.devicePixelRatio ?? (preset.mobile ? 2.625 : os === 'macos' ? 2 : 1),
-    webgl: gpu,
+    webgl: hw.webgl,
     canvasNoise: true,
     audioNoise: true,
     clientRectsNoise: true,
@@ -299,7 +430,7 @@ export function generateFingerprint(
     timezone,
     uaFullVersion: build.full,
     uaPlatformVersion: environment.platformVersion ?? preset.platformVersion,
-    fonts: fontSubset(preset.fonts),
+    fonts: fontSubset(preset.fonts, rng),
     doNotTrack: 'unset'
   }
 }

@@ -1,0 +1,171 @@
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+--- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+@@ -4,6 +4,12 @@
+ 
+ #include "third_party/blink/renderer/modules/webgpu/gpu_adapter.h"
+ 
++#include <cstring>
++#include <optional>
++#include <string>
++
++#include "base/command_line.h"
++#include "base/strings/string_util.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+@@ -30,6 +36,136 @@
+ 
+ namespace {
+ 
++// ── VGC Core: WebGPU adapter identity ───────────────────────────────────────
++// WebGL's UNMASKED_VENDOR/RENDERER are answered natively from --vgc-webgl-vendor /
++// --vgc-webgl-renderer (WebGLRenderingContextBase::getParameter). Without this block,
++// navigator.gpu.requestAdapter().info still reported the REAL host GPU vendor and
++// architecture, which (a) contradicts the WebGL claim (a proof of spoofing) and (b) is
++// identical for every profile on one machine (a same-machine correlator). Derive the
++// WebGPU identity from the same claimed renderer string so both APIs describe one
++// coherent GPU. Spellings follow Dawn's gpu_info.json js_enum_case(): "ampere",
++// "lovelace", "blackwell", "rdna-2", "gcn-4", "gen-9", "gen-12lp", "common-3"…
++// Subgroup sizes follow the claimed vendor (NVIDIA 32/32, AMD RDNA 32/64, GCN 64/64,
++// Intel 8/32, Apple 32/32). Absent switches ⇒ stock behaviour.
++struct VgcGpuIdentity {
++  const char* vendor;
++  const char* architecture;
++  uint32_t subgroup_min;
++  uint32_t subgroup_max;
++};
++
++// The number right after `marker` in `s` ("rtx " → 3060 for "…rtx 3060 ti…"), 0 if none.
++unsigned VgcModelNumber(const std::string& s, const char* marker) {
++  size_t pos = s.find(marker);
++  if (pos == std::string::npos)
++    return 0;
++  pos += strlen(marker);
++  while (pos < s.size() && s[pos] == ' ')
++    ++pos;
++  unsigned n = 0;
++  bool any = false;
++  while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9') {
++    n = n * 10 + static_cast<unsigned>(s[pos] - '0');
++    ++pos;
++    any = true;
++    if (n > 100000)
++      break;
++  }
++  return any ? n : 0;
++}
++
++bool VgcHas(const std::string& s, const char* needle) {
++  return s.find(needle) != std::string::npos;
++}
++
++std::optional<VgcGpuIdentity> VgcWebGpuIdentity() {
++  const base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
++  const std::string renderer =
++      base::ToLowerASCII(cmd->GetSwitchValueASCII("vgc-webgl-renderer"));
++  const std::string vendor =
++      base::ToLowerASCII(cmd->GetSwitchValueASCII("vgc-webgl-vendor"));
++  if (renderer.empty() && vendor.empty())
++    return std::nullopt;
++  const std::string all = vendor + " " + renderer;
++
++  if (VgcHas(all, "nvidia") || VgcHas(all, "geforce") || VgcHas(all, "quadro")) {
++    const unsigned rtx = VgcModelNumber(renderer, "rtx ");
++    const unsigned gtx = VgcModelNumber(renderer, "gtx ");
++    const char* arch = "ampere";
++    if (rtx >= 5000)
++      arch = "blackwell";
++    else if (rtx >= 4000 || VgcHas(renderer, " ada"))
++      arch = "lovelace";
++    else if (rtx >= 3000 || VgcHas(renderer, "rtx a"))
++      arch = "ampere";
++    else if (rtx >= 2000 || gtx >= 1600 || VgcHas(renderer, " t600") ||
++             VgcHas(renderer, " t1000") || VgcHas(renderer, " t400"))
++      arch = "turing";
++    else if (gtx >= 1000)
++      arch = "pascal";
++    else if (gtx >= 700)
++      arch = "maxwell";
++    return VgcGpuIdentity{"nvidia", arch, 32, 32};
++  }
++
++  if (VgcHas(all, "amd") || VgcHas(all, "radeon")) {
++    const unsigned rx = VgcModelNumber(renderer, "rx ");
++    const char* arch = "rdna-2";
++    uint32_t smin = 32, smax = 64;
++    if (rx >= 9000)
++      arch = "rdna-4";
++    else if (rx >= 7000 || VgcHas(renderer, "780m") || VgcHas(renderer, "760m"))
++      arch = "rdna-3";
++    else if (rx >= 6000 || VgcHas(renderer, "680m") || VgcHas(renderer, "660m"))
++      arch = "rdna-2";
++    else if (rx >= 5000 || VgcHas(renderer, "pro 5"))
++      arch = "rdna-1";
++    else if (rx >= 400) {
++      arch = "gcn-4";  // RX 460…590 (Polaris)
++      smin = smax = 64;
++    } else if (VgcHas(renderer, "vega") || VgcHas(renderer, "radeon vii")) {
++      arch = "gcn-5";
++      smin = smax = 64;
++    }
++    return VgcGpuIdentity{"amd", arch, smin, smax};
++  }
++
++  if (VgcHas(all, "intel")) {
++    const unsigned uhd = VgcModelNumber(renderer, "uhd graphics ");
++    const unsigned hd = VgcModelNumber(renderer, "hd graphics ");
++    const unsigned arc_a = VgcModelNumber(renderer, "arc a");
++    const unsigned arc_b = VgcModelNumber(renderer, "arc b");
++    const char* arch = "gen-12lp";
++    if (arc_b)
++      arch = "xe-2hpg";
++    else if (arc_a)
++      arch = "gen-12hp";
++    else if (VgcHas(renderer, "arc 1"))
++      arch = "xe-2lpg";  // Arc 130V / 140V (Lunar Lake)
++    else if (VgcHas(renderer, "iris(r) xe") || VgcHas(renderer, "iris xe"))
++      arch = "gen-12lp";
++    else if (VgcHas(renderer, "iris(r) plus") || VgcHas(renderer, "iris plus"))
++      arch = "gen-11";
++    else if (uhd >= 700)
++      arch = "gen-12lp";  // UHD 710/730/750/770 (Alder/Raptor Lake)
++    else if (uhd >= 600 || hd >= 500)
++      arch = "gen-9";  // UHD 610/620/630, HD 520/530/620/630
++    else if (hd >= 4000)
++      arch = "gen-7";
++    return VgcGpuIdentity{"intel", arch, 8, 32};
++  }
++
++  if (VgcHas(all, "apple"))
++    return VgcGpuIdentity{"apple", "common-3", 32, 32};
++
++  if (VgcHas(all, "adreno") || VgcHas(all, "qualcomm"))
++    return VgcGpuIdentity{"qualcomm", "adreno-8xx", 64, 64};
++
++  // Claimed GPU of an unknown family: report nothing rather than the real one.
++  return VgcGpuIdentity{"", "", 4, 128};
++}
++
++
+ GPUSupportedFeatures* MakeFeatureNameSet(wgpu::Adapter adapter) {
+   GPUSupportedFeatures* features = MakeGarbageCollected<GPUSupportedFeatures>();
+   DCHECK(features->FeatureNameSet().empty());
+@@ -111,6 +247,17 @@
+   }
+   subgroup_min_size_ = info.subgroupMinSize;
+   subgroup_max_size_ = info.subgroupMaxSize;
++  // VGC Core: make the WebGPU identity agree with the claimed WebGL GPU.
++  if (const std::optional<VgcGpuIdentity> vgc = VgcWebGpuIdentity()) {
++    vendor_ = String(vgc->vendor);
++    architecture_ = String(vgc->architecture);
++    subgroup_min_size_ = vgc->subgroup_min;
++    subgroup_max_size_ = vgc->subgroup_max;
++    // Never surface the real PCI id / driver string, even with developer features.
++    device_ = String("0x0000");
++    description_ = String();
++    driver_ = String();
++  }
+   power_preference_ = powerProperties.powerPreference;
+ 
+   features_ = MakeFeatureNameSet(GetHandle());

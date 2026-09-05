@@ -2,7 +2,15 @@ import { cpus, totalmem } from 'os'
 import { execFileSync } from 'child_process'
 import { app, screen } from 'electron'
 import type { Fingerprint, OsType } from '../shared/types'
-import { generateFingerprint, type FingerprintEnvironment } from '../shared/fingerprint'
+import {
+  generateFingerprint,
+  gpuFamilyOf,
+  gpuPool,
+  hardwareVariant,
+  rngFor,
+  type FingerprintEnvironment,
+  type GpuFamily
+} from '../shared/fingerprint'
 import { cleanText } from './validation'
 
 let cachedHostWebgl: FingerprintEnvironment['webgl'] | null | undefined
@@ -25,27 +33,35 @@ function gpuRank(name: string): number {
   return 0
 }
 
-/** Pick the most render-plausible GPU from all enumerated adapter names. */
-function pickRealGpu(names: string[]): string {
-  let best = ''
+/** Pick the most render-plausible GPU from all enumerated adapter names. Each entry may
+ *  carry its PNP id after a '|' ("NVIDIA GeForce RTX 5070 Ti|PCI\VEN_10DE&DEV_2C05&…");
+ *  the PCI device id is returned alongside, because real Chrome embeds it in the ANGLE
+ *  renderer string ("… RTX 5070 Ti (0x00002C05) Direct3D11 …"). */
+function pickRealGpu(entries: string[]): { name: string; deviceId: string } {
+  let best = { name: '', deviceId: '' }
   let bestRank = 0
-  for (const raw of names) {
-    const name = cleanText(raw, 200).trim()
+  for (const raw of entries) {
+    const [namePart, pnp = ''] = String(raw ?? '').split('|')
+    const name = cleanText(namePart, 200).trim()
     if (!name) continue
     const rank = gpuRank(name)
     if (rank > bestRank) {
-      best = name
+      const dev = /DEV_([0-9A-Fa-f]{4})/.exec(pnp)?.[1] ?? ''
+      best = { name, deviceId: dev.toUpperCase() }
       bestRank = rank
     }
   }
   return best
 }
 
-function hostWebgl(): FingerprintEnvironment['webgl'] | undefined {
-  if (cachedHostWebgl !== undefined) return cachedHostWebgl ?? undefined
-  cachedHostWebgl = null
+let cachedHostGpuModel: { name: string; deviceId: string } | null | undefined
+
+/** The real host GPU model (and PCI device id on Windows), or null when only virtual /
+ *  remote-desktop adapters are present. */
+function hostGpuModel(): { name: string; deviceId: string } | null {
+  if (cachedHostGpuModel !== undefined) return cachedHostGpuModel
+  cachedHostGpuModel = null
   try {
-    let model = ''
     if (process.platform === 'darwin') {
       const raw = execFileSync('/usr/sbin/system_profiler', ['SPDisplaysDataType', '-json'], {
         encoding: 'utf8',
@@ -53,48 +69,56 @@ function hostWebgl(): FingerprintEnvironment['webgl'] | undefined {
         maxBuffer: 2 * 1024 * 1024
       })
       const parsed = JSON.parse(raw) as { SPDisplaysDataType?: Array<Record<string, unknown>> }
-      // Prefer the first Apple/AMD/Intel GPU, skipping any virtual mirror driver.
       const gpus = parsed.SPDisplaysDataType ?? []
       const names = gpus.map((g) => cleanText(g?.sppci_model ?? g?._name, 200).trim())
-      model = pickRealGpu(names) || cleanText(gpus[0]?.sppci_model ?? gpus[0]?._name, 200).trim()
+      const picked = pickRealGpu(names)
+      const fallback = cleanText(gpus[0]?.sppci_model ?? gpus[0]?._name, 200).trim()
+      cachedHostGpuModel = picked.name ? picked : fallback ? { name: fallback, deviceId: '' } : null
     } else if (process.platform === 'win32') {
       // Enumerate EVERY video controller and choose a real GPU, not index 0 (which on a
       // VPS/RDP box is a virtual display like "OrayIddDriver Device" or "Microsoft Basic
-      // Display Adapter"). One name per line.
+      // Display Adapter"). One "Name|PNPDeviceID" per line.
       const raw = execFileSync(
         'powershell.exe',
         [
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          'Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }'
+          'Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + "|" + $_.PNPDeviceID }'
         ],
         { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 }
       )
-      model = pickRealGpu(raw.split(/\r?\n/))
-    }
-    if (model) {
-      const family = /nvidia/i.test(model)
-        ? 'NVIDIA'
-        : /amd|radeon/i.test(model)
-          ? 'AMD'
-          : /intel/i.test(model)
-            ? 'Intel'
-            : /apple/i.test(model)
-              ? 'Apple'
-              : ''
-      if (family) {
-        cachedHostWebgl = {
-          vendor: `Google Inc. (${family})`,
-          renderer:
-            process.platform === 'darwin'
-              ? `ANGLE (${family}, ANGLE Metal Renderer: ${model}, Unspecified Version)`
-              : `ANGLE (${family}, ${model} Direct3D11 vs_5_0 ps_5_0, D3D11)`
-        }
-      }
+      const picked = pickRealGpu(raw.split(/\r?\n/))
+      cachedHostGpuModel = picked.name ? picked : null
     }
   } catch {
-    cachedHostWebgl = null
+    cachedHostGpuModel = null
+  }
+  return cachedHostGpuModel
+}
+
+/** GPU family of the real host, undefined when no real GPU is visible (RDP-only, BMC). */
+export function hostGpuFamily(): GpuFamily | undefined {
+  if (process.platform === 'darwin' && process.arch === 'arm64') return 'Apple'
+  return gpuFamilyOf(hostGpuModel()?.name)
+}
+
+/** The host's own GPU as a Chrome-style renderer string (with the PCI id on Windows).
+ *  Only used as the pool fallback for a family the pool has no entries for. */
+function hostWebgl(): FingerprintEnvironment['webgl'] | undefined {
+  if (cachedHostWebgl !== undefined) return cachedHostWebgl ?? undefined
+  cachedHostWebgl = null
+  const model = hostGpuModel()
+  const family = gpuFamilyOf(model?.name)
+  if (model && family) {
+    const idPart = model.deviceId ? ` (0x0000${model.deviceId})` : ''
+    cachedHostWebgl = {
+      vendor: `Google Inc. (${family})`,
+      renderer:
+        process.platform === 'darwin'
+          ? `ANGLE (${family}, ANGLE Metal Renderer: ${model.name}, Unspecified Version)`
+          : `ANGLE (${family}, ${model.name}${idPart} Direct3D11 vs_5_0 ps_5_0, D3D11)`
+    }
   }
   return cachedHostWebgl ?? undefined
 }
@@ -125,37 +149,90 @@ export function hostFingerprintEnvironment(): FingerprintEnvironment {
     // Electron screen is unavailable before app.ready; the platform default is safe.
   }
 
+  // The host sets BOUNDS and the GPU FAMILY, not exact values: every profile then claims
+  // its own (deterministic) core count / RAM / GPU model within what this machine can
+  // plausibly be — instead of all profiles copying the host and becoming one big
+  // same-machine correlator (285 profiles × the identical "RTX 3050 Laptop", 32 cores).
+  const family = hostGpuFamily()
   const environment: FingerprintEnvironment = {
     language: locale,
     languages: [locale, baseLocale].filter((v, i, a) => a.indexOf(v) === i),
-    hardwareConcurrency: cores,
-    deviceMemory,
+    maxHardwareConcurrency: cores,
+    maxDeviceMemory: deviceMemory,
     devicePixelRatio: scaleFactor,
     ...(displaySize ? { screen: displaySize } : {}),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-    ...(hostWebgl() ? { webgl: hostWebgl() } : {})
+    ...(family ? { webglFamily: family } : {})
+  }
+  // A family the pool cannot vary (nothing plausible to pick) falls back to the real GPU.
+  if (family && gpuPool(hostOs(), family).every((g) => gpuFamilyOf(g.renderer) !== family)) {
+    const real = hostWebgl()
+    if (real) environment.webgl = real
   }
 
   if (process.platform === 'darwin') {
     environment.platformVersion = (
       process as NodeJS.Process & { getSystemVersion?: () => string }
     ).getSystemVersion?.()
-    if (process.arch === 'arm64' && !environment.webgl) {
-      const model = cpus()[0]?.model?.match(/Apple M[^\s]*(?:\s+(?:Pro|Max|Ultra))?/i)?.[0] ?? 'Apple M1'
-      environment.webgl = {
-        vendor: 'Google Inc. (Apple)',
-        renderer: `ANGLE (Apple, ANGLE Metal Renderer: ${model}, Unspecified Version)`
-      }
-    }
   }
   return environment
 }
 
-export function cohereFingerprint(candidate?: Fingerprint): Fingerprint {
+const CHROME_MEMORY_VALUES = [0.25, 0.5, 1, 2, 4, 8]
+
+/**
+ * What the engine should actually be launched with on THIS host: the profile's own
+ * hardware claims, clamped to what this machine can back up — a claim of more cores /
+ * RAM than the box has, or a GPU family the box does not render with (D3D11 caps and
+ * WebGPU identity are the real GPU's), is swapped for a deterministic pick within the
+ * host's limits. NOT persisted: the stored profile keeps its canonical values, so a
+ * profile that travels between an NVIDIA laptop and an Intel desktop does not ping-pong
+ * its fingerprint through the cloud on every open.
+ */
+export function adaptFingerprintToHost(fp: Fingerprint, seedKey: string): Fingerprint {
   const environment = hostFingerprintEnvironment()
-  const baseline = generateFingerprint(hostOs(), environment)
+  const variant = hardwareVariant(hostOs(), environment, seedKey)
+  const next: Fingerprint = { ...fp }
+  const maxCores = environment.maxHardwareConcurrency
+  if (
+    !Number.isInteger(fp.hardwareConcurrency) ||
+    fp.hardwareConcurrency < 1 ||
+    (maxCores !== undefined && fp.hardwareConcurrency > maxCores)
+  ) {
+    next.hardwareConcurrency = variant.hardwareConcurrency
+  }
+  const maxMem = environment.maxDeviceMemory
+  if (
+    !CHROME_MEMORY_VALUES.includes(fp.deviceMemory) ||
+    (maxMem !== undefined && fp.deviceMemory > maxMem)
+  ) {
+    next.deviceMemory = variant.deviceMemory
+  }
+  const claimedFamily = gpuFamilyOf(`${fp.webgl?.vendor ?? ''} ${fp.webgl?.renderer ?? ''}`)
+  if (environment.webglFamily && claimedFamily !== environment.webglFamily) {
+    next.webgl = variant.webgl
+  }
+  return next
+}
+
+/**
+ * Sanitise a stored/incoming fingerprint against this host. Hardware claims the profile
+ * already has (cores · RAM · GPU) are KEPT when they are plausible values — they are the
+ * profile's identity (per-profile, deterministic, or user-edited) — and only replaced by
+ * a deterministic pick (seeded by `seedKey`, normally the profile id) when missing or
+ * impossible. Host-specific adaptation happens at launch (adaptFingerprintToHost).
+ */
+export function cohereFingerprint(candidate?: Fingerprint, seedKey?: string): Fingerprint {
+  const environment = hostFingerprintEnvironment()
+  const baseline = generateFingerprint(hostOs(), { ...environment, ...(seedKey ? { seed: seedKey } : {}) })
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return baseline
   const samePlatform = candidate.platform === baseline.platform
+  const cores = Number(candidate.hardwareConcurrency)
+  const hardwareConcurrency =
+    Number.isInteger(cores) && cores >= 1 && cores <= 64 ? cores : baseline.hardwareConcurrency
+  const deviceMemory = CHROME_MEMORY_VALUES.includes(candidate.deviceMemory)
+    ? candidate.deviceMemory
+    : baseline.deviceMemory
   const width = Number(candidate.screen?.width)
   const height = Number(candidate.screen?.height)
   const candidateScreen =
@@ -198,14 +275,16 @@ export function cohereFingerprint(candidate?: Fingerprint): Fingerprint {
       ? { latitude, longitude, accuracy: Number.isFinite(accuracy) ? Math.max(1, Math.min(100_000, accuracy)) : 100 }
       : undefined
   const publicIp = cleanText(candidate.webrtcPublicIp, 64).trim()
+  // Keep the profile's own GPU whenever it is a sane ANGLE string of a known family (any
+  // family: cross-host adaptation is done at launch, never written back).
   const webgl =
-    !environment.webgl &&
     samePlatform &&
     candidate.webgl &&
     typeof candidate.webgl.vendor === 'string' &&
     typeof candidate.webgl.renderer === 'string' &&
     candidate.webgl.vendor.length <= 256 &&
-    candidate.webgl.renderer.length <= 1024
+    candidate.webgl.renderer.length <= 1024 &&
+    gpuFamilyOf(`${candidate.webgl.vendor} ${candidate.webgl.renderer}`)
       ? {
           vendor: cleanText(candidate.webgl.vendor, 256),
           renderer: cleanText(candidate.webgl.renderer, 1024)
@@ -213,6 +292,8 @@ export function cohereFingerprint(candidate?: Fingerprint): Fingerprint {
       : baseline.webgl
   return {
     ...baseline,
+    hardwareConcurrency,
+    deviceMemory,
     screen: screenValue,
     webgl,
     fonts: fonts.length ? fonts : baseline.fonts,
