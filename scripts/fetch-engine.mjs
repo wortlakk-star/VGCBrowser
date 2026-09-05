@@ -25,7 +25,7 @@ const MAX_UNPACKED = 4 * 1024 * 1024 * 1024
 const MAX_ENTRY = 1_500 * 1024 * 1024
 const MAX_ENTRIES = 30_000
 const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i
-const ENGINE_URL = process.env.VGC_ENGINE_URL || 'https://vgcbrowser.com/dl/vgc-core-157.zip'
+const ENGINE_URL = process.env.VGC_ENGINE_URL || 'https://vgcbrowser.com/dl/vgc-core-158.zip'
 const ENGINE_HASH = (process.env.VGC_ENGINE_SHA256 || '').trim().toLowerCase()
 const ENGINE_SIGNER = (process.env.VGC_WINDOWS_SIGNER_SUBJECT || '').trim()
 const ALLOW_UNSIGNED = process.env.VGC_ALLOW_UNSIGNED_BUILD === '1'

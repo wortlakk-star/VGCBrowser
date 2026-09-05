@@ -28,6 +28,9 @@ jobs:
   build-win:
     runs-on: windows-latest
     env:
+      # Keep URL and hash together: a hash for a newer engine than the URL means every
+      # fetch attempt downloads the old zip and fails its SHA-256 check (2.1.77's first runs).
+      VGC_ENGINE_URL: https://vgcbrowser.com/dl/vgc-core-158.zip
       VGC_ENGINE_SHA256: 51bf06becf542b9d4ed251026d660e19b35905732e407f8f8229b891767f7d26
       VGC_ALLOW_UNSIGNED_BUILD: '1'
     steps:
@@ -46,7 +49,7 @@ jobs:
         run: |
           # The host (Hostinger/LiteSpeed) intermittently refuses GitHub's runners for a
           # while; print what it answers and back off longer between attempts.
-          curl -sSI --max-time 30 "${VGC_ENGINE_URL:-https://vgcbrowser.com/dl/vgc-core-158.zip}" | head -3 || true
+          curl -sSI --max-time 30 "$VGC_ENGINE_URL" | head -3 || true
           for i in 1 2 3 4 5 6 7 8; do
             node scripts/fetch-engine.mjs && break || { echo "fetch attempt $i failed; retrying in $((i*30))s"; sleep $((i*30)); }
           done
@@ -85,12 +88,8 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p 65002 212.85.28.201 >> ~/.ssh/known_hosts 2>/dev/null || true
-          DEST="domains/vgcbrowser.com/public_html/dl"
-          ssh -p 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
-            u469659181@212.85.28.201 "mkdir -p $DEST"
-          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
-            out-dl/* u469659181@212.85.28.201:"$DEST/"
+          # Binaries first, each verified by SHA-256 on the server, latest.yml last.
+          bash scripts/publish-dl.sh out-dl/latest.yml out-dl/*.exe out-dl/*.blockmap
 
   build-mac:
     runs-on: macos-latest
@@ -117,10 +116,9 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p 65002 212.85.28.201 >> ~/.ssh/known_hosts 2>/dev/null || true
-          DEST="domains/vgcbrowser.com/public_html/dl"
-          ssh -p 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new u469659181@212.85.28.201 "mkdir -p $DEST"
-          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
-            out-dl/* u469659181@212.85.28.201:"$DEST/"
-          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
-            web/index.html u469659181@212.85.28.201:"domains/vgcbrowser.com/public_html/"
+          # Binaries first, each verified by SHA-256 on the server, latest-mac.yml after
+          # them and the landing page last. A cut upload (the host ran out of disk quota
+          # during 2.1.77's first run and left a truncated zip behind a manifest that
+          # already advertised it) fails here instead of shipping a broken update.
+          VGC_SITE_INDEX=web/index.html bash scripts/publish-dl.sh \
+            out-dl/latest-mac.yml out-dl/*-mac-*.zip out-dl/*-mac-*.dmg

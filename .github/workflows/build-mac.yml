@@ -51,10 +51,5 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p 65002 212.85.28.201 >> ~/.ssh/known_hosts 2>/dev/null || true
-          DEST="domains/vgcbrowser.com/public_html/dl"
-          ssh -p 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new u469659181@212.85.28.201 "mkdir -p $DEST"
-          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
-            release/*.dmg release/*-mac-*.zip release/latest-mac.yml \
-            u469659181@212.85.28.201:"$DEST/"
-          echo "Uploaded macOS build to https://vgcbrowser.com/dl/"
+          # Binaries first, each verified by SHA-256 on the server, latest-mac.yml last.
+          bash scripts/publish-dl.sh release/latest-mac.yml release/*-mac-*.zip release/*.dmg
