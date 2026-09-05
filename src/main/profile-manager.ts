@@ -1604,6 +1604,17 @@ async function launchProfileImpl(
     '--no-default-browser-check',
     '--disable-background-networking',
     '--disable-sync',
+    // ── WebGPU leak guard ──────────────────────────────────────────────────────
+    // VGC Core spoofs the WebGL renderer (--vgc-webgl-renderer) but does NOT spoof the
+    // WebGPU adapter. navigator.gpu.requestAdapter().info therefore leaks the REAL host
+    // GPU's vendor + architecture (e.g. "nvidia"/"blackwell"), which (a) contradicts the
+    // spoofed WebGL GPU and (b) is IDENTICAL across every profile on one machine — a
+    // high-signal same-machine correlator and a proof-of-spoofing. Disabling the WebGPU
+    // feature (and its service) makes requestAdapter() resolve to null — the same state a
+    // machine with no WebGPU-capable GPU shows — so nothing real leaks and there is no
+    // WebGL/WebGPU contradiction. Antidetect accounts never need WebGPU. (Measured: with
+    // only --disable-features=WebGPU the adapter still resolved; WebGPUService is required.)
+    '--disable-features=WebGPU,WebGPUService',
     // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
     '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,

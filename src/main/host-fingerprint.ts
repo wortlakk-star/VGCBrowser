@@ -7,6 +7,40 @@ import { cleanText } from './validation'
 
 let cachedHostWebgl: FingerprintEnvironment['webgl'] | null | undefined
 
+// Virtual / remote-desktop / BMC display adapters that Chrome does NOT render with.
+// On a VPS, an RDP session, or a remote-control tool (Oray/Parsec/AnyDesk…) the FIRST
+// enumerated Win32_VideoController is often one of these, not the real GPU — so
+// selecting index 0 made the WebGL renderer spoof claim a virtual adapter (or, when it
+// resolved to no family, fall back to a pool GPU that then contradicts the real one and
+// the WebGPU adapter). Skip these and pick a real GPU instead.
+const VIRTUAL_ADAPTER =
+  /virtual|basic (display|render)|remote|\bidd\b|oray|parsec|rustdesk|dameware|\bvnc\b|teamviewer|anydesk|citrix|mirror|meta\b|vmware|virtualbox|hyper-?v|\bqxl\b|virtio|displaylink|spacedesk|aspeed|matrox|standard vga|microsoft/i
+
+/** Rank a GPU name: discrete NVIDIA/AMD first, then Intel/Apple integrated, 0 = unusable. */
+function gpuRank(name: string): number {
+  if (VIRTUAL_ADAPTER.test(name)) return 0
+  if (/nvidia|geforce|quadro|\brtx\b|\bgtx\b|amd|radeon/i.test(name)) return 3
+  if (/intel|iris|\buhd\b|\bhd graphics\b/i.test(name)) return 2
+  if (/apple/i.test(name)) return 2
+  return 0
+}
+
+/** Pick the most render-plausible GPU from all enumerated adapter names. */
+function pickRealGpu(names: string[]): string {
+  let best = ''
+  let bestRank = 0
+  for (const raw of names) {
+    const name = cleanText(raw, 200).trim()
+    if (!name) continue
+    const rank = gpuRank(name)
+    if (rank > bestRank) {
+      best = name
+      bestRank = rank
+    }
+  }
+  return best
+}
+
 function hostWebgl(): FingerprintEnvironment['webgl'] | undefined {
   if (cachedHostWebgl !== undefined) return cachedHostWebgl ?? undefined
   cachedHostWebgl = null
@@ -19,22 +53,25 @@ function hostWebgl(): FingerprintEnvironment['webgl'] | undefined {
         maxBuffer: 2 * 1024 * 1024
       })
       const parsed = JSON.parse(raw) as { SPDisplaysDataType?: Array<Record<string, unknown>> }
-      const gpu = parsed.SPDisplaysDataType?.[0]
-      model = cleanText(gpu?.sppci_model ?? gpu?._name, 200).trim()
+      // Prefer the first Apple/AMD/Intel GPU, skipping any virtual mirror driver.
+      const gpus = parsed.SPDisplaysDataType ?? []
+      const names = gpus.map((g) => cleanText(g?.sppci_model ?? g?._name, 200).trim())
+      model = pickRealGpu(names) || cleanText(gpus[0]?.sppci_model ?? gpus[0]?._name, 200).trim()
     } else if (process.platform === 'win32') {
-      model = cleanText(
-        execFileSync(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            '(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name)'
-          ],
-          { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 }
-        ),
-        200
-      ).trim()
+      // Enumerate EVERY video controller and choose a real GPU, not index 0 (which on a
+      // VPS/RDP box is a virtual display like "OrayIddDriver Device" or "Microsoft Basic
+      // Display Adapter"). One name per line.
+      const raw = execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }'
+        ],
+        { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 }
+      )
+      model = pickRealGpu(raw.split(/\r?\n/))
     }
     if (model) {
       const family = /nvidia/i.test(model)
