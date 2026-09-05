@@ -1072,31 +1072,62 @@ select.search {
 .ptable-wrap {
   border: 1px solid var(--border);
   border-radius: 16px;
-  overflow: hidden;
+  /* Narrow windows: the fixed columns can't all fit, so the table scrolls sideways
+     inside this box instead of squeezing columns until their text overlaps. A query
+     container so the table can shed low-priority columns before it ever needs to scroll. */
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--panel);
   box-shadow: var(--shadow);
+  container-type: inline-size;
 }
 .ptable {
   table-layout: fixed;
   width: 100%;
+  /* Floor width: below this the essential columns (name · proxy · actions) would start
+     to overlap, so the wrap scrolls instead. The container queries lower this by hiding
+     the least-important columns first, so a moderately narrow window still fits with no
+     scroll and no overlap. */
+  min-width: 880px;
   border-collapse: collapse;
   font-size: 13.5px;
 }
 .ptable .col-check {
-  width: 48px;
+  width: 44px;
 }
 .ptable .col-status {
-  width: 138px;
+  width: 122px;
 }
 .ptable .col-proxy {
-  width: 290px;
+  width: 260px;
 }
 .ptable .col-used {
-  width: 128px;
+  width: 108px;
 }
 .ptable .col-act {
-  width: 150px;
+  width: 140px;
   text-align: right;
+}
+/* Shed columns as the table's own box narrows (independent of the OS window / sidebar).
+   Each threshold matches the min-width BELOW it, so a column is dropped exactly when the
+   table would otherwise have to scroll — never squeezed until its text overlaps. Only
+   below the last floor (~620px) does the wrap scroll horizontally. */
+@container (max-width: 879px) {
+  .ptable {
+    min-width: 760px;
+  }
+  .ptable .col-used {
+    display: none;
+  }
+}
+@container (max-width: 759px) {
+  .ptable {
+    min-width: 620px;
+  }
+  /* Running/stopped stays legible from the row's green rail + the Chạy/Dừng button. */
+  .ptable .col-status {
+    display: none;
+  }
 }
 .ptable thead th {
   text-align: left;
