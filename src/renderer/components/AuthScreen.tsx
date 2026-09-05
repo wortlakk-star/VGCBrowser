@@ -13,6 +13,8 @@ function viErr(m: string): string {
   if (s.includes('password')) return 'Mật khẩu không hợp lệ (tối thiểu 6 ký tự).'
   if (s.includes('rate limit')) return 'Thử lại sau ít phút (quá nhiều yêu cầu).'
   if (s.includes('failed to fetch')) return 'Không kết nối được máy chủ. Kiểm tra mạng.'
+  if (s.includes('signups not allowed') || s.includes('signup is disabled'))
+    return 'Đăng ký đang tắt. Liên hệ quản trị viên để được cấp tài khoản.'
   return m
 }
 
@@ -56,6 +58,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           setOk(false)
           setMsg(viErr(error.message))
         } else {
+          // Gate.tsx now checks the email against the internal list before showing the app.
           await onAuthed()
         }
       } else {
@@ -67,6 +70,24 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
         if (pass !== pass2) {
           setOk(false)
           setMsg('Mật khẩu nhập lại không khớp.')
+          return
+        }
+        // Internal only: the admin must have put this email on the list BEFORE an account
+        // can be created for it. (The list is re-checked at sign-in and while the app runs.)
+        const pre = await window.vgc.licensePrecheck(email.trim())
+        if (!pre.approved) {
+          setOk(false)
+          // One wording for every "no" from the list (not on it / expired) so the sign-up
+          // tab cannot be used to probe which internal addresses exist.
+          setMsg(
+            pre.reason === 'invalid-email'
+              ? 'Địa chỉ email không hợp lệ.'
+              : pre.reason === 'rate-limited'
+                ? 'Bạn thử quá nhiều lần. Đợi một phút rồi thử lại.'
+                : pre.reason === 'unverified'
+                  ? 'Không kiểm tra được danh sách nội bộ (mạng của bạn hoặc máy chủ VGC đang lỗi). Thử lại sau ít phút.'
+                  : 'Email này chưa được quản trị viên cấp quyền dùng VGC. Nhờ quản trị viên thêm hoặc gia hạn email trước, rồi tạo tài khoản.'
+          )
           return
         }
         const { data, error } = await c.auth.signUp({
@@ -126,7 +147,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
         <div className="auth-brand">
           <img className="auth-logo" src={logo} alt="VGC" />
           <div className="name">VGC Browser</div>
-          <div className="sub">Antidetect Browser · VGC Group</div>
+          <div className="sub">Antidetect Browser · Nội bộ VGC Group</div>
         </div>
 
         <div className="auth-tabs">
@@ -140,9 +161,16 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
             className={`auth-tab ${mode === 'signup' ? 'active' : ''}`}
             onClick={() => switchMode('signup')}
           >
-            Đăng ký
+            Tạo tài khoản
           </button>
         </div>
+
+        {mode === 'signup' && (
+          <p className="auth-note">
+            <Icon name="shield" size={13} />
+            Chỉ email đã được quản trị viên thêm vào danh sách nội bộ mới tạo được tài khoản.
+          </p>
+        )}
 
         {mode === 'signup' && (
           <div className="auth-input">
@@ -161,7 +189,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           <input
             className="auth-field"
             type="email"
-            placeholder="Địa chỉ email"
+            placeholder="Email nội bộ"
             value={email}
             onChange={(e) => setEmail(e.target.value.slice(0, 320))}
             onKeyDown={onKey}
@@ -201,7 +229,11 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
 
         <p className="auth-links">
           {mode === 'login' ? (
-            <a onClick={() => void forgot()}>Quên mật khẩu?</a>
+            <>
+              <a onClick={() => void forgot()}>Quên mật khẩu?</a>
+              <span className="sep">·</span>
+              <a onClick={() => switchMode('signup')}>Chưa có tài khoản</a>
+            </>
           ) : (
             <>
               <span style={{ color: 'var(--dim)' }}>Đã có tài khoản? </span>
@@ -225,7 +257,7 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           </span>
         </div>
 
-        <p className="auth-foot">VGC Browser · Antidetect Browser</p>
+        <p className="auth-foot">VGC Browser · Chỉ dùng nội bộ VGC Group</p>
       </div>
     </div>
   )

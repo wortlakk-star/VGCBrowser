@@ -2,6 +2,28 @@
 // These types are used across main, preload and renderer. Keep them runtime-agnostic
 // (no Node or DOM imports) so every layer can share them safely.
 
+/** Verdict of the internal-access check (admin list on vgcbrowser.com/quanly). */
+export interface LicenseStatus {
+  approved: boolean
+  /** Signed-in email the verdict is about ('' when signed out). */
+  email: string
+  /** 'ok' | 'recent-cache' (offline, approved <24 h ago) | 'not-approved' | 'expired' |
+   *  'unverified' (server unreachable, no fresh cache) | 'not-signed-in' | server reason. */
+  reason: string
+  /** Approval end date from the server (YYYY-MM-DD); null when permanent or unknown. */
+  expires: string | null
+}
+
+/** What `license:check` returns: the verdict plus main's decision about the open app. */
+export interface LicenseCheckResult extends LicenseStatus {
+  /** Main decided a signed-in user must leave the app now (positive denial, or the check
+   *  server unreachable with no approval in 24 h twice in a row). Running profiles are
+   *  being closed and their sessions synced. */
+  revoke: boolean
+  /** Profiles that were open for this account when the revoke fired (0 otherwise). */
+  closing: number
+}
+
 export type OsType = 'windows' | 'macos' | 'linux' | 'android'
 
 export type ProxyType = 'none' | 'http' | 'https' | 'socks5'

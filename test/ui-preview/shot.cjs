@@ -96,7 +96,13 @@ async function main() {
   await click('.nav > .nav-row:last-child'); await shot('modal-proxy-dark'); await evalJs('document.querySelector(".modal-backdrop")?.click()')
   await open('?theme=light'); await shot('app-light')
   await open('?theme=dark&screen=auth'); await shot('auth-dark')
+  await click('.auth-tab:last-child'); await shot('auth-dark-signup')
   await open('?theme=light&screen=auth'); await shot('auth-light')
+  await open('?theme=dark&screen=denied'); await shot('denied-dark')
+  await open('?theme=light&screen=denied'); await shot('denied-light')
+  await open('?theme=dark&screen=expired'); await shot('denied-expired-dark')
+  await open('?theme=dark&screen=denied&closing=2'); await shot('denied-closing-dark')
+  await open('?theme=dark&screen=offline'); await shot('denied-offline-dark')
 
   await send('Browser.close').catch(() => {})
   await Promise.race([new Promise((r) => proc.on('exit', r)), sleep(5000)])

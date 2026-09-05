@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Profile } from '../../shared/types'
-import { getCloud, pullCloudProfileList, pushCloudProfileList } from '../cloud'
+import { getCloud, pullCloudProfileList, pushCloudProfileList, signOutEverywhere } from '../cloud'
 import { Icon } from './Icon'
 
 const TEAM_SHARING_ENABLED = false
@@ -119,8 +119,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
   }
 
   const signOut = async (): Promise<void> => {
-    const c = await getCloud()
-    await c?.auth.signOut()
+    await signOutEverywhere(await getCloud())
     await window.vgc.cloudSetSession(null)
     setUser(null)
     setTeams([])

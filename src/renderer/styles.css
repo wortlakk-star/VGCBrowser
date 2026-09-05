@@ -2417,6 +2417,136 @@ code {
   background: rgba(15, 23, 42, 0.04);
 }
 
+/* ── Access denied (signed in, but not on the internal list) ────────────── */
+.auth-denied {
+  text-align: center;
+}
+.auth-denied .auth-brand {
+  margin-bottom: 18px;
+}
+.denied-badge {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  color: #ffb4b8;
+  background: rgba(255, 96, 104, 0.12);
+  border: 1px solid rgba(255, 96, 104, 0.3);
+  box-shadow: 0 10px 30px rgba(255, 96, 104, 0.12);
+}
+.denied-badge.expired {
+  color: #ffd27a;
+  background: rgba(255, 190, 80, 0.12);
+  border-color: rgba(255, 190, 80, 0.32);
+  box-shadow: 0 10px 30px rgba(255, 190, 80, 0.1);
+}
+.denied-badge.offline {
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-soft);
+  box-shadow: none;
+}
+:root[data-theme='light'] .denied-badge {
+  color: #c62834;
+  background: rgba(214, 48, 60, 0.08);
+  border-color: rgba(214, 48, 60, 0.22);
+}
+:root[data-theme='light'] .denied-badge.expired {
+  color: #9a6300;
+  background: rgba(230, 160, 20, 0.12);
+  border-color: rgba(230, 160, 20, 0.3);
+}
+:root[data-theme='light'] .denied-badge.offline {
+  background: rgba(15, 23, 42, 0.04);
+}
+.denied-title {
+  margin: 0 0 10px;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.denied-email {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 12px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-soft);
+  font-variant-numeric: tabular-nums;
+}
+.denied-email span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-theme='light'] .denied-email {
+  background: rgba(15, 23, 42, 0.04);
+}
+.denied-body {
+  margin: 0 auto 20px;
+  max-width: 34ch;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--dim);
+  text-wrap: pretty;
+}
+.auth-denied .auth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+/* Revoke in progress: main is closing the profiles that were open and syncing them. */
+.denied-closing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: -6px 0 16px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #ffd27a;
+  background: rgba(255, 190, 80, 0.1);
+  border: 1px solid rgba(255, 190, 80, 0.28);
+}
+:root[data-theme='light'] .denied-closing {
+  color: #8a5a00;
+  background: rgba(230, 160, 20, 0.1);
+}
+/* Sign-up tab notice: accounts are for pre-approved internal emails only. */
+.auth-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -6px 0 14px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+  background: rgba(61, 139, 255, 0.08);
+  border: 1px solid rgba(61, 139, 255, 0.22);
+}
+.auth-note .ic {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+:root[data-theme='light'] .auth-note {
+  background: rgba(61, 139, 255, 0.07);
+}
+
 /* ── Profile cards (legacy grid layout, kept) ───────────────────────────── */
 .profile-pane {
   display: flex;

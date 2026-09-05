@@ -27,10 +27,18 @@ import type {
   ProxyConfig,
   ProxyProviderId,
   SavedProxy,
-  UpdateStatus
+  UpdateStatus,
+  LicenseCheckResult
 } from '../shared/types'
 
 const api = {
+  // ── Internal-access gate: only emails on the admin list (vgcbrowser.com/quanly) may use
+  // the app. Main checks the email of the session IT validated; the renderer cannot pick one.
+  licenseCheck: (): Promise<LicenseCheckResult> => ipcRenderer.invoke('license:check'),
+  /** Sign-up pre-check: is this email already on the internal list? */
+  licensePrecheck: (email: string): Promise<{ approved: boolean; reason: string }> =>
+    ipcRenderer.invoke('license:precheck', email),
+
   listProfiles: (): Promise<Profile[]> => ipcRenderer.invoke('profiles:list'),
 
   runtimeStates: (): Promise<ProfileRuntimeState[]> =>

@@ -20,6 +20,22 @@ async function main(): Promise<void> {
     root.render(<AuthScreen onAuthed={async () => undefined} />)
     return
   }
+  if (screen === 'denied' || screen === 'expired' || screen === 'offline') {
+    const { AccessDenied } = await import('../../src/renderer/components/AccessDenied')
+    const reason = screen === 'expired' ? 'expired' : screen === 'offline' ? 'unverified' : 'not-approved'
+    const license = {
+      approved: false,
+      email: 'apex@imc-marketing.com',
+      reason,
+      expires: screen === 'expired' ? '2026-09-01' : null,
+      revoke: reason !== 'unverified',
+      closing: Number(params.get('closing') ?? 0)
+    }
+    root.render(
+      <AccessDenied license={license} onRecheck={async () => license} onSignOut={async () => undefined} />
+    )
+    return
+  }
   const { default: App } = await import('../../src/renderer/App')
   root.render(
     <React.StrictMode>

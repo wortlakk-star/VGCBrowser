@@ -31,7 +31,8 @@ import {
   pullCloudProxies,
   pushCloudProxies,
   deleteCloudProfile,
-  applyCloudTombstones
+  applyCloudTombstones,
+  signOutEverywhere
 } from './cloud'
 
 export default function App(): JSX.Element {
@@ -105,8 +106,7 @@ export default function App(): JSX.Element {
 
   // Sign out → Gate's auth listener swaps back to the login screen (= switch account).
   const signOut = useCallback(async () => {
-    const c = await getCloud()
-    await c?.auth.signOut()
+    await signOutEverywhere(await getCloud())
     await window.vgc.cloudSetSession(null)
   }, [])
 

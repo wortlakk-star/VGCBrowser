@@ -143,6 +143,8 @@ export function createMockVgc(): Record<string, unknown> {
     saveSettings: async (patch: Partial<AppSettings>) => ({ ...settings, ...patch }),
     getVersion: async () => '2.1.72',
     versionGate: async () => ({ blocked: false, current: '2.1.72', min: '2.1.0', downloadUrl: '' }),
+    licenseCheck: async () => ({ approved: true, email: 'admin@vgcgroup.vn', reason: 'ok', expires: null, revoke: false, closing: 0 }),
+    licensePrecheck: async () => ({ approved: true, reason: 'ok' }),
     getUpdateStatus: async () => ({ phase: 'idle' }),
     engineInstalled: async () => true,
     cloudEncryptionStatus: async () => ({ configured: true, unlocked: true }),

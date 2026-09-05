@@ -70,7 +70,7 @@ import { getAccountSecret } from './account-secret'
 import { dbg } from './dbg'
 import { ensureNativeGuardExtension } from './webrtc-guard'
 import { getCloudSession, getCloudEmail } from './session'
-import { refreshLicense, isLicensed, licenseState } from './license'
+import { refreshLicense } from './license'
 import { cohereFingerprint, hostOs, sanitizeStartUrls } from './profiles-service'
 import { requireProfileId } from './validation'
 import {
@@ -881,7 +881,10 @@ async function checkKicked(id: string): Promise<void> {
  * Called on app quit: stop every running profile and upload each one's session to
  * the cloud BEFORE the app exits. main awaits this so nothing is lost on close.
  */
-async function stopRunningAndSync(quitting: boolean): Promise<void> {
+async function stopRunningAndSync(
+  quitting: boolean,
+  savingMessage = 'Đang lưu phiên trước khi đổi tài khoản…'
+): Promise<void> {
   if (quitting) isQuitting = true
   accountTransitioning = true
   const expectedUid = currentAccountUid()
@@ -928,9 +931,7 @@ async function stopRunningAndSync(quitting: boolean): Promise<void> {
               broadcastData({
                 id,
                 phase: 'upload',
-                message: quitting
-                  ? 'Đang lưu phiên lên cloud trước khi thoát…'
-                  : 'Đang lưu phiên trước khi đổi tài khoản…'
+                message: quitting ? 'Đang lưu phiên lên cloud trước khi thoát…' : savingMessage
               })
               const res = await syncDataOnClose(id, entry)
               await settleLockAfterClose(id, entry, res)
@@ -967,6 +968,18 @@ export function stopAllAndSync(): Promise<void> {
 
 export function stopAllForAccountSwitch(): Promise<void> {
   return stopRunningAndSync(false)
+}
+
+/** The admin revoked the signed-in email: close every engine and sync its session so
+ *  nothing is lost if the email is approved again later. */
+export function stopAllForRevoke(): Promise<void> {
+  return stopRunningAndSync(false, 'Quyền truy cập bị thu hồi — đang lưu phiên lên cloud…')
+}
+
+/** Ids of the profiles currently running for the signed-in account. */
+export function runningProfileIds(): string[] {
+  const uid = currentAccountUid()
+  return [...running].filter(([, entry]) => entry.accountUid === uid).map(([id]) => id)
 }
 
 /**
@@ -1247,12 +1260,15 @@ async function launchProfileImpl(
   // profile. Re-checked here so a revoke takes effect on the next open. Network blip →
   // falls back to the last-known cached decision (see license.ts), so it never locks out
   // an already-approved user; a never-approved / signed-out email stays blocked.
-  await refreshLicense(getCloudEmail())
-  if (!isLicensed()) {
-    const st = licenseState()
-    const msg = st.email
-      ? `Tài khoản "${st.email}" chưa được cấp phép dùng VGC Browser. Liên hệ admin để kích hoạt.`
-      : 'Vui lòng ĐĂNG NHẬP bằng tài khoản đã được admin cấp phép để mở profile.'
+  const lic = await refreshLicense(getCloudEmail())
+  if (!lic.approved) {
+    const msg = !lic.email
+      ? 'Vui lòng ĐĂNG NHẬP bằng tài khoản đã được admin cấp phép để mở profile.'
+      : lic.reason === 'expired'
+        ? `Quyền dùng VGC Browser của "${lic.email}" đã hết hạn. Liên hệ quản trị viên để gia hạn.`
+        : lic.reason === 'not-approved'
+          ? `Tài khoản "${lic.email}" chưa được cấp phép dùng VGC Browser. Liên hệ quản trị viên để kích hoạt.`
+          : 'Không kiểm tra được quyền truy cập với máy chủ VGC (mạng hoặc máy chủ đang lỗi). Thử lại sau.'
     broadcast({ id, status: 'error', error: msg })
     throw new Error(msg)
   }

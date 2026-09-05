@@ -431,3 +431,14 @@ export async function pushCloudProxies(): Promise<number> {
   if (error) throw new Error(error.message)
   return rows.length
 }
+
+/**
+ * Sign out for real even when the auth server cannot be reached: supabase-js returns
+ * `{error}` (and KEEPS the stored session + refresh timer) on a network failure, so a
+ * second, local-only sign-out is needed or the user is silently signed back in later.
+ */
+export async function signOutEverywhere(c: SupabaseClient | null): Promise<void> {
+  if (!c) return
+  const { error } = await c.auth.signOut()
+  if (error) await c.auth.signOut({ scope: 'local' }).catch(() => undefined)
+}

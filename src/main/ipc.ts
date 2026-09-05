@@ -5,12 +5,14 @@
 
 import { ipcMain, dialog, BrowserWindow, app, shell, type IpcMainInvokeEvent } from 'electron'
 import { checkVersionGate } from './version-gate'
+import { refreshLicense, precheckEmail, shouldRevoke } from './license'
 import { randomUUID } from 'crypto'
 import { constants as fsConstants, promises as fs } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import type {
   CloudSession,
+  LicenseCheckResult,
   Cookie,
   CreateProfileInput,
   OsType,
@@ -62,6 +64,8 @@ import {
   cookieRobot,
   syncTimezonesToProxies,
   stopAllForAccountSwitch,
+  stopAllForRevoke,
+  runningProfileIds,
   manualUploadProfileData,
   manualDownloadProfileData
 } from './profile-manager'
@@ -78,6 +82,7 @@ import { runWarmup } from './rpa'
 import { getSchedule, setSchedule } from './warmup-scheduler'
 import {
   commitValidatedCloudSession,
+  getCloudEmail,
   getCloudSession,
   validateCloudSession
 } from './session'
@@ -766,6 +771,36 @@ export function registerIpc(): void {
     const s = await regenerateToken()
     await restartApiServer()
     return s
+  })
+
+  // ── Internal-access gate (admin list at vgcbrowser.com/quanly) ──
+  // The email comes from the session main validated, never from the renderer. When the
+  // server POSITIVELY revokes a signed-in user, running profiles are closed (with their
+  // session synced to the cloud) so the kick is real, not just a screen swap.
+  handle('license:check', async (): Promise<LicenseCheckResult> => {
+    const status = await refreshLicense(getCloudEmail())
+    const revokedUid = getCloudSession()?.uid ?? null
+    const revoke = Boolean(revokedUid) && shouldRevoke(status)
+    let closing = 0
+    if (revoke && revokedUid && !accountTransitionInProgress()) {
+      closing = runningProfileIds().length
+      // Serialised like a sign-out: waits for in-flight close saves, blocks new launches
+      // meanwhile, and only closes engines if the revoked account is still the one signed in.
+      void runAccountTransition(async () => {
+        if (getCloudSession()?.uid === revokedUid) await stopAllForRevoke()
+      }).catch(() => {})
+    }
+    return { ...status, revoke, closing }
+  })
+  // Sign-up pre-check. Throttled: the answer distinguishes "on the list" from "not", so an
+  // outsider with the installer must not be able to sweep a company's address book with it.
+  const precheckWindow: number[] = []
+  handle('license:precheck', (_e, email: unknown) => {
+    const now = Date.now()
+    while (precheckWindow.length && now - precheckWindow[0] > 60_000) precheckWindow.shift()
+    if (precheckWindow.length >= 6) return { approved: false, reason: 'rate-limited' }
+    precheckWindow.push(now)
+    return precheckEmail(email)
   })
 
   // ── App version + auto-update ──
