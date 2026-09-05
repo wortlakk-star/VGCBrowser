@@ -323,8 +323,12 @@ export interface CloudSession {
 /** Progress of syncing a profile's browser data (user-data-dir) to/from cloud. */
 export interface DataSyncState {
   id: string
-  phase: 'zip' | 'upload' | 'download' | 'extract' | 'done' | 'error'
+  phase: 'zip' | 'upload' | 'download' | 'extract' | 'done' | 'error' | 'warn'
   message?: string
+  /** Keep this message on screen (≈15 s, not replaced by ordinary progress toasts) — used for
+   *  outcomes the user MUST see: a session that was not saved, a stale session opened, a
+   *  takeover by another machine, an open without cross-machine protection. */
+  sticky?: boolean
 }
 
 export type ProfileStatus = 'stopped' | 'starting' | 'running' | 'error'

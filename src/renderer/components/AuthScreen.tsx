@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from 'react'
 import { getCloud } from '../cloud'
 import logo from '../assets/logo.png'
+import { Icon } from './Icon'
 
 /** Map common Supabase auth errors to Vietnamese. */
 function viErr(m: string): string {
@@ -115,6 +116,12 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
 
   return (
     <div className="auth-screen">
+      <div className="auth-bg" aria-hidden="true">
+        <div className="orb o1" />
+        <div className="orb o2" />
+        <div className="orb o3" />
+        <div className="grid" />
+      </div>
       <div className="auth-card">
         <div className="auth-brand">
           <img className="auth-logo" src={logo} alt="VGC" />
@@ -138,40 +145,52 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
         </div>
 
         {mode === 'signup' && (
+          <div className="auth-input">
+            <Icon name="user" size={17} />
+            <input
+              className="auth-field"
+              placeholder="Tên hiển thị (tuỳ chọn)"
+              value={name}
+              onChange={(e) => setName(e.target.value.slice(0, 160))}
+              onKeyDown={onKey}
+            />
+          </div>
+        )}
+        <div className="auth-input">
+          <Icon name="mail" size={17} />
           <input
             className="auth-field"
-            placeholder="Tên hiển thị (tuỳ chọn)"
-            value={name}
-          onChange={(e) => setName(e.target.value.slice(0, 160))}
+            type="email"
+            placeholder="Địa chỉ email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value.slice(0, 320))}
             onKeyDown={onKey}
+            autoFocus
           />
-        )}
-        <input
-          className="auth-field"
-          type="email"
-          placeholder="Địa chỉ email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value.slice(0, 320))}
-          onKeyDown={onKey}
-          autoFocus
-        />
-        <input
-          className="auth-field"
-          type="password"
-          placeholder="Mật khẩu"
-          value={pass}
-          onChange={(e) => setPass(e.target.value.slice(0, 1024))}
-          onKeyDown={onKey}
-        />
-        {mode === 'signup' && (
+        </div>
+        <div className="auth-input">
+          <Icon name="lock" size={17} />
           <input
             className="auth-field"
             type="password"
-            placeholder="Nhập lại mật khẩu"
-            value={pass2}
-            onChange={(e) => setPass2(e.target.value.slice(0, 1024))}
+            placeholder="Mật khẩu"
+            value={pass}
+            onChange={(e) => setPass(e.target.value.slice(0, 1024))}
             onKeyDown={onKey}
           />
+        </div>
+        {mode === 'signup' && (
+          <div className="auth-input">
+            <Icon name="lock" size={17} />
+            <input
+              className="auth-field"
+              type="password"
+              placeholder="Nhập lại mật khẩu"
+              value={pass2}
+              onChange={(e) => setPass2(e.target.value.slice(0, 1024))}
+              onKeyDown={onKey}
+            />
+          </div>
         )}
 
         <button className="auth-btn" onClick={() => void submit()} disabled={busy}>
@@ -191,14 +210,22 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
           )}
         </p>
 
-        <p className="auth-foot">
-          <img
-            src={logo}
-            alt=""
-            style={{ width: 14, height: 14, verticalAlign: 'middle', marginRight: 4 }}
-          />
-          VGC Browser · Antidetect Browser
-        </p>
+        <div className="auth-badges">
+          <span>
+            <Icon name="fingerprint" size={13} />
+            Vân tay native
+          </span>
+          <span>
+            <Icon name="cloud" size={13} />
+            Đồng bộ đa máy
+          </span>
+          <span>
+            <Icon name="shield" size={13} />
+            Mã hoá đầu-cuối
+          </span>
+        </div>
+
+        <p className="auth-foot">VGC Browser · Antidetect Browser</p>
       </div>
     </div>
   )

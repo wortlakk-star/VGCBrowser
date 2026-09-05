@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { WarmSchedule } from '../../shared/types'
+import { Icon } from './Icon'
 
 interface Props {
   /** Currently-selected profile ids — offered as the set to schedule. */
@@ -30,7 +31,7 @@ export function WarmScheduleModal({ selectedIds, onClose }: Props): JSX.Element 
         minutes: sch.minutes
       })
       setSch(next)
-      setMsg('✓ Đã lưu.')
+      setMsg('Đã lưu.')
     } finally {
       setSaving(false)
     }
@@ -50,7 +51,7 @@ export function WarmScheduleModal({ selectedIds, onClose }: Props): JSX.Element 
         <header className="modal-head">
           <h2>Hẹn giờ tự nuôi acc</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
         <div className="modal-body">

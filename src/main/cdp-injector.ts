@@ -19,6 +19,9 @@ export interface InjectorHandle {
   getCookies: () => Promise<Cookie[]>
   /** URLs of the currently-open page tabs (via CDP, no HTTP /json endpoint). */
   getOpenTabs: () => Promise<string[]>
+  /** Ask the browser to shut down GRACEFULLY over CDP (flushes cookies/storage). Resolves once
+   *  the request was sent or the connection is gone; the caller escalates on a timer. */
+  close: () => Promise<void>
   dispose: () => void
 }
 
@@ -307,6 +310,12 @@ export async function attachInjector(
       } catch {
         return []
       }
+    },
+    close: async () => {
+      await Promise.race([
+        conn.send('Browser.close').catch(() => undefined),
+        new Promise<void>((r) => setTimeout(r, 5000))
+      ])
     },
     dispose: () => conn.close()
   }

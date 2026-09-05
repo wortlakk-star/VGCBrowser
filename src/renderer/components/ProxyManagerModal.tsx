@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { Profile, ProxyProviderId, ProxyType, SavedProxy } from '../../shared/types'
 import { deleteCloudProxy } from '../cloud'
 import { parseLine } from '../lib/proxy-parse'
+import { Icon } from './Icon'
 
 // Providers that support "Tạo proxy qua API" in this screen.
 const PROVIDERS: Array<[ProxyProviderId, string]> = [
@@ -125,7 +126,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         genProvider === 'evomi' ? genProduct : undefined
       )
       setBalance(b)
-      setMsg(`✓ ${providerName(genProvider)} còn ${b.availableGb.toFixed(2)} GB traffic.`)
+      setMsg(`${providerName(genProvider)} còn ${b.availableGb.toFixed(2)} GB traffic.`)
     } catch (e) {
       setMsg(`Lỗi xem GB: ${(e as Error).message}`)
     } finally {
@@ -223,7 +224,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         label: genLabel.trim() || undefined
       })
       await window.vgc.saveManyProxies(created)
-      setMsg(`✓ Đã tạo ${created.length} proxy ${providerName(genProvider)} và thêm vào pool.`)
+      setMsg(`Đã tạo ${created.length} proxy ${providerName(genProvider)} và thêm vào pool.`)
       await refresh()
     } catch (e) {
       setMsg(`Lỗi: ${(e as Error).message}`)
@@ -295,7 +296,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     await Promise.all(Array.from({ length: Math.min(CONC, list.length) }, () => worker()))
     await window.vgc.saveManyProxies(out)
     const ok = out.filter((p) => p.lastStatus === 'ok').length
-    setMsg(`✓ Xong: ${ok} sống / ${out.length - ok} lỗi`)
+    setMsg(`Xong: ${ok} sống / ${out.length - ok} lỗi`)
     await refresh()
   }
 
@@ -322,7 +323,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
         }
       }
       await window.vgc.saveProxy({ ...proxy, assignedTo: profileId || '' })
-      setMsg(profileId ? `✓ Đã gán "${proxy.label}" cho "${profileName(profileId)}"` : 'Đã bỏ gán.')
+      setMsg(profileId ? `Đã gán "${proxy.label}" cho "${profileName(profileId)}"` : 'Đã bỏ gán.')
     } catch (e) {
       setMsg(`Lỗi gán proxy: ${(e as Error).message}`)
     }
@@ -370,14 +371,14 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     setScanning(false)
     setDeadProfiles(dead)
     if (!dead.length) {
-      setMsg(`✓ Đã check ${withProxy.length} profile — TẤT CẢ proxy còn SỐNG.`)
+      setMsg(`Đã check ${withProxy.length} profile — TẤT CẢ proxy còn SỐNG.`)
       return
     }
     const show = dead.slice(0, 25).map((d) => `• ${d.name}`).join('\n')
     setMsg(
-      `⚠️ ${dead.length}/${withProxy.length} profile proxy CHẾT:\n${show}` +
+      `${dead.length}/${withProxy.length} profile proxy CHẾT:\n${show}` +
         (dead.length > 25 ? `\n…và ${dead.length - 25} nữa` : '') +
-        `\n\n→ Bấm "🔧 Thay mới đồng loạt (${dead.length})" để đổi hết sang proxy rảnh cùng nước, cùng loại.`
+        `\n\n→ Bấm "Thay mới đồng loạt (${dead.length})" để đổi hết sang proxy rảnh cùng nước, cùng loại.`
     )
   }
 
@@ -461,7 +462,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
 
     setDeadProfiles([])
     await refresh()
-    let m = `✓ Đã thay ${replaced.length}/${deadList.length} profile.`
+    let m = `Đã thay ${replaced.length}/${deadList.length} profile.`
     if (replaced.length)
       m +=
         '\n• ' +
@@ -477,7 +478,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
   // Replace the proxies found DEAD by the live scan (deadProfiles).
   const replaceDeadAll = async (): Promise<void> => {
     if (!deadProfiles.length) {
-      setMsg('Chưa có profile chết — bấm "🔎 Check proxy tất cả profile" trước.')
+      setMsg('Chưa có profile chết — bấm "Check proxy tất cả profile" trước.')
       return
     }
     if (
@@ -592,16 +593,16 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 1000, maxWidth: '96vw' }}>
         <header className="modal-head">
-          <h2>📡 Pool Proxy IP</h2>
+          <h2>Pool Proxy IP</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
         <div className="modal-body">
           <section className="card">
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <h3 style={{ margin: 0 }}>⚡ Lấy proxy qua API</h3>
+              <h3 style={{ margin: 0 }}>Lấy proxy qua API</h3>
               <select
                 className="group-select"
                 value={genProvider}
@@ -631,7 +632,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               {genProvider !== 'cliproxy' && (
                 <>
                   <button className="btn" onClick={() => void checkBalance()} disabled={loadingBal}>
-                    {loadingBal ? '⏳ Đang kiểm tra…' : '📊 Xem GB còn lại'}
+                    {loadingBal ? 'Đang kiểm tra…' : 'Xem GB còn lại'}
                   </button>
                   {balance && (
                     <span style={{ color: 'var(--green)', fontWeight: 600 }}>
@@ -761,7 +762,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                 style={inp(140)}
               />
               <button className="btn primary" disabled={generating} onClick={() => void generate()}>
-                {generating ? 'Đang tạo…' : '⚡ Tạo proxy'}
+                {generating ? 'Đang tạo…' : 'Tạo proxy'}
               </button>
             </div>
             <p className="hint">
@@ -805,7 +806,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                 <option value="https">HTTPS</option>
               </select>
               <button className="btn primary" onClick={importPaste}>
-                ↧ Import vào pool
+                Import vào pool
               </button>
             </div>
             <p className="hint">
@@ -826,9 +827,9 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
               <button
                 className="btn"
                 title="Đồng bộ: cập nhật proxy nào đang dùng cho profile nào"
-                onClick={() => void refresh().then(() => setMsg('✓ Đã đồng bộ proxy với profile.'))}
+                onClick={() => void refresh().then(() => setMsg('Đã đồng bộ proxy với profile.'))}
               >
-                🔄 Đồng bộ profile
+                Đồng bộ profile
               </button>
               {erroredCount > 0 && (
                 <button
@@ -836,7 +837,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                   title="Thay proxy mới cho MỌI profile đang báo 'proxy lỗi' — không cần check lại"
                   onClick={() => void replaceAllErrorProfiles()}
                 >
-                  🔧 Thay proxy {erroredCount} profile lỗi
+                  Thay proxy {erroredCount} profile lỗi
                 </button>
               )}
               <button
@@ -845,7 +846,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                 onClick={() => void scanDeadProfiles()}
                 disabled={scanning}
               >
-                {scanning ? '⏳ Đang check…' : '🔎 Check lại proxy tất cả'}
+                {scanning ? 'Đang check…' : 'Check lại proxy tất cả'}
               </button>
               {deadProfiles.length > 0 && (
                 <button
@@ -853,12 +854,12 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                   title="Đổi hết proxy chết sang proxy rảnh cùng nước, cùng loại còn sống"
                   onClick={() => void replaceDeadAll()}
                 >
-                  🔧 Thay mới đồng loạt ({deadProfiles.length})
+                  Thay mới đồng loạt ({deadProfiles.length})
                 </button>
               )}
-              <button className="btn" onClick={delErrors}>🧹 Xoá proxy lỗi</button>
-              <button className="btn" onClick={dedupe}>⎘ Xoá trùng lặp</button>
-              <button className="btn danger" onClick={delSelected}>🗑 Xoá đã chọn</button>
+              <button className="btn" onClick={delErrors}>Xoá proxy lỗi</button>
+              <button className="btn" onClick={dedupe}>Xoá trùng lặp</button>
+              <button className="btn danger" onClick={delSelected}>Xoá đã chọn</button>
               <button className="btn" onClick={tickAll}>Tích tất cả</button>
               <button className="btn ghost" onClick={untick}>Bỏ tích</button>
             </div>
@@ -924,7 +925,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                         <td className="mono small">{p.type}</td>
                         <td className="small">
                           {p.assignedTo ? (
-                            <span style={{ color: 'var(--accent)' }}>● {profileName(p.assignedTo)}</span>
+                            <span style={{ color: 'var(--accent)' }}>{profileName(p.assignedTo)}</span>
                           ) : (
                             <span className="dim">Trống</span>
                           )}
@@ -937,7 +938,7 @@ export function ProxyManagerModal({ onClose }: { onClose: () => void }): JSX.Ele
                               {p.lastIp} · {(p.lastCountryCode || '').toUpperCase()} {p.lastCountry} · {p.latencyMs}ms
                             </span>
                           ) : p.lastStatus === 'error' ? (
-                            <span style={{ color: 'var(--red)' }}>✗ lỗi</span>
+                            <span style={{ color: 'var(--red)' }}>lỗi</span>
                           ) : (
                             <button className="btn" onClick={() => void checkOne(p)}>Kiểm tra</button>
                           )}

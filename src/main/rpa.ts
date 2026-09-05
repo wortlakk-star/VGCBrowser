@@ -51,7 +51,9 @@ export async function runWarmup(
 
   emit('launch', 'Đang mở profile…')
   try {
-    await launchProfile(profileId, { automation: true })
+    // steal:false — an unattended warm-up must never kick a machine where the user is
+    // actually working in this profile (it is skipped instead and retried next tick).
+    await launchProfile(profileId, { automation: true, steal: false })
     const conn = getAutomationConn(profileId)
     if (!conn) throw new Error('Không mở được kênh điều khiển (CDP)')
     const page = await attachPage(conn)

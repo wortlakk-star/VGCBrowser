@@ -64,7 +64,7 @@ export async function gmailLogin(
   emit('launch', PHASE_MSG.launch)
   dbg(`[gmail-login ${task.email}] start (profile ${profileId})`)
   try {
-    await launchProfile(profileId, { automation: true })
+    await launchProfile(profileId, { automation: true, steal: false })
     const conn: CdpConnection | null = getAutomationConn(profileId)
     dbg(`[gmail-login ${task.email}] launched — automationConn=${conn ? 'ok' : 'NULL'}`)
     if (!conn) throw new Error('Không mở được kênh điều khiển (CDP pipe)')

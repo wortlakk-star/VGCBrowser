@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import type { UpdateStatus } from '../../shared/types'
+import { Icon } from './Icon'
 
 const inp: CSSProperties = {
   width: '100%',
@@ -24,21 +25,21 @@ function updateLabel(s: UpdateStatus | null): string {
   if (!s) return ''
   switch (s.phase) {
     case 'checking':
-      return '⏳ Đang kiểm tra cập nhật…'
+      return 'Đang kiểm tra cập nhật…'
     case 'available':
       return s.manualDownloadUrl
-        ? `⬇ Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — bấm "Tải về" để cập nhật.`
-        : `⬇ Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — đang tải…`
+        ? `Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — bấm "Tải về" để cập nhật.`
+        : `Có bản mới ${s.newVersion ? `v${s.newVersion}` : ''} — đang tải…`
     case 'downloading':
-      return `⬇ Đang tải bản mới… ${s.percent ?? 0}%`
+      return `Đang tải bản mới… ${s.percent ?? 0}%`
     case 'downloaded':
-      return `✅ Đã tải xong ${s.newVersion ? `v${s.newVersion}` : 'bản mới'} — bấm "Khởi động lại để cập nhật".`
+      return `Đã tải xong ${s.newVersion ? `v${s.newVersion}` : 'bản mới'} — bấm "Khởi động lại để cập nhật".`
     case 'up-to-date':
-      return '✓ Bạn đang dùng phiên bản mới nhất.'
+      return 'Bạn đang dùng phiên bản mới nhất.'
     case 'error':
-      return `⚠ Lỗi kiểm tra cập nhật: ${s.message ?? ''}`
+      return `Lỗi kiểm tra cập nhật: ${s.message ?? ''}`
     case 'dev':
-      return `ℹ ${s.message ?? 'Chỉ chạy ở bản đã cài đặt.'}`
+      return `${s.message ?? 'Chỉ chạy ở bản đã cài đặt.'}`
     default:
       return ''
   }
@@ -85,17 +86,17 @@ export function SettingsModal({
     await window.vgc.saveProviderCreds({
       iproyal: { username: ipUser.trim(), password: ipPass.trim(), apiToken: ipToken.trim() }
     })
-    setIpMsg('✓ Đã lưu tài khoản iProyal.')
+    setIpMsg('Đã lưu tài khoản iProyal.')
   }
 
   const saveEvomi = async (): Promise<void> => {
     await window.vgc.saveProviderCreds({ evomi: { apiKey: evoKey.trim() } })
-    setEvoMsg('✓ Đã lưu API key Evomi.')
+    setEvoMsg('Đã lưu API key Evomi.')
   }
 
   const saveCapsolver = async (): Promise<void> => {
     await window.vgc.saveSettings({ capsolverApiKey: capKey.trim() })
-    setCapMsg(capKey.trim() ? '✓ Đã lưu API key CapSolver.' : '✓ Đã xoá API key CapSolver.')
+    setCapMsg(capKey.trim() ? 'Đã lưu API key CapSolver.' : 'Đã xoá API key CapSolver.')
   }
 
   const saveCloudPassphrase = async (): Promise<void> => {
@@ -103,16 +104,16 @@ export function SettingsModal({
       await window.vgc.cloudSetPassphrase(cloudPassphrase)
       setCloudPassphrase('')
       setCloudEncryptionConfigured(true)
-      setCloudEncryptionMsg('✓ Khoá cloud đã được bọc an toàn trên thiết bị này.')
+      setCloudEncryptionMsg('Khoá cloud đã được bọc an toàn trên thiết bị này.')
     } catch (error) {
-      setCloudEncryptionMsg(`⚠ ${error instanceof Error ? error.message : String(error)}`)
+      setCloudEncryptionMsg(`${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
   const saveCliproxy = async (): Promise<void> => {
     const port = parseInt(cpPort.trim(), 10)
     if (!cpUser.trim() || !cpPass.trim() || !port) {
-      setCpMsg('⚠ Cần nhập host, port, username, password (xem ở dash.cliproxy.com).')
+      setCpMsg('Cần nhập host, port, username, password (xem ở dash.cliproxy.com).')
       return
     }
     await window.vgc.saveProviderCreds({
@@ -124,22 +125,22 @@ export function SettingsModal({
         state: cpState.trim() || undefined
       }
     })
-    setCpMsg('✓ Đã lưu tài khoản Cliproxy.')
+    setCpMsg('Đã lưu tài khoản Cliproxy.')
   }
 
   const saveApi = async (): Promise<void> => {
     const port = Number(apiPort)
     if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-      setApiMsg('⚠ Port phải nằm trong khoảng 1024–65535.')
+      setApiMsg('Port phải nằm trong khoảng 1024–65535.')
       return
     }
     try {
       const saved = await window.vgc.saveSettings({ apiEnabled, apiPort: port })
       setApiEnabled(saved.apiEnabled)
       setApiPort(String(saved.apiPort))
-      setApiMsg(saved.apiEnabled ? '✓ API cục bộ đã bật.' : '✓ API cục bộ đã tắt.')
+      setApiMsg(saved.apiEnabled ? 'API cục bộ đã bật.' : 'API cục bộ đã tắt.')
     } catch (error) {
-      setApiMsg(`⚠ ${error instanceof Error ? error.message : String(error)}`)
+      setApiMsg(`${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -147,9 +148,9 @@ export function SettingsModal({
     try {
       const saved = await window.vgc.regenerateApiToken()
       setApiToken(saved.apiToken)
-      setApiMsg('✓ Đã tạo token mới; token cũ không còn hiệu lực.')
+      setApiMsg('Đã tạo token mới; token cũ không còn hiệu lực.')
     } catch (error) {
-      setApiMsg(`⚠ ${error instanceof Error ? error.message : String(error)}`)
+      setApiMsg(`${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -201,9 +202,9 @@ export function SettingsModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
         <header className="modal-head">
-          <h2>⚙ Cài đặt</h2>
+          <h2>Cài đặt</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
@@ -211,17 +212,17 @@ export function SettingsModal({
           <section className="card">
             <h3>Tài khoản</h3>
             <p className="hint" style={{ marginTop: 0 }}>
-              👤 {accountEmail || 'Đang đăng nhập…'}
+              {accountEmail || 'Đang đăng nhập…'}
             </p>
             <div className="proxy-check">
               <button className="btn" onClick={onOpenCloud}>
-                ☁ Cloud
+                Cloud
               </button>
               <button className="btn" onClick={onSignOut}>
-                🔁 Đổi tài khoản
+                Đổi tài khoản
               </button>
               <button className="btn danger" onClick={onSignOut}>
-                ⎋ Đăng xuất
+                Đăng xuất
               </button>
             </div>
           </section>
@@ -308,19 +309,19 @@ export function SettingsModal({
                 className={`seg-btn ${theme === 'dark' ? 'active' : ''}`}
                 onClick={() => onSetTheme('dark')}
               >
-                🌙 Tối
+                Tối
               </button>
               <button
                 className={`seg-btn ${theme === 'light' ? 'active' : ''}`}
                 onClick={() => onSetTheme('light')}
               >
-                ☀ Sáng
+                Sáng
               </button>
             </div>
           </section>
 
           <section className="card">
-            <h3>🌐 Nhà cung cấp Proxy — iProyal</h3>
+            <h3>Nhà cung cấp Proxy — iProyal</h3>
             <p className="hint" style={{ marginTop: 0 }}>
               Nhập 1 lần ở đây, sau đó vào <b>Proxy</b> chỉ cần bấm <b>Tạo proxy</b>. Lấy{' '}
               <b>API token</b> tại{' '}
@@ -358,7 +359,7 @@ export function SettingsModal({
               </div>
               <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
                 <button className="btn primary" onClick={() => void saveIproyal()}>
-                  💾 Lưu tài khoản iProyal
+                  Lưu tài khoản iProyal
                 </button>
                 {ipMsg && (
                   <span style={{ color: 'var(--green)', fontSize: 12 }}>{ipMsg}</span>
@@ -368,7 +369,7 @@ export function SettingsModal({
           </section>
 
           <section className="card">
-            <h3>🌐 Nhà cung cấp Proxy — Evomi</h3>
+            <h3>Nhà cung cấp Proxy — Evomi</h3>
             <p className="hint" style={{ marginTop: 0 }}>
               Chỉ cần nhập <b>API key</b> — lấy tại{' '}
               <a
@@ -391,7 +392,7 @@ export function SettingsModal({
               />
               <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
                 <button className="btn primary" onClick={() => void saveEvomi()}>
-                  💾 Lưu API key Evomi
+                  Lưu API key Evomi
                 </button>
                 {evoMsg && (
                   <span style={{ color: 'var(--green)', fontSize: 12 }}>{evoMsg}</span>
@@ -401,7 +402,7 @@ export function SettingsModal({
           </section>
 
           <section className="card">
-            <h3>🌐 Nhà cung cấp Proxy — Cliproxy</h3>
+            <h3>Nhà cung cấp Proxy — Cliproxy</h3>
             <p className="hint" style={{ marginTop: 0 }}>
               Nhập <b>host</b>, <b>port</b>, <b>username</b>, <b>password</b> — lấy tại{' '}
               <a
@@ -450,7 +451,7 @@ export function SettingsModal({
               />
               <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
                 <button className="btn primary" onClick={() => void saveCliproxy()}>
-                  💾 Lưu tài khoản Cliproxy
+                  Lưu tài khoản Cliproxy
                 </button>
                 {cpMsg && <span style={{ color: 'var(--green)', fontSize: 12 }}>{cpMsg}</span>}
               </div>
@@ -458,7 +459,7 @@ export function SettingsModal({
           </section>
 
           <section className="card">
-            <h3>🧩 Giải Captcha tự động — CapSolver</h3>
+            <h3>Giải Captcha tự động — CapSolver</h3>
             <p className="hint" style={{ marginTop: 0 }}>
               Dán API key từ{' '}
               <a
@@ -481,7 +482,7 @@ export function SettingsModal({
               />
               <div className="proxy-check" style={{ alignItems: 'center', gap: 10 }}>
                 <button className="btn primary" onClick={() => void saveCapsolver()}>
-                  💾 Lưu API key CapSolver
+                  Lưu API key CapSolver
                 </button>
                 {capMsg && <span style={{ color: 'var(--green)', fontSize: 12 }}>{capMsg}</span>}
               </div>
@@ -500,7 +501,7 @@ export function SettingsModal({
                 </button>
               ) : manual ? (
                 <button className="btn primary" onClick={() => void window.vgc.openUpdateDownload()}>
-                  ⬇ Tải về để cập nhật
+                  Tải về để cập nhật
                 </button>
               ) : (
                 <button
@@ -508,7 +509,7 @@ export function SettingsModal({
                   disabled={checking}
                   onClick={() => void window.vgc.checkForUpdate()}
                 >
-                  {checking ? 'Đang xử lý…' : '⬇ Kiểm tra cập nhật'}
+                  {checking ? 'Đang xử lý…' : 'Kiểm tra cập nhật'}
                 </button>
               )}
             </div>

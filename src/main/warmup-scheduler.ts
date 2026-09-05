@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { runWarmup } from './rpa'
+import { isProfileRunning } from './profile-manager'
 import { getProfile } from './store'
 import { accountKey } from './session'
 import type { WarmSchedule } from '../shared/types'
@@ -104,6 +105,9 @@ async function tickForAccount(): Promise<void> {
       if (accountKey() !== key0) return
       const prof = await getProfile(id)
       if (!prof) continue
+      // Never tear down a session the user is working in on THIS machine to run an unattended
+      // warm-up (the automation relaunch force-closes a native session) — skip until next tick.
+      if (isProfileRunning(id)) continue
       await runWarmup(id, prof.name, { minutes: cfg.minutes }, () => {})
     }
     if (accountKey() === key0) await setSchedule({ lastRun: new Date().toISOString() })

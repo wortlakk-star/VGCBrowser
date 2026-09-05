@@ -61,7 +61,9 @@ import {
   getProfileCookies,
   cookieRobot,
   syncTimezonesToProxies,
-  stopAllForAccountSwitch
+  stopAllForAccountSwitch,
+  manualUploadProfileData,
+  manualDownloadProfileData
 } from './profile-manager'
 import {
   listProxies,
@@ -70,7 +72,6 @@ import {
   deleteProxy,
   removeManyProxies
 } from './proxy-store'
-import { uploadProfileData, downloadProfileData } from './cloud-data'
 import { changeGmailPassword } from './gmail-password'
 import { gmailLogin } from './gmail-login'
 import { runWarmup } from './rpa'
@@ -569,11 +570,15 @@ export function registerIpc(): void {
       setCloudEncryptionPassphrase(String(passphrase ?? '').slice(0, 1024))
     )
   )
+  // Manual push/pull go through profile-manager so they (a) refuse while the profile is open
+  // on THIS machine (zipping / extracting over a live user-data-dir), (b) refuse a push while
+  // another machine holds the profile (a stale zip would overwrite that machine's base and
+  // its later close would be refused), and (c) serialise with any close-time upload.
   handle('cloud:uploadData', (_e, id: string) =>
-    runAccountOperation(() => uploadProfileData(requireProfileId(id)))
+    runAccountOperation(() => manualUploadProfileData(requireProfileId(id)))
   )
   handle('cloud:downloadData', (_e, id: string) =>
-    runAccountOperation(() => downloadProfileData(requireProfileId(id)))
+    runAccountOperation(() => manualDownloadProfileData(requireProfileId(id)))
   )
   // App-side encryption of the profile/proxy metadata BEFORE it's pushed to the
   // cloud DB (so cookies/proxy passwords in the jsonb are ciphertext, not plaintext).

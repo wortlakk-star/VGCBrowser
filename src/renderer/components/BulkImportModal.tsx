@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { OsType, ProxyType, SavedProxy } from '../../shared/types'
 import { parseLine } from '../lib/proxy-parse'
+import { Icon } from './Icon'
 
 interface Props {
   groups: string[]
@@ -139,7 +140,7 @@ export function BulkImportModal({
     // shortfall) can't create the same accounts again — there is no dedup in createProfile.
     if (created > 0) setImportedText(text)
     setMsg(
-      `✓ Đã tạo ${created}/${lines.length} profile.` +
+      `Đã tạo ${created}/${lines.length} profile.` +
         (badProxy ? ` ⚠️ ${badProxy} dòng proxy sai định dạng.` : '') +
         (noProxyLeft ? ` ⚠️ ${noProxyLeft} profile không có proxy (kho hết proxy rảnh).` : '')
     )
@@ -153,7 +154,7 @@ export function BulkImportModal({
         <header className="modal-head">
           <h2>Nhập tài khoản hàng loạt</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
@@ -231,7 +232,7 @@ export function BulkImportModal({
                 style={{ width: 'auto' }}
               />
               <span>
-                📦 Tự lấy proxy rảnh từ kho cho dòng không ghi proxy (còn <b>{freeCount}</b> proxy
+                Tự lấy proxy rảnh từ kho cho dòng không ghi proxy (còn <b>{freeCount}</b> proxy
                 rảnh — mỗi profile 1 cái)
               </span>
             </label>
@@ -244,7 +245,7 @@ export function BulkImportModal({
                 onChange={(e) => setAutoLogin(e.target.checked)}
                 style={{ width: 'auto' }}
               />
-              <span>🔑 Tự đăng nhập Gmail sau khi tạo (mở lần lượt, điền email/mật khẩu/2FA, đánh dấu Live/Die)</span>
+              <span>Tự đăng nhập Gmail sau khi tạo (mở lần lượt, điền email/mật khẩu/2FA, đánh dấu Live/Die)</span>
             </label>
             <p className="hint">
               Mỗi profile: tên = email, có vân tay riêng, lưu mật khẩu + khóa 2FA + gán proxy. Trạng

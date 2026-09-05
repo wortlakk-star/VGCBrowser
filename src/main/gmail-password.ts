@@ -515,7 +515,7 @@ export async function changeGmailPassword(
   try {
     // launchProfile with automation:true force-relaunches an already-open profile so we
     // get a control pipe (see the guard in profile-manager). Then grab that connection.
-    await launchProfile(profileId, { automation: true })
+    await launchProfile(profileId, { automation: true, steal: false })
     conn = getAutomationConn(profileId)
     if (!conn) throw new Error('Không mở được kênh điều khiển (CDP pipe)')
     const page = await attachPage(conn)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { OsType, ProxyConfig, ProxyProviderId, ProxyType, SavedProxy } from '../../shared/types'
 import { parseLine } from '../lib/proxy-parse'
+import { Icon } from './Icon'
 
 interface Props {
   groups: string[]
@@ -13,9 +14,9 @@ interface Props {
 type ProxyMode = 'none' | 'manual' | 'pool' | 'generate'
 const PROXY_MODES: Array<{ v: ProxyMode; label: string }> = [
   { v: 'none', label: 'Không dùng' },
-  { v: 'manual', label: '⌨ Nhập tay' },
-  { v: 'pool', label: '📦 Lấy từ kho' },
-  { v: 'generate', label: '✨ Tạo mới' }
+  { v: 'manual', label: 'Nhập tay' },
+  { v: 'pool', label: 'Lấy từ kho' },
+  { v: 'generate', label: 'Tạo mới' }
 ]
 const PROVIDERS: Array<[ProxyProviderId, string]> = [
   ['evomi', 'Evomi (residential)'],
@@ -200,7 +201,7 @@ export function CreateProfileModal({
         <header className="modal-head">
           <h2>Tạo profile mới</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 

@@ -13,7 +13,7 @@
 //   • CDP fingerprint injection (canvas/webgl/audio/webrtc) — Phase 1
 //   • proxy authentication via local relay — Phase 3
 
-import { spawn, type ChildProcess } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
 import { randomBytes } from 'crypto'
 import type { Readable, Writable } from 'node:stream'
 import { isAbsolute, join } from 'path'
@@ -26,7 +26,14 @@ import {
   promises as fs
 } from 'fs'
 import { app, BrowserWindow } from 'electron'
-import type { Cookie, DataSyncState, Fingerprint, ProfileRuntimeState } from '../shared/types'
+import type {
+  Cookie,
+  DataSyncState,
+  Fingerprint,
+  ProfileRuntimeState,
+  SavedCookie,
+  SavedLogin
+} from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
 import { checkProxy, directGeo } from './proxy-check'
 import { getProfile, patchProfile, listProfiles } from './store'
@@ -44,28 +51,46 @@ import {
   uploadProfilePasswords,
   downloadProfilePasswords,
   ensureSafeProfileDestination,
-  getSessionSyncTag
+  SyncTagError
 } from './cloud-data'
 import {
   exportCookies,
   importCookies,
   exportLogins,
-  importLogins
+  importLogins,
+  credentialStoresReady,
+  engineKeyReadable,
+  resetEngineKeyCache,
+  mergeCookieSets,
+  mergeLoginSets,
+  cookieKey,
+  loginKey
 } from './password-bridge'
+import { getAccountSecret } from './account-secret'
 import { dbg } from './dbg'
 import { ensureNativeGuardExtension } from './webrtc-guard'
 import { getCloudSession, getCloudEmail } from './session'
 import { refreshLicense, isLicensed, licenseState } from './license'
 import { cohereFingerprint, hostOs, sanitizeStartUrls } from './profiles-service'
 import { requireProfileId } from './validation'
-import { accountTransitionInProgress, runAccountOperation } from './account-operations'
+import {
+  accountTransitionInProgress,
+  runAccountOperation,
+  runCloseOperation
+} from './account-operations'
 import {
   claimProfileLock,
   pollProfileLock,
   releaseProfileLock,
   publishSessionTag,
+  publishSavingMarker,
+  publishFailedMarker,
+  peekProfileLock,
+  heldElsewhere,
+  readPublishedSessionTag,
   waitForHandoff
 } from './profile-lock'
+import { getMachineId } from './machine-id'
 
 export interface LaunchProfileOptions {
   headless?: boolean
@@ -73,6 +98,10 @@ export interface LaunchProfileOptions {
   automation?: boolean
   /** Tile the window at this position/size (for "mở lưới"). Overrides the default window-size. */
   window?: { x: number; y: number; w: number; h: number }
+  /** false = do NOT take the profile over from another machine that is live in it (unattended
+   *  automation: scheduled warm-up, bulk Gmail tools) — refuse instead. Default true (a user
+   *  clicking Open always wins, GoLogin-style). */
+  steal?: boolean
 }
 
 interface RunningProfile {
@@ -100,6 +129,37 @@ interface RunningProfile {
   kicking?: boolean
   /** In-flight guard so a slow poll can't stack multiple concurrent RPCs per open profile. */
   pollInFlight?: boolean
+  /** Set when a graceful exit was requested (stopProfile) — makes repeated stop calls no-ops. */
+  stopRequestedAt?: number
+  /** Escalation timer: SIGKILL if the engine ignores the graceful exit request. */
+  forceTimer?: ReturnType<typeof setTimeout>
+  /** This open launched on a cloud session that MAY be stale (the previous holder never handed
+   *  off in time / reported a failed save). The close path then expects the anti-clobber guard
+   *  to trip and handles it deliberately instead of silently dropping the session. */
+  openedStale?: boolean
+  /** The cloud credential sets as they were when this open merged them (null = could not be
+   *  read). The close path uploads the UNION of these and the local export, so a machine can
+   *  never replace the cloud set with a partial one. */
+  cloudCreds?: CloudCredentials | null
+  /** Set when the open-time credential merge could not run (bridge returned nothing while the
+   *  cloud had rows) — the close then re-fetches the cloud set before merging. */
+  credsUnmerged?: boolean
+  /** The open-time merge succeeded: rows of the open snapshot that are ABSENT from the local
+   *  export at close were deleted here (logout / clear cookies) and must not be resurrected. */
+  credsImportOk?: boolean
+  /** Tag the previous holder handed off BEFORE this open launched (waitForHandoff 'ready'). */
+  handoffTag?: string
+  /** …and whether that hand-off was actually extracted here. A ready hand-off we failed to
+   *  download must never be overridden at close (the cloud copy is the complete fresh one). */
+  handoffDownloaded?: boolean
+  /** A real session tag observed on OUR row while running = a stale previous holder's LATE
+   *  hand-off addressed to this open. The close may override exactly that cloud version. */
+  lateHandoffTag?: string
+  /** Counts hold-polls (drives the occasional late-hand-off peek). */
+  pollCount?: number
+  /** Chain of in-flight `saving:` marker RPCs — the settle awaits it so a delayed marker can
+   *  never land AFTER (and erase) the final tag. */
+  savingDrain?: Promise<void>
 }
 
 /** Default fingerprint validation target opened by "Kiểm tra fingerprint". */
@@ -295,113 +355,462 @@ function sameAccount(uid: string | null): boolean {
  * best-effort: any failure is a no-op — the bridge never deletes and writes the DB
  * atomically, so it can never corrupt or downgrade the live session.
  */
-async function uploadCredentials(id: string, expectedUid = currentAccountUid()): Promise<void> {
+/**
+ * Upload the UNION of the cloud credential sets and this machine's export (local wins on a
+ * key collision unless the cloud copy is clearly newer). The cloud objects are whole-set
+ * replacements, so uploading only the local export would let one machine whose import
+ * silently failed (hot journal, key hiccup, failed first-open bootstrap) replace the cloud
+ * set with a partial one and deplete every other machine. `cloud` is the set this open merged
+ * at launch (no extra download); when it is missing/unknown the cloud is re-fetched, and an
+ * object whose cloud copy still cannot be read is NOT uploaded (never overwrite the unknown).
+ * Returns a short human summary (for the toast/log) or null when nothing was uploaded.
+ */
+interface CredsUploadResult {
+  cookies: number
+  logins: number
+  /** Deliberate skips (cloud copy unknown → never overwrite it). */
+  skipped: string[]
+  /** Real failures (an object that should have been uploaded was not). */
+  errors: string[]
+}
+
+async function retryOnce<T>(fn: () => Promise<T>): Promise<T> {
   try {
-    if (!expectedUid || !sameAccount(expectedUid)) return
+    return await fn()
+  } catch (first) {
+    await sleepMs(1500)
+    try {
+      return await fn()
+    } catch {
+      throw first
+    }
+  }
+}
+
+/**
+ * Deletion propagation for the credential union. A row that was in the OPEN-time snapshot was
+ * merged into the local DB at open; if it is now ABSENT from the local export, the user (or
+ * the site) deleted it during this run — logout, "clear cookies", a rotated token — and it must
+ * not be resurrected from the cloud. Rows another machine changed AFTER our open (a fresher
+ * timestamp than the snapshot's copy) are kept: they are not our deletion to make.
+ */
+function dropDeletedRows<T>(
+  base: T[],
+  snapshot: T[],
+  local: T[],
+  keyOf: (row: T) => string,
+  tsOf: (row: T) => number
+): T[] {
+  const snap = new Map<string, number>()
+  for (const r of snapshot) snap.set(keyOf(r), tsOf(r))
+  const localKeys = new Set(local.map(keyOf))
+  return base.filter((r) => {
+    const k = keyOf(r)
+    if (!snap.has(k) || localKeys.has(k)) return true
+    return tsOf(r) > (snap.get(k) ?? 0) // changed elsewhere since our open → keep
+  })
+}
+
+/**
+ * Upload the UNION of the cloud credential sets and this machine's export (local wins on a
+ * key collision unless the cloud copy is clearly newer). The cloud objects are whole-set
+ * replacements, so uploading only the local export would let one machine whose import
+ * silently failed (hot journal, key hiccup, failed first-open bootstrap) replace the cloud
+ * set with a partial one and deplete every other machine.
+ *   • `cloud`: the set to union with. Pass the open-time snapshot when nothing else can have
+ *     written the objects since (we held the lock the whole time); pass null to re-fetch the
+ *     CURRENT cloud set (the profile ran elsewhere meanwhile: takeover, stale open, late
+ *     hand-off, anti-clobber trip) — otherwise a late close would replace rows another machine
+ *     saved in between.
+ *   • `snapshot`: the open-time set when the open-time import SUCCEEDED — enables deletion
+ *     propagation (see dropDeletedRows). Null disables it (plain union).
+ * An object whose cloud copy cannot be read is NOT uploaded (never overwrite the unknown).
+ * Each POST is retried once. Failures are reported as `errors` so the close outcome is honest.
+ */
+async function uploadCredentials(
+  id: string,
+  expectedUid = currentAccountUid(),
+  cloud: CloudCredentials | null,
+  snapshot: CloudCredentials | null
+): Promise<CredsUploadResult> {
+  const out: CredsUploadResult = { cookies: 0, logins: 0, skipped: [], errors: [] }
+  try {
+    if (!expectedUid || !sameAccount(expectedUid)) return out
     const dir = profileDataDir(id)
-    const [cookies, logins] = await Promise.all([
+    const [localCookies, localLogins] = await Promise.all([
       exportCookies(dir, id).catch(() => []),
       exportLogins(dir, id).catch(() => [])
     ])
-    if (!sameAccount(expectedUid)) return
-    await Promise.allSettled([
-      cookies.length ? uploadProfileCookiesDb(id, cookies) : Promise.resolve(),
-      logins.length ? uploadProfilePasswords(id, logins) : Promise.resolve()
-    ])
-    if (cookies.length || logins.length)
-      dbg(`[creds ${id}] uploaded ${cookies.length} cookies + ${logins.length} logins`)
-  } catch {
-    /* best-effort — never block close */
+    if (!sameAccount(expectedUid)) return out
+    let base = cloud
+    if (!base || !base.cookiesKnown || !base.loginsKnown) {
+      const fresh = await fetchCloudCredentials(id)
+      base = {
+        cookies: base?.cookiesKnown ? base.cookies : fresh.cookies,
+        logins: base?.loginsKnown ? base.logins : fresh.logins,
+        cookiesKnown: (base?.cookiesKnown ?? false) || fresh.cookiesKnown,
+        loginsKnown: (base?.loginsKnown ?? false) || fresh.loginsKnown,
+        cookiesUploader: base?.cookiesKnown ? base.cookiesUploader : fresh.cookiesUploader,
+        loginsUploader: base?.loginsKnown ? base.loginsUploader : fresh.loginsUploader
+      }
+    }
+    if (!sameAccount(expectedUid)) return out
+    const cookieTs = (c: SavedCookie): number => Number(c.cols.last_update_utc ?? 0)
+    const loginTs = (l: SavedLogin): number => l.date_password_modified ?? l.date_created ?? 0
+    const tasks: Array<Promise<void>> = []
+    if (!base.cookiesKnown) {
+      out.skipped.push('cookie (không đọc được bản cloud)')
+    } else {
+      let baseCookies = base.cookies
+      if (snapshot?.cookiesKnown && localCookies.length) {
+        baseCookies = dropDeletedRows(baseCookies, snapshot.cookies, localCookies, cookieKey, cookieTs)
+      }
+      const merged = mergeCookieSets(baseCookies, localCookies)
+      if (merged.length) {
+        out.cookies = merged.length
+        tasks.push(
+          retryOnce(() => uploadProfileCookiesDb(id, merged)).catch((e) => {
+            out.errors.push(`cookie: ${errMsg(e).slice(0, 120)}`)
+          })
+        )
+      }
+    }
+    if (!base.loginsKnown) {
+      out.skipped.push('mật khẩu (không đọc được bản cloud)')
+    } else {
+      let baseLogins = base.logins
+      if (snapshot?.loginsKnown && localLogins.length) {
+        baseLogins = dropDeletedRows(baseLogins, snapshot.logins, localLogins, loginKey, loginTs)
+      }
+      const merged = mergeLoginSets(baseLogins, localLogins)
+      if (merged.length) {
+        out.logins = merged.length
+        tasks.push(
+          retryOnce(() => uploadProfilePasswords(id, merged)).catch((e) => {
+            out.errors.push(`mật khẩu: ${errMsg(e).slice(0, 120)}`)
+          })
+        )
+      }
+    }
+    await Promise.all(tasks)
+    if (out.errors.length) dbg(`[creds ${id}] upload FAILED: ${out.errors.join(' | ')}`)
+    dbg(
+      `[creds ${id}] uploaded union cookies=${out.cookies} (local ${localCookies.length}) logins=${out.logins} (local ${localLogins.length}) skipped=${out.skipped.length} errors=${out.errors.length}`
+    )
+  } catch (err) {
+    dbg(`[creds ${id}] upload error: ${errMsg(err)}`)
+    out.errors.push(errMsg(err).slice(0, 120))
+  }
+  return out
+}
+
+/** The profile's cross-machine credentials as stored in the cloud (decrypted in memory).
+ *  `cookiesKnown` / `loginsKnown` are false when that object EXISTS but could not be fetched or
+ *  decrypted — "unknown", never "empty": an unknown set must not be overwritten on close. */
+interface CloudCredentials {
+  cookies: SavedCookie[]
+  logins: SavedLogin[]
+  cookiesKnown: boolean
+  loginsKnown: boolean
+  /** Machine ids that uploaded each object (null = legacy object / unknown). */
+  cookiesUploader: string | null
+  loginsUploader: string | null
+}
+
+/** One download of the cloud cookies + saved logins. */
+async function fetchCloudCredentials(id: string): Promise<CloudCredentials> {
+  const [cookies, logins] = await Promise.all([
+    downloadProfileCookiesDb(id).catch(() => null),
+    downloadProfilePasswords(id).catch(() => null)
+  ])
+  return {
+    cookies: cookies?.rows ?? [],
+    logins: logins?.rows ?? [],
+    cookiesKnown: cookies !== null,
+    loginsKnown: logins !== null,
+    cookiesUploader: cookies?.uploader ?? null,
+    loginsUploader: logins?.uploader ?? null
   }
 }
 
-async function downloadCredentials(id: string, expectedUid = currentAccountUid()): Promise<void> {
+/** Merge the cloud credentials into this machine's stores. `prefetched` lets the open flow
+ *  reuse the copy it already downloaded (to decide on a bootstrap) — one download, not two,
+ *  which matters on the egress-metered Supabase plan. Returns false when the cloud had rows
+ *  but NONE could be merged (bridge unavailable) — the caller records that so the close path
+ *  merges against a fresh cloud copy instead of trusting the local DB. */
+async function downloadCredentials(
+  id: string,
+  expectedUid = currentAccountUid(),
+  prefetched?: CloudCredentials
+): Promise<boolean> {
   try {
-    if (!expectedUid || !sameAccount(expectedUid)) return
+    if (!expectedUid || !sameAccount(expectedUid)) return true
     const dir = profileDataDir(id)
-    const [cookies, logins] = await Promise.all([
-      downloadProfileCookiesDb(id).catch(() => []),
-      downloadProfilePasswords(id).catch(() => [])
-    ])
-    if (!sameAccount(expectedUid)) return
-    if (cookies.length) await importCookies(dir, id, cookies).catch(() => 0)
-    if (logins.length) await importLogins(dir, id, logins).catch(() => 0)
+    const creds = prefetched ?? (await fetchCloudCredentials(id))
+    const { cookies, logins } = creds
+    if (!sameAccount(expectedUid)) return true
+    // Rows uploaded by ANOTHER machine are, by protocol, the fresher session → they win
+    // near-ties (clock skew). Rows this machine uploaded itself use strict newer-wins, so a
+    // cookie the site rotated after a failed upload here is never regressed.
+    const me = getMachineId()
+    const mergedCookies = cookies.length
+      ? await importCookies(dir, id, cookies, { preferIncoming: creds.cookiesUploader !== me }).catch(() => 0)
+      : 0
+    const mergedLogins = logins.length
+      ? await importLogins(dir, id, logins, { preferIncoming: creds.loginsUploader !== me }).catch(() => 0)
+      : 0
     if (cookies.length || logins.length)
-      dbg(`[creds ${id}] imported ${cookies.length} cookies + ${logins.length} logins`)
-  } catch {
-    /* best-effort — never block open */
+      dbg(
+        `[creds ${id}] imported ${mergedCookies}/${cookies.length} cookies + ${mergedLogins}/${logins.length} logins`
+      )
+    // "Nothing merged although the cloud had rows" = the bridge could not run (no DB / no key /
+    // hot journal). A legitimately up-to-date DB usually still reports >0 REPLACEs, so this is
+    // a conservative signal; it only makes the close path re-fetch the cloud set (cheap).
+    return !((cookies.length > 0 && mergedCookies === 0) || (logins.length > 0 && mergedLogins === 0))
+  } catch (err) {
+    dbg(`[creds ${id}] import failed: ${err instanceof Error ? err.message : String(err)}`)
+    return false
   }
 }
 
-/** When a single profile closes (app stays open): auto-upload its session. */
-async function syncDataOnClose(id: string, expectedUid: string | null): Promise<void> {
+/** Outcome of a close-time save, reported honestly to the user and to the lock protocol. */
+interface CloseSyncResult {
+  /** The session zip reached the cloud (credentials may still have partially failed). */
+  ok: boolean
+  /** The cloud ETag of the uploaded zip (set even when only the local bookkeeping failed). */
+  tag: string | null
+  /** Why the zip was NOT uploaded (null when ok). */
+  reason: string | null
+  /** Credential union upload summary. */
+  creds: CredsUploadResult | null
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+/**
+ * While a close saves, keep a `saving:<n>` marker moving on the row of WHOEVER holds the
+ * profile now, so a waiting machine extends its hand-off wait for as long as we are alive and
+ * saving. Every tick re-polls the epoch: a claim that arrives mid-upload (a normal close that
+ * races an open, or a THIRD machine claiming after the one that kicked us) is noticed and the
+ * markers — and later the final tag — go to that epoch. Marker RPCs are chained and the chain
+ * is left on `entry.savingDrain`, so the settle can wait for the last in-flight marker before
+ * publishing the final tag (a delayed marker landing afterwards would erase it).
+ */
+async function withSavingMarker<T>(id: string, entry: RunningProfile, fn: () => Promise<T>): Promise<T> {
+  if (entry.lockEpoch == null) return fn()
+  const ourEpoch = entry.lockEpoch
+  let seq = 1
+  let chain: Promise<void> = (entry.savingDrain ?? Promise.resolve()).catch(() => {})
+  const tick = async (): Promise<void> => {
+    let target: number | null = entry.takenOver && entry.takeoverEpoch != null ? entry.takeoverEpoch : null
+    const poll = await pollProfileLock(id, ourEpoch)
+    if (poll.ok && poll.epoch != null && poll.epoch !== ourEpoch) {
+      if (target !== poll.epoch) dbg(`[close ${id}] a newer open (epoch ${poll.epoch}) is waiting — reporting progress to it`)
+      target = poll.epoch
+      entry.takenOver = true
+      entry.takeoverEpoch = poll.epoch
+    }
+    if (target != null) await publishSavingMarker(id, target, seq++)
+  }
+  chain = chain.then(tick).catch(() => {})
+  const timer = setInterval(() => {
+    chain = chain.then(tick).catch(() => {})
+    entry.savingDrain = chain
+  }, 4000)
+  entry.savingDrain = chain
   try {
-    if (isQuitting || accountTransitioning) return
-    if (!expectedUid || !sameAccount(expectedUid)) return
+    return await fn()
+  } finally {
+    clearInterval(timer)
+    entry.savingDrain = chain
+  }
+}
+
+function credsSummary(c: CloseSyncResult['creds']): string {
+  if (!c) return 'cookie/mật khẩu: chưa lưu'
+  const parts = [`${c.cookies} cookie`, `${c.logins} mật khẩu`]
+  if (c.skipped.length) parts.push(`bỏ qua: ${c.skipped.join('; ')}`)
+  if (c.errors.length) parts.push(`LỖI: ${c.errors.join('; ')}`)
+  return parts.join(', ')
+}
+
+/**
+ * Save a profile's session to the cloud after its engine exited: the session zip (Local
+ * Storage / IndexedDB / Preferences / tabs) and the UNION of credentials (cookies + saved
+ * logins). Reports the real outcome — never a green "done" over a failed upload — and returns
+ * it so the lock protocol can tell the other machine whether a fresh session is ready.
+ *
+ * Anti-clobber (cloud-data.ts) refuses the zip when the cloud advanced past what this machine
+ * synced. ONE advance is legitimately ours to override: a stale previous holder whose late
+ * kick-upload landed AFTER this open launched — its tag then sits on OUR lock row (the server
+ * only accepts a tag for the current epoch, i.e. us). We are the live session, so we re-upload
+ * with that exact tag allowed. Any other advance (a newer machine took over and saved) is
+ * respected: the zip stays local and the user is told. Credentials are ALWAYS merged (union,
+ * newest wins), because they can never clobber: a login made here is worth keeping even when
+ * the zip must yield.
+ */
+async function syncDataOnClose(id: string, entry: RunningProfile): Promise<CloseSyncResult> {
+  const expectedUid = entry.accountUid
+  const result: CloseSyncResult = { ok: false, tag: null, reason: null, creds: null }
+  try {
+    if (!expectedUid || !sameAccount(expectedUid)) {
+      result.reason = 'tài khoản cloud đã thay đổi'
+      return result
+    }
     // Hold the per-profile lock for the WHOLE flush+upload, and take it BEFORE the
     // flush-grace sleep. Otherwise a reopen within ~1.2s takes the lock first,
     // downloads a stale cloud snapshot over the freshest local dir, and this delayed
     // upload then zips the just-relaunched (mid-write) profile → corrupt/downgraded
     // session propagates to every machine. Holding the lock makes a reopen wait.
-    await withDataLock(id, async () => {
-      // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
-      await new Promise((r) => setTimeout(r, 1200))
-      if (!sameAccount(expectedUid)) return
-      broadcastData({ id, phase: 'upload', message: 'Đang lưu phiên lên cloud…' })
-      // Uploads Local Storage / IndexedDB / Preferences etc. — NOT Cookies/Login Data
-      // (excluded via SKIP_FILES; those stay per-machine so the session never churns).
-      let sessionAdvanced = false
-      try {
-        await uploadProfileData(id)
-      } catch (e) {
-        // Anti-clobber fired (cloud session is newer than ours) → OUR cookies/passwords are
-        // equally stale, so skip the credentials bridge too rather than clobber the fresh ones.
-        // Any OTHER upload failure is isolated so the best-effort credentials bridge still runs.
-        sessionAdvanced = (e as { code?: string })?.code === 'CLOUD_ADVANCED'
-        broadcastData({ id, phase: 'error', message: e instanceof Error ? e.message : String(e) })
-      }
-      if (!sessionAdvanced) {
-        // Cross-machine cookies + saved passwords (decrypt-locally → cloud → re-encrypt on B).
-        await uploadCredentials(id, expectedUid)
-        dbg(`[close ${id}] session save done (+ credentials bridge)`)
-      }
-    })
-    broadcastData({ id, phase: 'done' })
+    await withDataLock(id, () =>
+      withSavingMarker(id, entry, async () => {
+        // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
+        await sleepMs(1200)
+        if (!sameAccount(expectedUid)) {
+          result.reason = 'tài khoản cloud đã thay đổi'
+          return
+        }
+        broadcastData({
+          id,
+          phase: 'upload',
+          message: entry.takenOver
+            ? 'Máy khác đã mở profile này — đang lưu phiên để chuyển sang…'
+            : 'Đang lưu phiên lên cloud…'
+        })
+        // 1) The session zip — Local Storage / IndexedDB / Preferences / tabs (NOT Cookies /
+        //    Login Data: excluded via SKIP_FILES, they travel via the credential union below).
+        let zipErr: unknown = null
+        let cloudAdvancedSeen = false
+        const onSyncTagError = (e: SyncTagError): void => {
+          result.tag = e.tag // the zip IS in the cloud; only the local marker failed
+          broadcastData({ id, phase: 'warn', sticky: true, message: e.message })
+        }
+        try {
+          result.tag = await uploadProfileData(id)
+        } catch (e) {
+          if (e instanceof SyncTagError) {
+            onSyncTagError(e)
+          } else if ((e as { code?: string })?.code === 'CLOUD_ADVANCED') {
+            cloudAdvancedSeen = true
+            // The ONE advance we may override: a stale previous holder's LATE hand-off addressed
+            // to THIS open — seen on our row while running (lateHandoffTag), or sitting on our row
+            // right now (only readable while the row is still ours, i.e. not taken over). A
+            // hand-off that was 'ready' before launch but never got extracted here is NOT ours to
+            // override: the cloud copy is the complete fresh one.
+            let candidate: string | null = entry.lateHandoffTag ?? null
+            if (!candidate && !entry.takenOver && entry.lockEpoch != null) {
+              candidate = await readPublishedSessionTag(id, entry.lockEpoch)
+            }
+            if (candidate && candidate === entry.handoffTag && !entry.handoffDownloaded) candidate = null
+            if (candidate) {
+              dbg(`[close ${id}] cloud advanced by a late hand-off for our epoch → override upload`)
+              try {
+                result.tag = await uploadProfileData(id, { allowCloudTag: candidate })
+              } catch (e2) {
+                if (e2 instanceof SyncTagError) onSyncTagError(e2)
+                else zipErr = e2
+              }
+            } else {
+              zipErr = e
+            }
+          } else {
+            zipErr = e
+          }
+        }
+        if (zipErr) {
+          result.reason = errMsg(zipErr)
+          dbg(`[close ${id}] zip upload FAILED: ${result.reason}`)
+        }
+        // 2) Credentials — ALWAYS, as a union (merge-safe). Union against the open-time snapshot
+        //    only when nothing else can have written the objects since we synced them; when the
+        //    profile ran elsewhere meanwhile (takeover, stale open, late hand-off, anti-clobber
+        //    trip, unmerged import) re-fetch the CURRENT cloud set instead.
+        const mayHaveChanged =
+          entry.credsUnmerged ||
+          entry.takenOver ||
+          entry.openedStale ||
+          cloudAdvancedSeen ||
+          !!entry.lateHandoffTag ||
+          !entry.cloudCreds
+        const cloudBase = mayHaveChanged ? null : entry.cloudCreds!
+        const snapshot = entry.credsImportOk && entry.cloudCreds ? entry.cloudCreds : null
+        result.creds = await uploadCredentials(id, expectedUid, cloudBase, snapshot)
+        if (result.creds.errors.length) {
+          const why = `cookie/mật khẩu chưa lên cloud: ${result.creds.errors.join('; ')}`
+          result.reason = result.reason ? `${result.reason}; ${why}` : why
+        }
+        result.ok = !zipErr && result.creds.errors.length === 0
+        dbg(
+          `[close ${id}] save ${result.ok ? 'OK' : 'FAILED'} tag=${result.tag?.slice(0, 16) ?? '-'} ${credsSummary(result.creds)}`
+        )
+      })
+    )
   } catch (err) {
-    broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
+    result.reason = errMsg(err)
+    dbg(`[close ${id}] save error: ${result.reason}`)
+  }
+  if (result.ok) {
+    broadcastData({ id, phase: 'done', message: `Đã lưu phiên lên cloud (${credsSummary(result.creds)})` })
+  } else {
+    broadcastData({
+      id,
+      phase: 'error',
+      sticky: true,
+      message:
+        `CHƯA lưu được đầy đủ phiên lên cloud: ${result.reason ?? 'lỗi không rõ'}. ` +
+        `${credsSummary(result.creds)}. Phiên vẫn còn nguyên trên máy này.`
+    })
+  }
+  return result
+}
+
+/**
+ * Tell the lock protocol how the close went. Whoever holds the profile NOW gets the outcome:
+ *   • the epoch moved (we were kicked, or a claim arrived while we were uploading — including
+ *     a THIRD machine that claimed after the one that kicked us): publish the fresh ETag for
+ *     the CURRENT epoch so that open stops waiting and downloads it; on a failed save publish a
+ *     `failed:` marker so it stops waiting and is told why. We keep our hands off the lock.
+ *   • the epoch is still ours (normal close): release it so the profile no longer shows as
+ *     open on this machine.
+ */
+async function settleLockAfterClose(id: string, entry: RunningProfile, res: CloseSyncResult): Promise<void> {
+  if (entry.lockEpoch == null) return
+  try {
+    // Let the last in-flight `saving:` marker land first — otherwise it could arrive AFTER the
+    // final tag and erase it, leaving the waiting machine to time out on a fresh session.
+    await (entry.savingDrain ?? Promise.resolve()).catch(() => {})
+    const cur = await pollProfileLock(id, entry.lockEpoch)
+    let currentEpoch = cur.ok ? cur.epoch : null
+    if (!cur.ok && entry.takenOver && entry.takeoverEpoch != null) currentEpoch = entry.takeoverEpoch
+    if (currentEpoch == null) {
+      // Row gone or unreadable: an epoch-gated release is harmless either way.
+      if (!cur.ok) await releaseProfileLock(id, entry.lockEpoch)
+      return
+    }
+    if (currentEpoch !== entry.lockEpoch) {
+      if (res.ok && res.tag) await publishSessionTag(id, currentEpoch, res.tag)
+      else if (res.ok) await publishFailedMarker(id, currentEpoch, 'đã lưu nhưng không lấy được mã phiên (ETag)')
+      else await publishFailedMarker(id, currentEpoch, res.reason ?? 'không rõ')
+      return // the newer open holds the lock
+    }
+    await releaseProfileLock(id, entry.lockEpoch)
+  } catch (err) {
+    dbg(`[lock ${id}] settle after close failed: ${errMsg(err)}`)
   }
 }
 
 /**
- * Close-time cloud settle for the cross-machine lock. Uploads the freshest session
- * (syncDataOnClose), then EITHER — on a takeover — publishes the fresh session ETag so the
- * machine that kicked us knows the session is ready to download (and we keep the lock, which
- * that machine now holds); OR — on a normal close — releases the lock so the profile no longer
- * shows as open on this machine.
+ * Engine 'exit' → save the session, then settle the lock. The quit / account-switch path
+ * (stopRunningAndSync) does BOTH itself for every profile it stopped — so this must not run
+ * there: it would release the lock BEFORE that path's upload, letting another machine skip
+ * the hand-off wait and load the previous session.
  */
 async function syncAndUnlockOnClose(id: string, entry: RunningProfile): Promise<void> {
-  await syncDataOnClose(id, entry.accountUid)
-  if (entry.takenOver) {
-    // Publish the session ETag for the TAKEOVER epoch we observed, so the open that kicked us
-    // (not a straggler from an older cycle) knows the fresh session is ready. Keep the lock —
-    // that open holds a higher epoch now.
-    if (entry.takeoverEpoch != null) {
-      try {
-        const tag = await getSessionSyncTag(id)
-        if (tag) await publishSessionTag(id, entry.takeoverEpoch, tag)
-      } catch {
-        /* best-effort — the taking-over open falls back to the last cloud session on timeout */
-      }
-    }
-  } else if (entry.lockEpoch != null) {
-    // Normal close: release our epoch (server no-ops if a newer open already took over), so the
-    // profile no longer shows as open on this machine.
-    try {
-      await releaseProfileLock(id, entry.lockEpoch)
-    } catch {
-      /* best-effort — a stale lock self-heals the next time any open claims it */
-    }
-  }
+  if (isQuitting || accountTransitioning) return
+  const res = await syncDataOnClose(id, entry)
+  await settleLockAfterClose(id, entry, res)
 }
 
 /**
@@ -422,31 +831,50 @@ async function checkKicked(id: string): Promise<void> {
   // Only act if THIS exact open is still the current one (a close+reopen may have replaced it).
   if (running.get(id) !== entry || entry.kicking) return
   if (!poll.ok || poll.epoch == null) return // transient error / row gone → never kick
-  if (poll.epoch === entry.lockEpoch) return // the epoch is still ours → we still hold it
+  if (poll.epoch === entry.lockEpoch) {
+    // Still ours. If this open started on a possibly-stale copy, watch our row for the previous
+    // holder's LATE hand-off (it publishes its fresh tag onto our row when it finally saves):
+    // remember it so the close may override exactly that cloud version, and tell the user.
+    entry.pollCount = (entry.pollCount ?? 0) + 1
+    if (entry.openedStale && !entry.lateHandoffTag && entry.pollCount % 5 === 0) {
+      const late = await readPublishedSessionTag(id, entry.lockEpoch)
+      if (late && running.get(id) === entry) {
+        entry.lateHandoffTag = late
+        dbg(`[lock ${id}] late hand-off tag observed on our row: ${late.slice(0, 16)}`)
+        broadcastData({
+          id,
+          phase: 'warn',
+          sticky: true,
+          message:
+            'Máy kia vừa lưu phiên CŨ hơn lên cloud (nó đã ngủ/mất mạng lúc bạn mở). Phiên đang chạy ở đây sẽ được giữ khi đóng; cookie/mật khẩu hai bên được gộp.'
+        })
+      }
+    }
+    return
+  }
   // A higher epoch holds it now → taken over.
   entry.kicking = true
   entry.takenOver = true
   entry.takeoverEpoch = poll.epoch
+  dbg(`[lock ${id}] KICKED: our epoch=${entry.lockEpoch} current=${poll.epoch} → saving + closing here`)
+  // Tell the claimer right away that we are alive and about to save, so its hand-off wait
+  // extends instead of expiring on a fixed budget while the engine is still flushing. Kept on
+  // the drain chain so the settle never publishes the final tag before this lands.
+  entry.savingDrain = publishSavingMarker(id, poll.epoch, 0).catch(() => {})
   broadcastData({
     id,
-    phase: 'upload',
-    message: 'Profile được mở ở máy khác — đang lưu phiên & đóng ở đây…'
+    phase: 'warn',
+    sticky: true,
+    message: 'Profile này vừa được mở ở máy khác — đang lưu phiên ở đây rồi đóng để chuyển sang máy đó.'
   })
-  stopProfile(id) // SIGTERM → 'exit' handler uploads the session, publishes the tag, keeps the lock
-  // Escalate to SIGKILL if the kicked engine ignores SIGTERM (a hung/modal Chromium): a browser
-  // that won't exit means a prolonged DUAL-RUN of the same profile on two machines. Mirror the
-  // quit-path force-kill. The 'exit' handler still runs on SIGKILL, so the save/publish/close flow
-  // is unchanged — we only guarantee it actually happens.
-  const kickedProc = entry.proc
-  setTimeout(() => {
-    if (running.get(id) === entry) {
-      try {
-        kickedProc.kill('SIGKILL')
-      } catch {
-        /* already gone */
-      }
-    }
-  }, 6000)
+  // GRACEFUL exit request (WM_CLOSE on Windows, SIGTERM on macOS) so Chromium flushes its
+  // write-behind stores — the freshest login on the kicked machine is exactly what must reach
+  // the cloud. The 'exit' handler then uploads the session, publishes the tag and keeps the
+  // lock. stopProfile escalates to SIGKILL if the engine ignores the request (a hung/modal
+  // Chromium): a browser that won't exit means a prolonged DUAL-RUN of the same profile on two
+  // machines. The 'exit' handler still runs on SIGKILL, so the save/publish/close flow is
+  // unchanged — we only guarantee it actually happens.
+  stopProfile(id)
 }
 
 /**
@@ -457,60 +885,80 @@ async function stopRunningAndSync(quitting: boolean): Promise<void> {
   if (quitting) isQuitting = true
   accountTransitioning = true
   const expectedUid = currentAccountUid()
-  const ids = new Set<string>()
+  // Snapshot the entries BEFORE stopping: the engine 'exit' handler deletes them from
+  // `running`, and the lock settle below needs each one's epoch / takeover state.
+  const snapshot = new Map<string, RunningProfile>()
+  for (const [id, entry] of running) if (entry.accountUid === expectedUid) snapshot.set(id, entry)
+  const label = quitting ? 'quit' : 'switch'
   try {
-    const stopDeadline = Date.now() + 10_000
-    while (running.size > 0 && Date.now() < stopDeadline) {
-      for (const [id, entry] of running) {
-        if (entry.accountUid === expectedUid) ids.add(id)
-        stopProfile(id)
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
+    // 0) A profile closed moments ago may still be uploading in its exit handler — let THOSE
+    //    finish (bounded) instead of exiting underneath them. Only close-time saves are awaited:
+    //    a launch or a bulk job in flight cannot finish usefully and is stopped below anyway.
+    const settled = await awaitCloseOperations(quitting ? 45_000 : 30_000)
+    if (!settled) dbg(`[${label}] in-flight close uploads still pending after the wait`)
+    // 1) Graceful stop of every engine (flushes its stores), SIGKILL as a last resort.
+    const stopDeadline = Date.now() + 20_000
+    for (const id of [...running.keys()]) stopProfile(id)
+    while (running.size > 0 && Date.now() < stopDeadline) await sleepMs(100)
     if (running.size > 0) {
       for (const [id, entry] of running) {
-        if (entry.accountUid === expectedUid) ids.add(id)
+        dbg(`[${label} ${id}] engine ignored graceful stop → SIGKILL`)
         try {
           entry.proc.kill('SIGKILL')
         } catch {
           // checked below
         }
       }
-      const forceDeadline = Date.now() + 2_000
-      while (running.size > 0 && Date.now() < forceDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
+      const forceDeadline = Date.now() + 3_000
+      while (running.size > 0 && Date.now() < forceDeadline) await sleepMs(100)
     }
-    if (running.size > 0 && !quitting) {
+    const stuck = [...snapshot.keys()].filter((id) => running.has(id))
+    if (expectedUid && sameAccount(expectedUid) && snapshot.size > 0) {
+      await sleepMs(300)
+      // 2) Upload each STOPPED session, THEN settle its lock (publish the fresh tag for a machine
+      //    that claimed meanwhile, or release). Releasing first would let another machine skip the
+      //    hand-off wait and load the previous session while we are still uploading. A profile
+      //    whose engine refused to die is skipped (its dir is still live) — see below.
+      await Promise.allSettled(
+        [...snapshot]
+          .filter(([id]) => !running.has(id))
+          .map(async ([id, entry]) => {
+            if (!sameAccount(expectedUid)) return
+            try {
+              broadcastData({
+                id,
+                phase: 'upload',
+                message: quitting
+                  ? 'Đang lưu phiên lên cloud trước khi thoát…'
+                  : 'Đang lưu phiên trước khi đổi tài khoản…'
+              })
+              const res = await syncDataOnClose(id, entry)
+              await settleLockAfterClose(id, entry, res)
+            } catch (err) {
+              // One failed profile must not cross-contaminate or block the others.
+              dbg(`[${label} ${id}] save failed: ${errMsg(err)}`)
+            }
+          })
+      )
+    }
+    if (stuck.length && !quitting) {
       throw new Error('Không thể dừng hết profile; chưa chuyển tài khoản để tránh lẫn dữ liệu.')
     }
-    if (!expectedUid || !sameAccount(expectedUid) || ids.size === 0) return
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    await Promise.allSettled(
-      [...ids].map(async (id) => {
-        if (!sameAccount(expectedUid)) return
-        try {
-          broadcastData({
-            id,
-            phase: 'upload',
-            message: quitting
-              ? 'Đang lưu phiên lên cloud trước khi thoát…'
-              : 'Đang lưu phiên trước khi đổi tài khoản…'
-          })
-          await withDataLock(id, async () => {
-            if (!sameAccount(expectedUid)) return
-            await uploadProfileData(id)
-            await uploadCredentials(id, expectedUid)
-          })
-          broadcastData({ id, phase: 'done' })
-        } catch {
-          // One failed profile must not cross-contaminate or block the others.
-        }
-      })
-    )
   } finally {
     if (!quitting) accountTransitioning = false
   }
+}
+
+/** Close-time saves started by engine 'exit' handlers (see launch registration). */
+const closeOps = new Set<Promise<unknown>>()
+
+/** Wait (bounded) for every close-time save currently in flight. */
+async function awaitCloseOperations(maxMs: number): Promise<boolean> {
+  const deadline = Date.now() + maxMs
+  while (closeOps.size > 0 && Date.now() < deadline) {
+    await Promise.race([Promise.allSettled([...closeOps]), sleepMs(Math.max(50, deadline - Date.now()))])
+  }
+  return closeOps.size === 0
 }
 
 export function stopAllAndSync(): Promise<void> {
@@ -619,6 +1067,139 @@ function spawnAndWait(
   })
 }
 
+/**
+ * Environment for every engine process (the real launch AND the first-open bootstrap).
+ *  • VGC_CRYPT_SECRET is stripped: the engine must ALWAYS use its own per-machine os_crypt key
+ *    (a portable key made it DROP every pre-existing machine-key cookie — 2.1.11–2.1.14).
+ *  • HARDENING: the child inherits the whole host environment. If this machine ever has
+ *    GOOGLE_DEFAULT_CLIENT_ID / _SECRET set globally (a stray setx, a dev shell, CI), they
+ *    would reach the engine and re-trigger the DICE AccountReconcilor that deletes the
+ *    .google.com session on reopen (the v2.1.16 regression). Not setting them is not enough
+ *    — we must actively STRIP them so their absence is guaranteed regardless of host env.
+ *  • GOOGLE_API_KEY kills Chromium's yellow "Google API keys are missing" infobar that shows
+ *    on EVERY page — clutter AND an antidetect tell (real Chrome never shows it). Chromium
+ *    reads it from the environment at runtime; any non-default value makes
+ *    HasAPIKeyConfigured() true so the bar never appears. It is NOT used for login (profiles
+ *    sign in via the web) and is never exposed to web pages. The OAuth *client* id/secret are
+ *    deliberately NOT set (that would flip account consistency to DICE — see launch flow).
+ */
+function engineChildEnv(): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = { ...process.env }
+  delete childEnv.VGC_CRYPT_SECRET
+  delete childEnv.GOOGLE_DEFAULT_CLIENT_ID
+  delete childEnv.GOOGLE_DEFAULT_CLIENT_SECRET
+  childEnv.GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'no-key'
+  return childEnv
+}
+
+/** Chromium's own session-restore state under Default/ (what --restore-last-session reads). */
+const SESSION_RESTORE_ENTRIES = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']
+
+/** Thrown when a newer open claimed the profile while this one was preparing — the latest
+ *  opener wins; this launch is abandoned (never reported as a sync error). */
+class SupersededError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SupersededError'
+  }
+}
+
+/**
+ * FIRST OPEN OF A PROFILE ON THIS MACHINE — create the per-machine credential stores so the
+ * cloud cookies + saved logins can be merged in BEFORE the real launch.
+ *
+ * Why: the session zip deliberately never carries `Local State` / Cookies / Login Data (they
+ * are sealed with a per-machine os_crypt key), and importCookies/importLogins only MERGE into
+ * an engine-made DB (sql.js cannot invent the engine's exact schema/version). On a machine
+ * that has never run this profile the bridge was therefore a silent no-op: the very first open
+ * on the MacBook (or any new machine) came up logged out — and its close then uploaded a
+ * near-empty cookie set over the cloud copy. Only the SECOND open worked.
+ *
+ * How: run the verified engine ONCE against the profile dir — headless, extension-less and
+ * network-less (about:blank + a black-hole proxy, so an antidetect profile can never touch a
+ * site from the wrong IP). Chromium initialises os_crypt on startup (writes the DPAPI key into
+ * `Local State` on Windows / creates the Safe Storage keychain item on macOS) and creates both
+ * DBs; a throwaway cookie on a reserved `.invalid` host forces the encrypted-cookie path so the
+ * key definitely exists; `Browser.close` is a GRACEFUL shutdown that flushes the SQLite files
+ * and prefs. Measured on Chromium 152 (Windows): ~0.7 s end-to-end, journals empty, DPAPI
+ * key present, cookie row sealed as v10.
+ *
+ * Runs BEFORE the session zip is extracted and wipes the throwaway session-restore state it
+ * leaves behind, so it can never shadow the synced tabs / start URLs. Best-effort: on any
+ * failure the open proceeds exactly as before (self-healing on the next open).
+ */
+async function bootstrapProfileStores(
+  id: string,
+  enginePath: string,
+  userDataDir: string
+): Promise<boolean> {
+  const t0 = Date.now()
+  const args = [
+    `--user-data-dir=${userDataDir}`,
+    '--headless=new',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-sync',
+    '--disable-extensions',
+    '--proxy-server=http://127.0.0.1:9',
+    '--remote-debugging-pipe',
+    'about:blank'
+  ]
+  let proc: ChildProcess
+  try {
+    proc = await spawnAndWait(enginePath, args, true, engineChildEnv())
+  } catch (err) {
+    dbg(`[bootstrap ${id}] spawn failed: ${err instanceof Error ? err.message : String(err)}`)
+    return false
+  }
+  const exited = new Promise<void>((resolve) => proc.once('exit', () => resolve()))
+  let conn: CdpConnection | undefined
+  try {
+    conn = CdpConnection.connectPipe(proc.stdio[3] as Writable, proc.stdio[4] as Readable)
+    await conn.send('Storage.setCookies', {
+      cookies: [
+        {
+          name: 'vgc_bootstrap',
+          value: '1',
+          domain: 'vgc-bootstrap.invalid',
+          path: '/',
+          httpOnly: true,
+          expires: Math.floor(Date.now() / 1000) + 120
+        }
+      ]
+    })
+    // Graceful shutdown → Cookies / Login Data / Local State are flushed to disk. The reply
+    // may never arrive (the browser exits first), so don't wait on it for long.
+    await Promise.race([conn.send('Browser.close').catch(() => undefined), sleepMs(5000)])
+  } catch (err) {
+    dbg(`[bootstrap ${id}] cdp failed: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    conn?.close()
+  }
+  const graceful = await Promise.race([exited.then(() => true), sleepMs(15_000).then(() => false)])
+  if (!graceful) {
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    await Promise.race([exited, sleepMs(3000)])
+  }
+  // Drop the throwaway run's session-restore state: the real launch must restore the synced
+  // session (or open the profile's start URLs), never this about:blank.
+  const def = join(userDataDir, 'Default')
+  await Promise.all(
+    SESSION_RESTORE_ENTRIES.map((t) => fs.rm(join(def, t), { recursive: true, force: true }).catch(() => {}))
+  )
+  // The key did not exist when the bridge first looked → forget that cached "unavailable".
+  resetEngineKeyCache(userDataDir)
+  const ready = await credentialStoresReady(userDataDir)
+  dbg(`[bootstrap ${id}] ready=${ready} graceful=${graceful} in ${Date.now() - t0}ms`)
+  return ready
+}
+
 async function launchProfileImpl(
   id: string,
   opts: LaunchProfileOptions = {}
@@ -634,11 +1215,7 @@ async function launchProfileImpl(
     // one (a normal user launch), force it closed and relaunch so we get the pipe —
     // otherwise return the live state as usual.
     if (opts.automation && !existing.automationConn) {
-      try {
-        existing.proc.kill()
-      } catch {
-        // ignore
-      }
+      stopProfile(id) // graceful (flushes the session) with its own SIGKILL escalation
       const until = Date.now() + 10000
       while (running.has(id) && Date.now() < until) await sleepMs(200)
       if (running.has(id)) {
@@ -709,6 +1286,10 @@ async function launchProfileImpl(
   }
 
   const userDataDir = await ensureSafeProfileDestination(id)
+  // Right after a restart the startup sweep may still be closing engines a crashed instance
+  // left behind — never race it (a second engine on a live user-data-dir hands its command line
+  // to the orphan via Chromium's process singleton and exits, corrupting the close bookkeeping).
+  if (reapAll) await reapAll.catch(() => {})
 
   // GoLogin-style AUTO-sync: whenever logged into cloud, ALWAYS pull the latest
   // session (cookies/logins/storage) from the cloud before opening — the cloud is
@@ -719,44 +1300,199 @@ async function launchProfileImpl(
   // it holds. Stays false/0 on fail-open so we never poll or release a lock that isn't ours.
   let lockClaimed = false
   let lockEpoch = 0
+  // Carried onto the RunningProfile so the close path can act on how this open started.
+  let openedStale = false
+  let cloudCreds: CloudCredentials | null = null
+  let credsUnmerged = false
+  let credsImportOk = false
+  let handoffTag: string | undefined
+  let handoffDownloaded = false
   if (getCloudSession()) {
+    // Read-only look at the lock row first (never bumps the epoch): who holds it, by name —
+    // for the messages below — and, for UNATTENDED launches (steal:false), the decision not to
+    // kick a machine where the user is actually working in this profile.
+    // A previous VGC instance may have died and left this profile's engine running: close it
+    // (flushing its session to disk) before touching the dir or the lock.
+    await reapOrphanEngine(id, userDataDir)
+    const peek = await peekProfileLock(id, 5_000)
+    if (opts.steal === false) {
+      // Unattended launch: refuse when a live machine holds the profile — AND when we cannot
+      // tell (unreadable lock). Skipping a warm-up is safe; kicking a working user is not.
+      if (!peek.ok) {
+        dbg(`[open ${id}] unattended launch refused: lock unreadable (${peek.reason})`)
+        throw new Error('Không đọc được trạng thái khoá profile — bỏ qua chạy tự động.')
+      }
+      if (heldElsewhere(peek.row, false)) {
+        const who = peek.row?.holderName || 'máy khác'
+        dbg(`[open ${id}] unattended launch refused: held by ${peek.row?.holderDevice} (${who})`)
+        throw new Error(`Profile đang mở ở ${who} — bỏ qua chạy tự động (không đá máy đang dùng).`)
+      }
+    }
     try {
       // Cross-machine EXCLUSIVE lock: claim this profile (bumps the epoch) so any OTHER open
       // currently running it detects the higher epoch on its next poll, saves its session, and
       // closes. Wait for a live previous holder to hand off BEFORE we download — so we always
       // pull the newest session, never a stale one. Fail-open: a null claim (not signed in / lock
-      // service unreachable / migration not applied) just opens without cross-machine protection.
-      const claim = await claimProfileLock(id)
-      if (claim) {
+      // service unreachable / migration not applied) opens without cross-machine protection —
+      // and SAYS so when we are signed in (a silent unprotected open is how dual runs happen).
+      // A network that already black-holed the peek gets ONE claim attempt, not three.
+      const networkDead = !peek.ok && (peek.reason === 'timeout' || peek.reason === 'network')
+      const claim = await claimProfileLock(id, { attempts: networkDead ? 1 : undefined })
+      if (claim.result) {
         lockClaimed = true
-        lockEpoch = claim.epoch
-        // Wait whenever a previous holder existed — even a STALE heartbeat can be a live machine
-        // whose polls briefly failed (a false "not fresh" would otherwise skip the wait and load a
-        // stale session). Fresh → long budget (slow / egress-throttled uploads); stale → short
-        // grace. On timeout we open with the last cloud session; the close-side anti-clobber guard
-        // (cloud-data.ts) still prevents overwriting a newer session we never downloaded.
-        if (claim.previousHolder) {
-          const handoffBudget = claim.previousFresh ? 30_000 : 6_000
-          broadcastData({ id, phase: 'download', message: 'Máy khác đang mở — chờ lưu phiên…' })
-          await waitForHandoff(id, handoffBudget)
+        lockEpoch = claim.result.epoch
+        const prev = claim.result.previousHolder
+        if (prev) {
+          const prevIsMe = prev === getMachineId()
+          const prevName =
+            peek.row?.holderDevice === prev && peek.row?.holderName ? peek.row.holderName : null
+          const who = prevIsMe ? 'máy này (phiên trước)' : `máy ${prevName ?? 'khác'}`
+          // Wait whenever a previous holder existed — even a STALE heartbeat can be a live
+          // machine whose polls briefly failed. Fresh → 30 s base; stale → 6 s grace. The wait
+          // then EXTENDS for as long as the kicked side keeps reporting "saving" (up to 3 min),
+          // so a slow flush + upload is never cut off by a blind fixed budget.
+          const handoffBudget = claim.result.previousFresh ? 30_000 : 6_000
+          broadcastData({ id, phase: 'download', message: `${who} đang mở — chờ lưu phiên…` })
+          const outcome = await waitForHandoff(id, lockEpoch, handoffBudget, {
+            onProgress: (m) => broadcastData({ id, phase: 'download', message: m })
+          })
+          dbg(
+            `[open ${id}] handoff ${outcome.status} after ${outcome.waitedMs}ms prev=${prev} fresh=${claim.result.previousFresh}`
+          )
+          if (outcome.status === 'superseded') {
+            const msg = 'Profile vừa được mở ở máy/cửa sổ khác — không mở lại ở đây.'
+            broadcast({ id, status: 'error', error: msg })
+            throw new SupersededError(msg)
+          }
+          if (outcome.status === 'ready') handoffTag = outcome.tag
+          if (outcome.status === 'failed') {
+            openedStale = true
+            broadcastData({
+              id,
+              phase: 'warn',
+              sticky: true,
+              message: `${who} KHÔNG lưu được phiên (${outcome.reason}) — mở bằng bản cloud cũ hơn; phiên mới nhất vẫn nằm trên máy đó.`
+            })
+          } else if (outcome.status === 'timeout' && !prevIsMe) {
+            // Another machine that never answered = asleep / offline / crashed: its work since its
+            // last save is NOT in the cloud. Open the last saved copy, but say so — and remember
+            // it, so the close here handles a late upload from that machine deliberately.
+            openedStale = true
+            broadcastData({
+              id,
+              phase: 'warn',
+              sticky: true,
+              message: `${who} không phản hồi (đang ngủ / mất mạng?) — mở bằng bản cloud gần nhất; những gì làm trên máy đó sau lần lưu cuối chưa có ở đây.`
+            })
+          }
         }
+      } else if (claim.reason && claim.reason !== 'signed-out') {
+        dbg(`[open ${id}] lock unavailable (${claim.reason}) → opening WITHOUT cross-machine protection`)
+        broadcastData({
+          id,
+          phase: 'warn',
+          sticky: true,
+          message: `Không kết nối được khoá đồng bộ (${claim.reason}) — mở KHÔNG có bảo vệ chống mở trùng máy. Nếu máy khác đang mở profile này, hãy đóng ở đó trước.`
+        })
+      }
+      // Every cloud object (session zip, cookies, logins) is sealed with the account key. On a
+      // machine where the cloud passphrase was never entered nothing below can be decrypted —
+      // the zip download would throw and the credential bridge would silently merge nothing,
+      // so the user would just see "logged out" with no hint why. Say so, plainly, and open
+      // with whatever is local (same outcome as before, minus the mystery).
+      if (!(await getAccountSecret())) {
+        dbg(`[open ${id}] account secret unavailable on this machine — session sync skipped`)
+        throw new Error(
+          'Máy này chưa mở khoá mã hoá cloud (hoặc đang mất mạng) → không tải được phiên đăng nhập. ' +
+            'Vào Cài đặt → Mã hoá cloud → nhập passphrase, rồi mở lại profile.'
+        )
       }
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
+      // Cloud cookies + saved logins: downloaded ONCE here — merged into the local stores below
+      // and kept on the RunningProfile so the close can upload the UNION without re-downloading.
+      cloudCreds = await fetchCloudCredentials(id)
+      if (!cloudCreds.cookiesKnown || !cloudCreds.loginsKnown) {
+        credsUnmerged = true
+        broadcastData({
+          id,
+          phase: 'warn',
+          sticky: true,
+          message:
+            'Không đọc được cookie/mật khẩu trên cloud (mạng hoặc passphrase) — có thể phải đăng nhập lại. ' +
+            'Bản cloud sẽ KHÔNG bị ghi đè khi đóng.'
+        })
+      }
+      // FIRST OPEN ON THIS MACHINE? The credential bridge can only MERGE into stores the
+      // engine has already created here (Cookies DB, Login Data, this machine's os_crypt key).
+      // If they are missing and the cloud holds credentials for this profile, run the
+      // bootstrap (a sub-second headless engine run) so the merge below has somewhere to
+      // land — otherwise the very first open on a new machine came up logged out. Gated on
+      // the store FILES only: a transient key-read failure must never bootstrap (= run a
+      // throwaway engine, which would drop this machine's tabs + session cookies) over a
+      // profile that already has data here.
+      let bootstrapped: boolean | undefined
+      await withDataLock(id, async () => {
+        if (credentialStoresReady(userDataDir)) return
+        if (!cloudCreds!.cookies.length && !cloudCreds!.logins.length) return // nothing to merge yet
+        broadcastData({
+          id,
+          phase: 'download',
+          message: 'Lần đầu mở profile trên máy này — đang khởi tạo kho phiên…'
+        })
+        bootstrapped = await bootstrapProfileStores(id, enginePath, userDataDir)
+        if (!bootstrapped) {
+          broadcastData({
+            id,
+            phase: 'error',
+            sticky: true,
+            message: 'Chưa khởi tạo được kho phiên trên máy này — cookie/đăng nhập sẽ được đồng bộ ở lần mở sau.'
+          })
+        }
+      })
+      if (
+        (cloudCreds.cookies.length || cloudCreds.logins.length) &&
+        !(await engineKeyReadable(userDataDir))
+      ) {
+        credsUnmerged = true
+        broadcastData({
+          id,
+          phase: 'warn',
+          sticky: true,
+          message:
+            'Không đọc được khoá mã hoá của máy này (DPAPI / Keychain) — cookie/mật khẩu từ cloud chưa nhập được lần này. ' +
+            'Bản cloud sẽ không bị ghi đè khi đóng.'
+        })
+      }
       // Held under the per-profile data lock so a still-running close-upload of the
       // SAME profile finishes before we extract the cloud zip over its dir.
       // SESSION STORES (Cookies / Login Data / Local State) are kept PURELY LOCAL —
       // they're sealed with a per-machine key, so the cross-machine bridge is disabled
       // here (it churned the session). downloadProfileData preserves the local copies.
-      const got = await withDataLock(id, () => downloadProfileData(id))
+      let got = false
+      try {
+        got = await withDataLock(id, () => downloadProfileData(id))
+        handoffDownloaded = true
+      } catch (dlErr) {
+        // We launch on whatever is local — an OLDER base than the cloud. Remember that: the
+        // close must not override the cloud copy we never loaded, and the user must know.
+        openedStale = true
+        throw dlErr
+      }
       // Cross-machine cookies + saved passwords: download + re-encrypt with THIS machine's
       // key BEFORE launch (browser not running yet, so mutating the DB is safe).
-      await withDataLock(id, () => downloadCredentials(id))
-      dbg(`[open ${id}] downloaded=${got} + credentials bridge`)
+      const merged = await withDataLock(id, () => downloadCredentials(id, undefined, cloudCreds!))
+      if (!merged) credsUnmerged = true
+      credsImportOk = merged && !credsUnmerged
+      dbg(
+        `[open ${id}] downloaded=${got} bootstrapped=${bootstrapped ?? 'n/a'} credsMerged=${merged} stale=${openedStale}`
+      )
       // Legacy CDP cookie seed — only used in CDP mode; native mode ignores it.
       syncedCookies = await downloadProfileCookies(id).catch(() => [])
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
-      broadcastData({ id, phase: 'error', message: err instanceof Error ? err.message : String(err) })
+      if (err instanceof SupersededError) throw err
+      dbg(`[open ${id}] sync error: ${errMsg(err)}`)
+      broadcastData({ id, phase: 'error', sticky: true, message: errMsg(err) })
     }
   }
 
@@ -943,23 +1679,11 @@ async function launchProfileImpl(
   // downloadCredentials above): they are decrypted with THIS machine's key, stored
   // account-secret-encrypted in the cloud, and re-encrypted with the other machine's key on
   // open — WITHOUT a shared engine key (which is what destroyed cookies in 2.1.11–2.1.14).
-  const childEnv: NodeJS.ProcessEnv = { ...process.env }
-  delete childEnv.VGC_CRYPT_SECRET
-  // HARDENING: childEnv inherits the whole host environment. If this machine ever has
-  // GOOGLE_DEFAULT_CLIENT_ID / _SECRET set globally (a stray setx, a dev shell, CI), they
-  // would reach the engine and re-trigger the DICE AccountReconcilor that deletes the
-  // .google.com session on reopen (the v2.1.16 regression). Not setting them is not enough
-  // — we must actively STRIP them so their absence is guaranteed regardless of host env.
-  delete childEnv.GOOGLE_DEFAULT_CLIENT_ID
-  delete childEnv.GOOGLE_DEFAULT_CLIENT_SECRET
+  // The env is built by engineChildEnv() (shared with the first-open bootstrap) — see it for
+  // the crypt-secret / OAuth-client / API-key rationale.
+  const childEnv = engineChildEnv()
   dbg(`[launch ${id}] NO crypt switch (engine keeps machine key) cloudSession=${!!getCloudSession()}`)
-  // Kill Chromium's yellow "Google API keys are missing" infobar that shows on EVERY
-  // page — it's clutter AND an antidetect tell (real Chrome never shows it). Chromium
-  // reads these keys from the environment at runtime; any non-default value makes
-  // HasAPIKeyConfigured() true so the bar never appears. They're NOT used for login
-  // (profiles sign in via the web) and are never exposed to web pages.
-  childEnv.GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || 'no-key'
-  // ⚠️ DO NOT set GOOGLE_DEFAULT_CLIENT_ID / GOOGLE_DEFAULT_CLIENT_SECRET here.
+  // ⚠️ engineChildEnv() must NEVER set GOOGLE_DEFAULT_CLIENT_ID / GOOGLE_DEFAULT_CLIENT_SECRET.
   // The infobar is gated ONLY on the API key (engine infobar_utils.cc:188:
   // `if (!google_apis::HasAPIKeyConfigured())`), so GOOGLE_API_KEY alone kills it.
   // Configuring an OAuth *client* (id+secret) makes the engine's
@@ -1097,9 +1821,16 @@ async function launchProfileImpl(
     state,
     relay,
     accountUid: launchAccountUid,
-    lockEpoch: lockClaimed ? lockEpoch : undefined
+    lockEpoch: lockClaimed ? lockEpoch : undefined,
+    openedStale,
+    cloudCreds,
+    credsUnmerged,
+    credsImportOk,
+    handoffTag,
+    handoffDownloaded
   }
   running.set(id, entry)
+  recordEnginePid(id, userDataDir, proc.pid)
   broadcast(state)
 
   // Attach exit/error listeners IMMEDIATELY (before any await) so a process that dies
@@ -1107,6 +1838,8 @@ async function launchProfileImpl(
   proc.on('exit', () => {
     if (entry.tabPoll) clearInterval(entry.tabPoll)
     if (entry.lockPoll) clearInterval(entry.lockPoll)
+    if (entry.forceTimer) clearTimeout(entry.forceTimer)
+    clearEnginePid(id, proc.pid)
     entry.injector?.dispose()
     entry.automationConn?.close()
     entry.relay?.close()
@@ -1115,13 +1848,19 @@ async function launchProfileImpl(
     broadcast({ id, status: 'stopped' })
     // GoLogin-style sync-on-close: push the freshest session back to the cloud, then settle
     // the cross-machine lock (publish the fresh tag for a taking-over machine, or release it).
-    void runAccountOperation(() => syncAndUnlockOnClose(id, entry)).catch(() => {})
+    // runCloseOperation: never rejected by an account switch that is waiting for in-flight
+    // work (the switch waits for THIS instead); tracked in closeOps so quit waits for it too.
+    const closeOp = runCloseOperation(() => syncAndUnlockOnClose(id, entry))
+    closeOps.add(closeOp)
+    void closeOp.catch(() => {}).finally(() => closeOps.delete(closeOp))
   })
   proc.on('error', (err) => {
     // Mirror the 'exit' cleanup: the tabPoll interval would otherwise keep firing every 5s
     // forever against a dead CDP connection once the entry is removed from `running`.
     if (entry.tabPoll) clearInterval(entry.tabPoll)
     if (entry.lockPoll) clearInterval(entry.lockPoll)
+    if (entry.forceTimer) clearTimeout(entry.forceTimer)
+    clearEnginePid(id, proc.pid)
     entry.injector?.dispose()
     entry.automationConn?.close()
     entry.relay?.close()
@@ -1146,11 +1885,12 @@ async function launchProfileImpl(
   }
 
   if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
-    try {
-      proc.kill()
-    } catch {
-      // exit/error handlers perform cleanup
-    }
+    // Spawned in the window between the pre-spawn gate and a quit / account switch. Nothing to
+    // save (it just started) — close it gracefully and free the lock we claimed, otherwise the
+    // row would keep this machine as holder with a dying heartbeat and the next open elsewhere
+    // would wait for a hand-off that never comes.
+    stopProfile(id)
+    if (lockClaimed) void releaseProfileLock(id, lockEpoch).catch(() => {})
     throw new Error('Tài khoản đã thay đổi trong lúc khởi chạy profile.')
   }
 
@@ -1263,15 +2003,89 @@ export async function checkFingerprint(
   }
 }
 
-export function stopProfile(id: string): void {
+/** How long a graceful exit request may take before the engine is force-killed. Chromium needs
+ *  well under a second to flush its stores on a clean close (measured ~0.3 s); only a modal
+ *  (a beforeunload "Leave site?" prompt) or a hung renderer makes it slower. */
+const FORCE_KILL_AFTER_MS = 15_000
+
+/**
+ * Ask the engine to exit GRACEFULLY — the only way its latest state reaches disk.
+ *
+ * Chromium's stores are write-behind: the cookie DB commits every ~30 s (or on clean shutdown),
+ * Local/Session Storage (LevelDB) and the session-restore files likewise. A forced termination
+ * throws away whatever is still pending. MEASURED (Chrome 152, Windows, 2026-09-04): a cookie set
+ * 2 s before a forced proc.kill() was GONE from the Cookies DB; the same cookie SURVIVED a
+ * graceful close. That was the kicked-machine bug — "mở ở máy khác → lưu phiên & đóng ở đây"
+ * force-killed the engine, so the freshest login on the kicked machine (the very thing the
+ * takeover exists to hand over) was the one that never reached the cloud. Same for the app's
+ * own Stop button and the quit path.
+ *   • POSIX (macOS): SIGTERM — Chromium's shutdown handler runs a normal clean exit.
+ *   • Windows: Node's kill() is ALWAYS TerminateProcess (signals do not exist there), so we post
+ *     WM_CLOSE to the engine's windows via `taskkill /PID <pid>` (no /F): every window closes,
+ *     the browser exits cleanly and flushes. The guard extension is MV3 (service worker, no
+ *     "background" permission) so nothing keeps the browser alive once its windows are gone.
+ *     If taskkill itself fails (e.g. no window yet, seconds after spawn) fall back to a forced
+ *     kill — no worse than before.
+ * Returns once the request has been SENT; stopProfile escalates to SIGKILL on a timer.
+ */
+function requestEngineExit(id: string, entry: RunningProfile): void {
+  const { proc } = entry
+  // Automation launches (bulk Gmail tools, headless API) own a CDP control pipe and may have
+  // NO window for WM_CLOSE to reach — Browser.close over that pipe is the clean shutdown there.
+  if (entry.automationConn) {
+    void entry.automationConn.send('Browser.close').catch(() => {})
+    return
+  }
+  // CDP-mode launches (headless REST API, injector mode) hold the fingerprint injector's pipe —
+  // a headless engine has no window for WM_CLOSE, so close it over that pipe.
+  if (entry.injector) {
+    void entry.injector.close().catch(() => {})
+    return
+  }
+  if (process.platform === 'win32' && proc.pid) {
+    // taskkill (no /F) fails when the process has no top-level window: either it is still
+    // starting (window not up yet) or it is ALREADY shutting down (last window closed, stores
+    // still flushing). Both resolve on their own within seconds — so retry gently instead of
+    // force-killing mid-flush; the force timer in stopProfile remains the only escalation.
+    const attempt = (n: number): void => {
+      if (running.get(id) !== entry) return
+      execFile('taskkill', ['/PID', String(proc.pid)], { windowsHide: true, timeout: 5000 }, (err) => {
+        if (!err || running.get(id) !== entry) return
+        if (n === 1) dbg(`[stop ${id}] taskkill: ${err.message.trim().slice(0, 160)} → retrying gently`)
+        if (n < 8) setTimeout(() => attempt(n + 1), 1000)
+      })
+    }
+    attempt(1)
+    return
+  }
+  try {
+    proc.kill() // SIGTERM
+  } catch {
+    /* already gone — exit handler cleans up */
+  }
+}
+
+/**
+ * Stop a running profile: graceful exit request + SIGKILL escalation after `forceAfterMs`.
+ * Idempotent — repeated calls while a stop is pending are no-ops (the quit path polls this
+ * every 100 ms). The engine's 'exit' handler does the cleanup + cloud save either way.
+ */
+export function stopProfile(id: string, forceAfterMs = FORCE_KILL_AFTER_MS): void {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return
   const r = running.get(id)
   if (!r) return
-  try {
-    r.proc.kill()
-  } catch {
-    // ignore — exit handler will clean up
-  }
+  if (r.stopRequestedAt != null) return // already requested; the force timer is the escalation
+  r.stopRequestedAt = Date.now()
+  requestEngineExit(id, r)
+  r.forceTimer = setTimeout(() => {
+    if (running.get(id) !== r) return
+    dbg(`[stop ${id}] engine still running ${forceAfterMs}ms after graceful request → SIGKILL`)
+    try {
+      r.proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+  }, forceAfterMs)
 }
 
 /** Read the live cookies of a running profile (for export). Null if not running. */
@@ -1312,4 +2126,212 @@ export async function cookieRobot(id: string, urls: string[] = WARMUP_URLS): Pro
 /** Kill every running profile (called on app quit). */
 export function stopAll(): void {
   for (const id of [...running.keys()]) stopProfile(id)
+}
+
+/** Is this profile's engine running in THIS app instance? */
+export function isProfileRunning(id: string): boolean {
+  return /^[0-9a-f-]{36}$/i.test(id) && running.has(id)
+}
+
+// ── Manual push / pull (CloudModal "Đẩy lên / Kéo về kèm phiên", ShareModal) ──────────
+// These used to call cloud-data directly: zipping a LIVE user-data-dir (mid-write SQLite),
+// extracting over one, and — worst — pushing an idle machine's stale zip over the base of the
+// machine that currently holds the profile (whose later close was then refused by anti-clobber
+// and its session dropped). Now they refuse in those cases and serialise with close uploads.
+
+export async function manualUploadProfileData(id: string): Promise<void> {
+  requireProfileId(id)
+  if (running.has(id)) {
+    throw new Error('Profile đang mở ở máy này — đóng profile trước khi đẩy phiên lên cloud.')
+  }
+  const peek = await peekProfileLock(id)
+  // Refuse while ANY other machine holds the row — fresh or stale. A sleeping/offline holder
+  // still has the live session on its disk; pushing over its cloud base would get its later
+  // close refused by anti-clobber. The row clears when that machine closes the profile (or
+  // when anyone opens it normally, which claims the lock).
+  if (peek.row?.holderDevice && peek.row.holderDevice !== getMachineId()) {
+    const age = peek.row.heartbeatAt ? Math.round((Date.now() - peek.row.heartbeatAt) / 60000) : null
+    throw new Error(
+      `Profile đang được máy ${peek.row.holderName ?? 'khác'} giữ${age != null ? ` (tín hiệu cuối ${age} phút trước)` : ''} — ` +
+        'không đẩy đè phiên. Đóng profile ở máy đó (hoặc mở rồi đóng ở đây) trước.'
+    )
+  }
+  await withDataLock(id, async () => {
+    await uploadProfileData(id)
+  })
+}
+
+export async function manualDownloadProfileData(id: string): Promise<boolean> {
+  requireProfileId(id)
+  if (running.has(id)) {
+    throw new Error('Profile đang mở ở máy này — đóng profile trước khi kéo phiên về.')
+  }
+  return withDataLock(id, () => downloadProfileData(id))
+}
+
+// ── Orphaned engines (VGC crashed / was killed while profiles were open) ────────────────
+// Such engines keep running with no lock poll → a permanent dual-run risk, and a later reopen
+// on this machine would zip their live, mid-write dir. Each launch records its engine pid next
+// to the profile (never inside Default/, so it is never synced); at startup any recorded engine
+// that is still alive on THAT user-data-dir is closed gracefully (flushing its session to disk)
+// before the app accepts opens. The command line is verified — a bare pid is never trusted
+// (pid reuse).
+
+const ENGINE_PID_FILE = 'vgc-engine.pid.json'
+
+function recordEnginePid(id: string, userDataDir: string, pid: number | undefined): void {
+  if (!pid) return
+  void fs
+    .writeFile(
+      join(userDataDir, ENGINE_PID_FILE),
+      JSON.stringify({ id, pid, startedAt: Date.now(), machine: getMachineId() }),
+      { mode: 0o600 }
+    )
+    .catch(() => {})
+}
+
+/** Remove the pid record — only if it still records OUR pid (a launch that lost the process
+ *  singleton to an orphan must not erase the orphan's record). */
+function clearEnginePid(id: string, pid: number | undefined): void {
+  try {
+    const file = join(profileDataDir(id), ENGINE_PID_FILE)
+    void fs
+      .readFile(file, 'utf8')
+      .then((raw) => {
+        const rec = JSON.parse(raw) as { pid?: unknown }
+        if (pid == null || Number(rec?.pid) === pid) return fs.unlink(file)
+        return undefined
+      })
+      .catch(() => {})
+  } catch {
+    /* profile dir gone */
+  }
+}
+
+/** Global reap in progress (startup) — opens wait for it so they never race an orphan. */
+let reapAll: Promise<void> | null = null
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** The command line of `pid`, or '' when it cannot be read. Windows PowerShell 5.1 writes the
+ *  console code page by default (non-ASCII paths come back as '?'), so the output encoding is
+ *  forced to UTF-8 — and the match below only relies on the ASCII profile id anyway. */
+function processCommandLine(pid: number): Promise<string> {
+  return new Promise((resolve) => {
+    const done = (err: Error | null, out?: string): void => resolve(err ? '' : String(out ?? '').trim())
+    if (process.platform === 'win32') {
+      execFile(
+        'powershell',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`
+        ],
+        { windowsHide: true, timeout: 15_000, encoding: 'utf8' },
+        done
+      )
+    } else {
+      execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: 10_000, encoding: 'utf8' }, done)
+    }
+  })
+}
+
+/** Close a previous VGC instance's engine still running on THIS profile dir, if any. Safe to
+ *  call before every open (cheap when there is no pid record). Bounded (~35 s worst case). */
+async function reapOrphanEngine(id: string, dir: string): Promise<void> {
+  if (running.has(id)) return
+  const pidFile = join(dir, ENGINE_PID_FILE)
+  let rec: { pid?: unknown } | null = null
+  try {
+    rec = JSON.parse(await fs.readFile(pidFile, 'utf8')) as { pid?: unknown }
+  } catch {
+    return // no record → nothing to reap
+  }
+  const pid = Number(rec?.pid)
+  if (!Number.isInteger(pid) || pid <= 0 || !pidAlive(pid)) {
+    await fs.unlink(pidFile).catch(() => {})
+    return
+  }
+  const cmd = (await processCommandLine(pid)).toLowerCase()
+  if (!cmd) {
+    // Unreadable (PowerShell/ps failed): neither confirm nor deny — leave the record so a later
+    // attempt (or the next open) can decide. Never kill on a bare pid.
+    dbg(`[reap ${id}] pid ${pid} alive but its command line is unreadable → leaving it`)
+    return
+  }
+  // Match on the ASCII profile id under a user-data-dir switch — immune to path encoding.
+  if (!cmd.includes('--user-data-dir=') || !cmd.includes(id.toLowerCase())) {
+    dbg(`[reap ${id}] pid ${pid} alive but not our engine (pid reused) → forget`)
+    await fs.unlink(pidFile).catch(() => {})
+    return
+  }
+  dbg(`[reap ${id}] orphan engine pid=${pid} from a previous VGC instance → graceful close`)
+  if (process.platform === 'win32') {
+    await new Promise<void>((r) =>
+      execFile('taskkill', ['/PID', String(pid)], { windowsHide: true, timeout: 5000 }, () => r())
+    )
+  } else {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      /* gone */
+    }
+  }
+  const deadline = Date.now() + FORCE_KILL_AFTER_MS
+  while (pidAlive(pid) && Date.now() < deadline) await sleepMs(250)
+  if (pidAlive(pid)) {
+    dbg(`[reap ${id}] pid ${pid} ignored graceful close → force kill`)
+    try {
+      if (process.platform === 'win32') {
+        await new Promise<void>((r) =>
+          execFile('taskkill', ['/F', '/PID', String(pid)], { windowsHide: true, timeout: 5000 }, () => r())
+        )
+      } else {
+        process.kill(pid, 'SIGKILL')
+      }
+    } catch {
+      /* gone */
+    }
+    await sleepMs(500)
+  }
+  // Forget the record only if it still names the pid we just dealt with.
+  try {
+    const again = JSON.parse(await fs.readFile(pidFile, 'utf8')) as { pid?: unknown }
+    if (Number(again?.pid) === pid) await fs.unlink(pidFile)
+  } catch {
+    /* gone already */
+  }
+}
+
+/** Startup sweep over every profile dir. Opens wait for it (see launchProfileImpl). */
+export function reapOrphanEngines(): Promise<void> {
+  if (reapAll) return reapAll
+  reapAll = (async () => {
+    const profilesRoot = join(app.getPath('userData'), 'profiles')
+    let dirs: string[] = []
+    try {
+      dirs = await fs.readdir(profilesRoot)
+    } catch {
+      return
+    }
+    for (const d of dirs) {
+      if (!/^[0-9a-f-]{36}$/i.test(d)) continue
+      try {
+        await reapOrphanEngine(d, join(profilesRoot, d))
+      } catch (err) {
+        dbg(`[reap ${d}] failed: ${errMsg(err)}`)
+      }
+    }
+  })().finally(() => {
+    reapAll = null
+  })
+  return reapAll
 }

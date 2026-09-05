@@ -20,6 +20,8 @@ import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { ShareModal } from './components/ShareModal'
 import { GmailPasswordModal } from './components/GmailPasswordModal'
 import { Sidebar } from './components/Sidebar'
+import { Dropdown } from './components/Dropdown'
+import { Icon } from './components/Icon'
 import { applyTheme, getTheme, type Theme } from './theme'
 import logo from './assets/logo.png'
 import {
@@ -82,6 +84,14 @@ export default function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<UpdateStatus | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
   const [refreshing, setRefreshing] = useState(false)
+  const [appVersion, setAppVersion] = useState('')
+
+  useEffect(() => {
+    void window.vgc
+      .getVersion()
+      .then((v) => setAppVersion(String(v ?? '')))
+      .catch(() => {})
+  }, [])
 
   // Show the signed-in account in the sidebar.
   useEffect(() => {
@@ -126,14 +136,43 @@ export default function App(): JSX.Element {
     return window.vgc.onUpdateStatus(show)
   }, [])
 
-  // Toast for cloud profile-data sync (download on open / upload on close).
+  // Toast for cloud profile-data sync (download on open / upload on close). STICKY messages
+  // (a session that was NOT saved, a stale session opened, a takeover, an unprotected open)
+  // stay ~15 s and are not replaced by ordinary progress toasts — otherwise the next
+  // "Đang khớp múi giờ…" / green "Đã đồng bộ" would hide them within a second.
+  const stickyUntilRef = useRef(0)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const dismissToast = useCallback(() => {
+    stickyUntilRef.current = 0
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setDataSync(null)
+  }, [])
   useEffect(() => {
-    return window.vgc.onDataSync((s) => {
+    const clearLater = (ms: number): void => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = setTimeout(() => setDataSync(null), ms)
+    }
+    const unsubscribe = window.vgc.onDataSync((s) => {
+      const now = Date.now()
+      if (s.sticky) {
+        stickyUntilRef.current = now + 15_000
+        setDataSync(s)
+        clearLater(15_000)
+        return
+      }
+      // While a sticky notice is on screen, progress toasts are dropped — but a failure must
+      // always get through (it is the outcome the user needs to see).
+      if (now < stickyUntilRef.current && s.phase !== 'error') return
+      if (s.phase === 'error') stickyUntilRef.current = 0
       setDataSync(s)
-      if (s.phase === 'done' || s.phase === 'error') {
-        setTimeout(() => setDataSync(null), 2500)
+      if (s.phase === 'done' || s.phase === 'error' || s.phase === 'warn') {
+        clearLater(s.phase === 'done' ? 2500 : 6000)
       }
     })
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      unsubscribe()
+    }
   }, [])
 
   const refresh = useCallback(async () => {
@@ -752,45 +791,44 @@ export default function App(): JSX.Element {
     (s) => s === 'running' || s === 'starting'
   ).length
 
+  const liveCount = profiles.filter((p) => p.account?.status === 'live').length
+  const dieCount = profiles.filter(
+    (p) => p.account?.status === 'die' || p.account?.status === 'banned'
+  ).length
+  const pageTitle =
+    groupFilter === '' ? 'Tất cả hồ sơ' : groupFilter === '#ungrouped' ? 'Chưa phân nhóm' : groupFilter
+  const syncing =
+    !!dataSync &&
+    (dataSync.phase === 'download' ||
+      dataSync.phase === 'upload' ||
+      dataSync.phase === 'zip' ||
+      dataSync.phase === 'extract')
+
   return (
     <div className="app">
       {updateReady && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            zIndex: 10000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 14,
-            padding: '8px 16px',
-            fontSize: 13,
-            color: '#fff',
-            background: 'linear-gradient(135deg,#15803d,#166534)',
-            boxShadow: '0 4px 14px rgba(0,0,0,.3)'
-          }}
-        >
+        <div className="update-banner">
+          <Icon name="sparkles" size={18} style={{ color: 'var(--green)' }} />
           {updateReady.manualDownloadUrl ? (
             <>
               <span>
-                🎉 Có bản mới
-                {updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — tải về để cập nhật (Mac).
+                Có bản mới{updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — tải về để cập
+                nhật (Mac).
               </span>
               <button className="btn primary" onClick={() => void window.vgc.openUpdateDownload()}>
-                ⬇ Tải về
+                <Icon name="download" size={15} />
+                Tải về
               </button>
             </>
           ) : (
             <>
               <span>
-                🎉 Đã tải bản mới
-                {updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — khởi động lại để cập nhật.
+                Đã tải bản mới{updateReady.newVersion ? ` v${updateReady.newVersion}` : ''} — khởi
+                động lại để cập nhật.
               </span>
               <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
-                ⟳ Khởi động lại ngay
+                <Icon name="refresh" size={15} />
+                Khởi động lại
               </button>
             </>
           )}
@@ -802,9 +840,13 @@ export default function App(): JSX.Element {
       <Sidebar
         email={accountEmail}
         profileCount={profiles.length}
+        runningCount={runningCount}
         groups={groupsWithCounts}
         allCount={profiles.length}
         active={groupFilter}
+        version={appVersion}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onSelect={setGroupFilter}
         onCreate={() => setShowCreate(true)}
         onProxy={() => setShowProxyMgr(true)}
@@ -814,26 +856,44 @@ export default function App(): JSX.Element {
       />
 
       <div className="main">
-        <div className="crumbbar">
-          <div className="crumb">
-            <span className="crumb-acct">{accountEmail || 'VGC'}</span>
-            <span className="crumb-sep">›</span>
-            <span className="crumb-cur">
-              {groupFilter === ''
-                ? 'Tất cả hồ sơ'
-                : groupFilter === '#ungrouped'
-                  ? 'Chưa phân nhóm'
-                  : groupFilter}
-            </span>
+        <div className="pagehead">
+          <div>
+            <h1 className="page-title">{pageTitle}</h1>
+            <p className="page-sub">
+              <span>
+                {filtered.length === profiles.length
+                  ? `${profiles.length} hồ sơ`
+                  : `${filtered.length} / ${profiles.length} hồ sơ`}
+              </span>
+              {accountEmail && (
+                <>
+                  <span className="sep">·</span>
+                  <span>{accountEmail}</span>
+                </>
+              )}
+            </p>
           </div>
-          <div className="stats">
-            <span className="running-dot" /> {runningCount} chạy
-            <span className="dot">·</span> {profiles.length} hồ sơ
+          <div className="stat-chips">
+            <span className="chip">
+              <span className="running-dot" /> <b>{runningCount}</b> đang chạy
+            </span>
+            {liveCount > 0 && (
+              <span className="chip live">
+                <b>{liveCount}</b> live
+              </span>
+            )}
+            {dieCount > 0 && (
+              <span className="chip die">
+                <b>{dieCount}</b> die / banned
+              </span>
+            )}
           </div>
         </div>
         <div className="toolbar">
           <div className="searchbox">
-            <span className="search-ic">⌕</span>
+            <span className="search-ic">
+              <Icon name="search" size={16} />
+            </span>
             <input
               className="search"
               placeholder="Tìm theo tên, tag, nhóm…"
@@ -841,58 +901,114 @@ export default function App(): JSX.Element {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
+          <select
+            className="group-select"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as AccountStatus | '')}
+            title="Lọc theo trạng thái tài khoản"
+            style={{ width: 156 }}
+          >
+            <option value="">Mọi trạng thái</option>
+            <option value="live">Live</option>
+            <option value="ready">Sẵn sàng</option>
+            <option value="die">Die</option>
+            <option value="banned">Banned</option>
+          </select>
+          <div className="spacer" />
           <button
             className="btn"
             onClick={syncNow}
             disabled={refreshing}
             title="Kéo dữ liệu mới nhất từ cloud (đồng bộ giữa 2 máy)"
           >
-            {refreshing ? '↻ Đang làm mới…' : '↻ Làm mới'}
+            <Icon name="refresh" size={16} className={refreshing ? 'spin' : ''} />
+            {refreshing ? 'Đang làm mới…' : 'Làm mới'}
           </button>
-          <button className="btn" onClick={importProfiles}>
-            ↧ Nhập
-          </button>
-          <button
-            className="btn"
-            onClick={() => setShowBulkImport(true)}
-            title="Dán danh sách email|pass|proxy|2FA → tạo profile hàng loạt"
-          >
-            ⇊ Nhập acc hàng loạt
-          </button>
-          <button className="btn" onClick={exportAll}>
-            ↥ Xuất
-          </button>
-          <select
-            className="group-select"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as AccountStatus | '')}
-            title="Lọc theo trạng thái tài khoản"
-            style={{ width: 140 }}
-          >
-            <option value="">Mọi trạng thái</option>
-            <option value="live">🟢 Live</option>
-            <option value="ready">🟡 Sẵn sàng</option>
-            <option value="die">🔴 Die</option>
-            <option value="banned">⛔ Banned</option>
-          </select>
-          <button
-            className="btn"
-            onClick={syncTimezones}
-            disabled={tzSyncing}
-            title="Khớp múi giờ & vị trí của mỗi profile theo IP proxy của nó (chống lệch giờ/nước — dấu hiệu bot)"
-          >
-            {tzSyncing ? '🕐 Đang khớp…' : '🕐 Khớp múi giờ'}
-          </button>
-          <button
-            className="btn"
-            onClick={() => setShowWarmSchedule(true)}
-            title="Hẹn giờ tự nuôi acc — app tự mở + hoạt động người thật theo lịch"
-          >
-            🕒 Hẹn giờ nuôi
-          </button>
+          <Dropdown label="Nhập / Xuất" icon="layers">
+            {(close) => (
+              <>
+                <button
+                  onClick={() => {
+                    close()
+                    void importProfiles()
+                  }}
+                >
+                  <Icon name="download" size={16} />
+                  Nhập profile (.json)
+                </button>
+                <button
+                  onClick={() => {
+                    close()
+                    setShowBulkImport(true)
+                  }}
+                  title="Dán danh sách email|pass|proxy|2FA → tạo profile hàng loạt"
+                >
+                  <Icon name="users" size={16} />
+                  Nhập acc hàng loạt
+                </button>
+                <div className="menu-sep" />
+                <button
+                  onClick={() => {
+                    close()
+                    void exportAll()
+                  }}
+                >
+                  <Icon name="upload" size={16} />
+                  Xuất tất cả
+                </button>
+              </>
+            )}
+          </Dropdown>
+          <Dropdown label="Công cụ" icon="tool">
+            {(close) => (
+              <>
+                <button
+                  onClick={() => {
+                    close()
+                    void syncTimezones()
+                  }}
+                  disabled={tzSyncing}
+                  title="Khớp múi giờ & vị trí của mỗi profile theo IP proxy của nó (chống lệch giờ/nước — dấu hiệu bot)"
+                >
+                  <Icon name="clock" size={16} />
+                  {tzSyncing ? 'Đang khớp múi giờ…' : 'Khớp múi giờ theo proxy'}
+                </button>
+                <button
+                  onClick={() => {
+                    close()
+                    setShowWarmSchedule(true)
+                  }}
+                  title="Hẹn giờ tự nuôi acc — app tự mở + hoạt động người thật theo lịch"
+                >
+                  <Icon name="calendar" size={16} />
+                  Hẹn giờ nuôi acc
+                </button>
+                <button
+                  onClick={() => {
+                    close()
+                    setShowProxyMgr(true)
+                  }}
+                >
+                  <Icon name="globe" size={16} />
+                  Kho proxy
+                </button>
+                <div className="menu-sep" />
+                <button
+                  onClick={() => {
+                    close()
+                    setShowCloud(true)
+                  }}
+                >
+                  <Icon name="cloud" size={16} />
+                  Đồng bộ cloud
+                </button>
+              </>
+            )}
+          </Dropdown>
           {/* Nút "Đổi MK Gmail" tạm ẩn theo yêu cầu — code backend giữ nguyên để thêm lại sau. */}
           <button className="btn primary" onClick={() => setShowCreate(true)}>
-            + Tạo profile
+            <Icon name="plus" size={16} strokeWidth={2.4} />
+            Tạo profile
           </button>
         </div>
 
@@ -900,6 +1016,7 @@ export default function App(): JSX.Element {
           <div className="bulkbar">
             <span>{selected.size} đã chọn</span>
             <button className="btn" onClick={bulkRun}>
+              <Icon name="play" size={14} strokeWidth={2.4} />
               Mở
             </button>
             <button
@@ -907,9 +1024,11 @@ export default function App(): JSX.Element {
               onClick={bulkGrid}
               title="Mở tất cả profile đã chọn, xếp cửa sổ thành lưới trên màn hình"
             >
-              ▦ Mở lưới
+              <Icon name="grid" size={14} />
+              Mở lưới
             </button>
             <button className="btn" onClick={bulkStop}>
+              <Icon name="stop" size={14} strokeWidth={2.4} />
               Dừng
             </button>
             <button
@@ -918,7 +1037,8 @@ export default function App(): JSX.Element {
               disabled={loginBusy}
               title="Tự đăng nhập Gmail bằng email/mật khẩu/2FA đã lưu, rồi đánh dấu Live/Die"
             >
-              {loginBusy ? '⏳ Đang login…' : '🔑 Đăng nhập Gmail'}
+              <Icon name="key" size={14} />
+              {loginBusy ? 'Đang login…' : 'Đăng nhập Gmail'}
             </button>
             <button
               className="btn"
@@ -926,24 +1046,28 @@ export default function App(): JSX.Element {
               disabled={loginBusy}
               title="Nuôi acc: mở Gmail + hoạt động như người thật (cuộn, đọc mail) vài phút rồi đóng"
             >
-              🌱 Nuôi acc
+              <Icon name="leaf" size={14} />
+              Nuôi acc
             </button>
             <button className="btn" onClick={exportSelected}>
+              <Icon name="upload" size={14} />
               Xuất
             </button>
             <button className="btn danger" onClick={bulkDelete}>
+              <Icon name="trash" size={14} />
               Xoá
             </button>
-            <button className="btn ghost" onClick={() => setSelected(new Set())}>
-              Bỏ chọn
+            <button className="icon-btn" title="Bỏ chọn" onClick={() => setSelected(new Set())}>
+              <Icon name="x" size={16} strokeWidth={2.4} />
             </button>
           </div>
         )}
         {loginMsg && (
-          <div className="bulkbar" style={{ background: 'var(--card)' }}>
-            <span>🔑 {loginMsg}</span>
-            <span style={{ flex: 1 }} />
-            <button className="btn ghost" onClick={() => setLoginMsg('')}>
+          <div className="msgbar">
+            <Icon name="key" size={16} style={{ color: 'var(--accent)' }} />
+            <span>{loginMsg}</span>
+            <span className="grow" />
+            <button className="btn ghost sm" onClick={() => setLoginMsg('')}>
               Ẩn
             </button>
           </div>
@@ -953,10 +1077,22 @@ export default function App(): JSX.Element {
           {loading ? (
             <div className="empty">Đang tải…</div>
           ) : filtered.length === 0 ? (
-            <div className="empty">
-              {profiles.length === 0
-                ? 'Chưa có profile nào. Bấm “Tạo profile” để bắt đầu.'
-                : 'Không có profile khớp.'}
+            <div className="empty-state">
+              <div className="ill">
+                <Icon name={profiles.length === 0 ? 'sparkles' : 'search'} size={30} />
+              </div>
+              <h3>{profiles.length === 0 ? 'Chưa có profile nào' : 'Không có profile khớp'}</h3>
+              <p>
+                {profiles.length === 0
+                  ? 'Tạo profile đầu tiên — mỗi profile là một trình duyệt riêng biệt với vân tay và proxy riêng.'
+                  : 'Thử từ khoá khác hoặc bỏ bộ lọc trạng thái.'}
+              </p>
+              {profiles.length === 0 && (
+                <button className="btn primary" onClick={() => setShowCreate(true)}>
+                  <Icon name="plus" size={16} strokeWidth={2.4} />
+                  Tạo profile
+                </button>
+              )}
             </div>
           ) : (
             <ProfileTable
@@ -1072,32 +1208,48 @@ export default function App(): JSX.Element {
 
       {dataSync && (
         <div
-          style={{
-            position: 'fixed',
-            right: 18,
-            bottom: 18,
-            zIndex: 9999,
-            padding: '10px 16px',
-            borderRadius: 10,
-            fontSize: 13,
-            color: '#fff',
-            boxShadow: '0 8px 24px rgba(0,0,0,.35)',
-            background:
-              dataSync.phase === 'error'
-                ? 'linear-gradient(135deg,#b91c1c,#7f1d1d)'
-                : dataSync.phase === 'done'
-                  ? 'linear-gradient(135deg,#15803d,#166534)'
-                  : 'linear-gradient(135deg,#6d28d9,#4f46e5)'
-          }}
+          className={`toast ${dataSync.phase} ${syncing ? 'progress-toast' : ''}`}
+          onClick={dismissToast}
+          title="Bấm để ẩn"
         >
-          {dataSync.message ??
-            (dataSync.phase === 'download'
-              ? '↧ Đang tải dữ liệu profile…'
-              : dataSync.phase === 'upload'
-                ? '↥ Đang lưu phiên lên cloud…'
-                : dataSync.phase === 'done'
-                  ? '✓ Đã đồng bộ cloud'
-                  : 'Đang đồng bộ…')}
+          <span className="t-ic">
+            <Icon
+              name={
+                dataSync.phase === 'error'
+                  ? 'alert'
+                  : dataSync.phase === 'warn'
+                    ? 'info'
+                    : dataSync.phase === 'done'
+                      ? 'check'
+                      : dataSync.phase === 'upload'
+                        ? 'upload-cloud'
+                        : 'refresh'
+              }
+              size={16}
+              strokeWidth={2.2}
+            />
+          </span>
+          <div className="t-body">
+            <div className="t-title">
+              {dataSync.phase === 'error'
+                ? 'Chưa đồng bộ được'
+                : dataSync.phase === 'warn'
+                  ? 'Lưu ý'
+                  : dataSync.phase === 'done'
+                    ? 'Đã đồng bộ cloud'
+                    : 'Đang đồng bộ cloud'}
+            </div>
+            <div>
+              {dataSync.message ??
+                (dataSync.phase === 'download'
+                  ? 'Đang tải dữ liệu profile…'
+                  : dataSync.phase === 'upload'
+                    ? 'Đang lưu phiên lên cloud…'
+                    : dataSync.phase === 'done'
+                      ? 'Phiên đã được đồng bộ.'
+                      : 'Đang đồng bộ…')}
+            </div>
+          </div>
         </div>
       )}
     </div>

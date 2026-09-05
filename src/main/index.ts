@@ -3,7 +3,7 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { registerIpc } from './ipc'
-import { stopAllAndSync } from './profile-manager'
+import { stopAllAndSync, reapOrphanEngines } from './profile-manager'
 import { restartApiServer, stopApiServer } from './api-manager'
 import { initUpdater, hasDownloadedUpdate, installOnQuit } from './updater'
 import { startProxyKeepAlive, stopProxyKeepAlive } from './proxy-keepalive'
@@ -192,6 +192,10 @@ app.whenReady().then(() => {
     app.quit()
     return
   }
+  // A previous VGC instance that crashed / was killed leaves its engines running with no lock
+  // poll (a permanent dual-run risk). Close them gracefully now so their session is flushed
+  // to disk and the next open of that profile starts clean.
+  void reapOrphanEngines().catch((e) => console.error('[startup] orphan engine reap failed:', e))
   void Promise.resolve()
     .then(() => restartApiServer())
     .catch((e) => console.error('[startup] api server failed:', e))
@@ -219,15 +223,17 @@ app.whenReady().then(() => {
 })
 
 // Graceful quit: stop every profile and UPLOAD each session to cloud BEFORE the
-// app exits, so the latest cookies/logins are always saved (GoLogin-style). A 15s
-// cap guarantees the app still exits even if an upload stalls on the network.
+// app exits, so the latest cookies/logins are always saved (GoLogin-style). A 90 s
+// cap guarantees the app still exits even if an upload stalls on the network — the old
+// 15 s cap cut off ordinary multi-profile uploads (graceful engine close + zip + upload
+// per profile) and silently left the newest sessions local-only.
 async function gracefulQuit(): Promise<void> {
   if (quitHandled) return
   quitHandled = true
   try {
     await Promise.race([
       stopAllAndSync(),
-      new Promise((r) => setTimeout(r, 15000))
+      new Promise((r) => setTimeout(r, 90_000))
     ])
   } catch {
     // ignore — exit regardless

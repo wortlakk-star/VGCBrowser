@@ -20,7 +20,8 @@
 // live Login Data is never left half-written. A broken sql.js load just disables it.
 
 import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes } from 'crypto'
-import { execFileSync } from 'child_process'
+import { execFile } from 'child_process'
+import { dbg } from './dbg'
 import {
   closeSync,
   constants as fsConstants,
@@ -71,44 +72,70 @@ const MAX_COOKIE_ROWS = 20_000
 const MAX_SECRET_CHARS = 64 * 1024
 const SAFE_COLUMN_RE = /^[a-z_][a-z0-9_]{0,63}$/i
 
-// macOS keychain-derived key, resolved at most once per process (undefined = untried,
-// null = unavailable). Machine-wide: VGC Core uses one key for all profiles.
-let macKeyCache: Buffer | null | undefined
+// macOS keychain-derived key, cached once SUCCESSFULLY resolved (a failed read is retried on
+// the next call — a denied/slow prompt must not disable the bridge for the whole app session).
+// Machine-wide: VGC Core uses one key for all profiles.
+let macKeyCache: Buffer | undefined
+let macKeyInFlight: Promise<Buffer | null> | null = null
+
+/** Clock-skew tolerance for cross-machine "newer wins" comparisons (Chrome epoch µs): a local
+ *  row only beats the incoming (cloud) copy when it is newer by MORE than this, so two
+ *  machines whose clocks differ by a minute or two do not keep each other's stale cookie. */
+const SKEW_TOLERANCE_US = 120 * 1_000_000
 
 function loginDataPath(userDataDir: string): string {
   return join(userDataDir, 'Default', 'Login Data')
 }
 
+function execFileText(
+  file: string,
+  args: string[],
+  timeout: number
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { encoding: 'utf8', timeout, windowsHide: true }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(String(stdout ?? '').trim())
+    })
+  })
+}
+
 /**
  * The LOCAL machine's os_crypt AES-128 key for a profile, or null if it can't be
  * derived (→ bridge skips, safely). Mirrors exactly what the running engine uses so
- * blobs we write are readable by it and blobs it wrote are readable by us.
+ * blobs we write are readable by it and blobs it wrote are readable by us. Async so a
+ * keychain prompt never blocks the main process; concurrent callers share one lookup.
  */
 async function localKey(): Promise<Buffer | null> {
-  try {
-    if (process.platform === 'darwin') {
+  if (process.platform !== 'darwin') return null // Linux: bridge off for now.
+  if (macKeyCache) return macKeyCache
+  if (macKeyInFlight) return macKeyInFlight
+  macKeyInFlight = (async () => {
+    try {
       // The dedicated engine is Chromium-branded, so it uses these exact Keychain names.
       // Never fall back to Google Chrome's item: a valid but wrong key would make imported
       // credentials unreadable. The first read may show a macOS permission prompt.
-      if (macKeyCache !== undefined) return macKeyCache
-      let pw = ''
-      try {
-        pw = execFileSync(
-          'security',
-          ['find-generic-password', '-w', '-s', 'Chromium Safe Storage', '-a', 'Chromium'],
-          { encoding: 'utf8', timeout: 90000 }
-        ).trim()
-      } catch {
-        pw = ''
+      const pw = await execFileText(
+        'security',
+        ['find-generic-password', '-w', '-s', 'Chromium Safe Storage', '-a', 'Chromium'],
+        90_000
+      ).catch((e) => {
+        dbg(`[vgc-pw] macOS keychain read failed: ${e instanceof Error ? e.message : String(e)}`)
+        return ''
+      })
+      if (!pw) {
+        console.error('[vgc-pw] macOS keychain key unavailable — grant "Always Allow" once')
+        return null
       }
-      macKeyCache = pw ? pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1') : null
-      if (!macKeyCache) console.error('[vgc-pw] macOS keychain key unavailable — grant "Always Allow" once')
+      macKeyCache = pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1')
       return macKeyCache
+    } catch {
+      return null
+    } finally {
+      macKeyInFlight = null
     }
-    return null // Linux: system Chrome text/basic-storage varies — bridge off for now.
-  } catch {
-    return null
-  }
+  })()
+  return macKeyInFlight
 }
 
 function decryptV10Bytes(blob: Buffer, key: Buffer): Buffer | null {
@@ -158,7 +185,7 @@ function encryptV10GcmBytes(plain: Buffer, key: Buffer): Buffer {
 type EngKey = { key: Buffer; gcm: boolean }
 async function engineKey(userDataDir: string): Promise<EngKey | null> {
   if (process.platform === 'win32') {
-    const k = windowsMachineKey(userDataDir)
+    const k = await windowsMachineKey(userDataDir)
     return k ? { key: k, gcm: true } : null
   }
   if (process.platform === 'darwin') {
@@ -176,6 +203,161 @@ function encryptEngine(plain: string, ek: EngKey): Buffer {
 
 function encryptEngineBytes(plain: Buffer, ek: EngKey): Buffer {
   return ek.gcm ? encryptV10GcmBytes(plain, ek.key) : encryptV10Bytes(plain, ek.key)
+}
+
+/**
+ * Forget any cached engine key (including a cached "unavailable" = null) for this profile
+ * dir. Call right after the engine has just CREATED its key — the first-open bootstrap in
+ * profile-manager.ts writes `Local State` (Windows) / the Safe Storage keychain item (macOS)
+ * — so the next engineKey() re-reads it instead of returning the stale null it cached when
+ * the key did not exist yet.
+ */
+export function resetEngineKeyCache(userDataDir: string): void {
+  winMachineKeyCache.delete(userDataDir)
+  macKeyCache = undefined
+}
+
+/**
+ * True when this profile dir already has the STORES the credential bridge merges into: the
+ * Cookies DB and the Login Data DB (both created by the engine on its first run — sql.js never
+ * invents the engine's schema/version) and, on Windows, the `Local State` that carries this
+ * machine's os_crypt key. On a machine that has never run this profile it is false, and
+ * importCookies/importLogins would be silent no-ops → the caller bootstraps the stores first
+ * (bootstrapProfileStores in profile-manager.ts). Deliberately does NOT depend on the key being
+ * READABLE right now (see engineKeyReadable): a transient DPAPI/keychain failure must never make
+ * the caller bootstrap — i.e. run a throwaway engine — over a profile that already has data.
+ */
+export function credentialStoresReady(userDataDir: string): boolean {
+  if (!existsSync(cookiesDbPath(userDataDir)) || !existsSync(loginDataPath(userDataDir))) {
+    return false
+  }
+  if (process.platform === 'win32' && !existsSync(join(userDataDir, 'Local State'))) return false
+  return true
+}
+
+/** Can the bridge decrypt/encrypt with this machine's engine key right now? */
+export async function engineKeyReadable(userDataDir: string): Promise<boolean> {
+  return (await engineKey(userDataDir)) !== null
+}
+
+// ── Cross-machine MERGE helpers (used by the close-time upload) ──────────────
+// The cloud credential objects are whole-set replacements, so a close must upload the UNION of
+// what this machine has and what the cloud already holds — never just the local set. Otherwise
+// one open whose import silently failed (hot journal, key hiccup, first-open bootstrap failure)
+// would replace the cloud set with a partial one and deplete every other machine.
+
+/** The cookie unique index (matches Chromium's `cookies` UNIQUE constraint). */
+export function cookieKey(c: SavedCookie): string {
+  const k = c.cols
+  return [
+    k.host_key ?? '',
+    k.top_frame_site_key ?? '',
+    Number(k.has_cross_site_ancestor ?? 0),
+    k.name ?? '',
+    k.path ?? '/',
+    Number(k.source_scheme ?? 0),
+    Number(k.source_port ?? 0)
+  ].join('\u0000')
+}
+
+/** The login unique key (matches Chromium's `logins` UNIQUE index). */
+export function loginKey(l: SavedLogin): string {
+  return [
+    l.origin_url,
+    l.username_element ?? '',
+    l.username_value ?? '',
+    l.password_element ?? '',
+    l.signon_realm
+  ].join('\u0000')
+}
+
+/** Chrome epoch (µs since 1601) of `now`. */
+function chromeNowUs(): number {
+  return Math.round((Date.now() / 1000 + 11_644_473_600) * 1_000_000)
+}
+
+function cookieExpired(c: SavedCookie, nowUs: number): boolean {
+  const exp = Number(c.cols.expires_utc ?? 0)
+  const hasExpires = Number(c.cols.has_expires ?? (exp > 0 ? 1 : 0))
+  return hasExpires === 1 && exp > 0 && exp < nowUs
+}
+
+/**
+ * Union of two cookie sets by unique key. On a collision the copy with the newer
+ * `last_update_utc` wins; `preferOverride` breaks near-ties (within the clock-skew tolerance)
+ * in favour of `override` — the close path passes the LIVE machine's export as override so its
+ * current session beats a same-age cloud copy. Expired persistent cookies are dropped so the
+ * cloud set does not grow forever. Never deletes a live cookie.
+ */
+export function mergeCookieSets(base: SavedCookie[], override: SavedCookie[]): SavedCookie[] {
+  const nowUs = chromeNowUs()
+  // `override` (the live machine's export) is inserted FIRST so that, if the row cap ever has to
+  // cut, it cuts old base rows — never the fresh local-only ones (a Map keeps first-insertion
+  // order; the final sort by last_update_utc makes the cut newest-first regardless).
+  const out = new Map<string, SavedCookie>()
+  for (const c of override) {
+    const s = sanitizeSavedCookie(c)
+    if (s && !cookieExpired(s, nowUs)) out.set(cookieKey(s), s)
+  }
+  for (const c of base) {
+    const s = sanitizeSavedCookie(c)
+    if (!s || cookieExpired(s, nowUs)) continue
+    const k = cookieKey(s)
+    const cur = out.get(k)
+    if (!cur) {
+      out.set(k, s)
+      continue
+    }
+    // base (cloud) only beats override when it is newer by MORE than the skew tolerance
+    const baseTs = Number(s.cols.last_update_utc ?? 0)
+    const curTs = Number(cur.cols.last_update_utc ?? 0)
+    if (baseTs > curTs + SKEW_TOLERANCE_US) out.set(k, s)
+  }
+  const rows = [...out.values()]
+  if (rows.length > MAX_COOKIE_ROWS) {
+    rows.sort((a, b) => Number(b.cols.last_update_utc ?? 0) - Number(a.cols.last_update_utc ?? 0))
+  }
+  return rows.slice(0, MAX_COOKIE_ROWS)
+}
+
+/** Union of two login sets by unique key; newer `date_password_modified` wins, `override`
+ *  wins near-ties (skew tolerance). Never deletes. */
+export function mergeLoginSets(base: SavedLogin[], override: SavedLogin[]): SavedLogin[] {
+  const out = new Map<string, SavedLogin>()
+  for (const l of override) {
+    const s = sanitizeLogin(l)
+    if (s) out.set(loginKey(s), s)
+  }
+  for (const l of base) {
+    const s = sanitizeLogin(l)
+    if (!s) continue
+    const k = loginKey(s)
+    const cur = out.get(k)
+    if (!cur) {
+      out.set(k, s)
+      continue
+    }
+    if ((s.date_password_modified ?? 0) > (cur.date_password_modified ?? 0) + SKEW_TOLERANCE_US) {
+      out.set(k, s)
+    }
+  }
+  const rows = [...out.values()]
+  if (rows.length > MAX_LOGIN_ROWS) {
+    rows.sort(
+      (a, b) =>
+        (b.date_password_modified ?? b.date_created ?? 0) - (a.date_password_modified ?? a.date_created ?? 0)
+    )
+  }
+  return rows.slice(0, MAX_LOGIN_ROWS)
+}
+
+/** Options for the import-side merge. */
+export interface ImportOptions {
+  /** The incoming rows were uploaded by ANOTHER machine (a hand-off): by protocol they are the
+   *  fresher session, so an incoming row also wins near-ties within the clock-skew tolerance.
+   *  false (rows uploaded by THIS machine): strict newer-wins — a local row that is newer at all
+   *  (e.g. a cookie the site rotated after a failed upload) is kept. */
+  preferIncoming?: boolean
 }
 
 function safeRm(p: string): void {
@@ -320,9 +502,15 @@ export async function exportLogins(userDataDir: string, _id: string): Promise<Sa
   if (!Sql) return []
   const ld = loginDataPath(userDataDir)
   if (!existsSync(ld)) return []
-  if (hasPendingSqliteWrites(ld)) return []
+  if (hasPendingSqliteWrites(ld)) {
+    dbg(`[vgc-pw ${_id}] exportLogins skipped: Login Data has a pending journal/WAL (engine still writing or killed)`)
+    return []
+  }
   const ek = await engineKey(userDataDir)
-  if (!ek) return []
+  if (!ek) {
+    dbg(`[vgc-pw ${_id}] exportLogins skipped: machine os_crypt key unavailable`)
+    return []
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
@@ -380,20 +568,31 @@ export async function exportLogins(userDataDir: string, _id: string): Promise<Sa
 export async function importLogins(
   userDataDir: string,
   _id: string,
-  logins: SavedLogin[]
+  logins: SavedLogin[],
+  opts: ImportOptions = {}
 ): Promise<number> {
   if (!Array.isArray(logins) || !logins.length) return 0
+  const tolerance = opts.preferIncoming ? SKEW_TOLERANCE_US : 0
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Sql = (await getSQL()) as any
   if (!Sql) return 0
   const ld = loginDataPath(userDataDir)
-  if (!existsSync(ld)) return 0 // no schema to merge into (engine makes it on first run)
+  if (!existsSync(ld)) {
+    dbg(`[vgc-pw ${_id}] importLogins skipped: no Login Data yet (engine makes it on first run)`)
+    return 0
+  }
   const ek = await engineKey(userDataDir)
-  if (!ek) return 0
+  if (!ek) {
+    dbg(`[vgc-pw ${_id}] importLogins skipped: machine os_crypt key unavailable`)
+    return 0
+  }
 
   // sql.js reads only the main file. Skip while a rollback journal or WAL has pending
   // bytes so a merge cannot discard a transaction Chromium has not checkpointed yet.
-  if (hasPendingSqliteWrites(ld)) return 0
+  if (hasPendingSqliteWrites(ld)) {
+    dbg(`[vgc-pw ${_id}] importLogins skipped: Login Data has a pending journal/WAL`)
+    return 0
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
@@ -489,7 +688,13 @@ export async function importLogins(
             existing.password_value && existing.password_value.length
               ? decryptEngine(Buffer.from(existing.password_value), ek) !== null
               : false
-          const incomingNewer = (r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0)
+          // "Newer" with an optional clock-skew tolerance (hand-off from another machine): the
+          // local copy only wins when it is newer by MORE than the tolerance — otherwise two
+          // machines with slightly different clocks would each keep their own stale copy.
+          // Rows this machine uploaded itself use strict newer-wins (tolerance 0).
+          const incomingNewer =
+            (r.date_password_modified ?? 0) + tolerance >= (existing.date_password_modified ?? 0) &&
+            (tolerance > 0 || (r.date_password_modified ?? 0) > (existing.date_password_modified ?? 0))
           if (!localReadable || incomingNewer) {
             // We write the INCOMING content, so stamp it with the INCOMING record's own
             // date (never Math.max: reusing a newer FOREIGN date on incoming content would
@@ -601,38 +806,45 @@ function decryptV10Gcm(blob: Buffer, key: Buffer): Buffer | null {
   }
 }
 
-// Per-profile Windows machine os_crypt key (AES-256) from Local State via DPAPI. Cached.
-const winMachineKeyCache = new Map<string, Buffer | null>()
-function windowsMachineKey(userDataDir: string): Buffer | null {
+// Per-profile Windows machine os_crypt key (AES-256) from Local State via DPAPI. Cached only
+// on SUCCESS: a slow PowerShell start or a transient DPAPI error is retried on the next call
+// instead of silently disabling the bridge for the rest of the app session. Async so the
+// PowerShell call never blocks the main process; concurrent callers share one lookup.
+const winMachineKeyCache = new Map<string, Buffer>()
+const winMachineKeyInFlight = new Map<string, Promise<Buffer | null>>()
+async function windowsMachineKey(userDataDir: string): Promise<Buffer | null> {
   if (process.platform !== 'win32') return null
-  if (winMachineKeyCache.has(userDataDir)) return winMachineKeyCache.get(userDataDir) ?? null
-  let key: Buffer | null = null
-  try {
-    const ls = join(userDataDir, 'Local State')
-    if (existsSync(ls)) {
+  const cached = winMachineKeyCache.get(userDataDir)
+  if (cached) return cached
+  const inFlight = winMachineKeyInFlight.get(userDataDir)
+  if (inFlight) return inFlight
+  const lookup = (async (): Promise<Buffer | null> => {
+    try {
+      const ls = join(userDataDir, 'Local State')
+      if (!existsSync(ls)) return null
       const j = JSON.parse(readBoundedFile(ls, MAX_LOCAL_STATE_BYTES).toString('utf8')) as {
         os_crypt?: { encrypted_key?: string }
       }
       const b64 = j.os_crypt?.encrypted_key
-      if (b64 && b64.length <= 16 * 1024 && /^[a-z0-9+/]+=*$/i.test(b64)) {
-        const raw = Buffer.from(b64, 'base64')
-        if (raw.subarray(0, 5).toString('latin1') === 'DPAPI') {
-          const dpapiB64 = raw.subarray(5).toString('base64')
-          const ps = `Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('${dpapiB64}'),$null,'CurrentUser'))`
-          const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
-            encoding: 'utf8',
-            timeout: 10000
-          }).trim()
-          const k = Buffer.from(out, 'base64')
-          if (k.length === 32) key = k
-        }
-      }
+      if (!b64 || b64.length > 16 * 1024 || !/^[a-z0-9+/]+=*$/i.test(b64)) return null
+      const raw = Buffer.from(b64, 'base64')
+      if (raw.subarray(0, 5).toString('latin1') !== 'DPAPI') return null
+      const dpapiB64 = raw.subarray(5).toString('base64')
+      const ps = `Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('${dpapiB64}'),$null,'CurrentUser'))`
+      const out = await execFileText('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], 20_000)
+      const k = Buffer.from(out, 'base64')
+      if (k.length !== 32) return null
+      winMachineKeyCache.set(userDataDir, k)
+      return k
+    } catch (e) {
+      dbg(`[vgc-pw] Windows DPAPI key read failed: ${e instanceof Error ? e.message : String(e)}`)
+      return null
+    } finally {
+      winMachineKeyInFlight.delete(userDataDir)
     }
-  } catch {
-    key = null
-  }
-  winMachineKeyCache.set(userDataDir, key)
-  return key
+  })()
+  winMachineKeyInFlight.set(userDataDir, lookup)
+  return lookup
 }
 
 /** Read + DECRYPT the profile's cookies with the LOCAL key. [] on any problem. */
@@ -642,9 +854,15 @@ export async function exportCookies(userDataDir: string, _id: string): Promise<S
   if (!Sql) return []
   const ck = cookiesDbPath(userDataDir)
   if (!existsSync(ck)) return []
-  if (hasPendingSqliteWrites(ck)) return []
+  if (hasPendingSqliteWrites(ck)) {
+    dbg(`[vgc-pw ${_id}] exportCookies skipped: Cookies DB has a pending journal/WAL (engine still writing or killed)`)
+    return []
+  }
   const ek = await engineKey(userDataDir)
-  if (!ek) return []
+  if (!ek) {
+    dbg(`[vgc-pw ${_id}] exportCookies skipped: machine os_crypt key unavailable`)
+    return []
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
@@ -722,18 +940,29 @@ export async function exportCookies(userDataDir: string, _id: string): Promise<S
 export async function importCookies(
   userDataDir: string,
   _id: string,
-  cookies: SavedCookie[]
+  cookies: SavedCookie[],
+  opts: ImportOptions = {}
 ): Promise<number> {
   if (!Array.isArray(cookies) || !cookies.length) return 0
+  const tolerance = opts.preferIncoming ? SKEW_TOLERANCE_US : 0
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Sql = (await getSQL()) as any
   if (!Sql) return 0
   const ck = cookiesDbPath(userDataDir)
-  if (!existsSync(ck)) return 0 // engine creates it on first run
+  if (!existsSync(ck)) {
+    dbg(`[vgc-pw ${_id}] importCookies skipped: no Cookies DB yet (engine makes it on first run)`)
+    return 0
+  }
   const ek = await engineKey(userDataDir)
-  if (!ek) return 0
+  if (!ek) {
+    dbg(`[vgc-pw ${_id}] importCookies skipped: machine os_crypt key unavailable`)
+    return 0
+  }
 
-  if (hasPendingSqliteWrites(ck)) return 0
+  if (hasPendingSqliteWrites(ck)) {
+    dbg(`[vgc-pw ${_id}] importCookies skipped: Cookies DB has a pending journal/WAL`)
+    return 0
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let db: any = null
@@ -808,8 +1037,11 @@ export async function importCookies(
           ? (findStmt.getAsObject() as { last_update_utc?: number })
           : null
         findStmt.reset()
-        if (localRow && Number(localRow.last_update_utc ?? 0) > Number(r.cols.last_update_utc ?? 0)) {
-          continue // local cookie is newer → keep it (don't clobber a fresh session)
+        if (
+          localRow &&
+          Number(localRow.last_update_utc ?? 0) > Number(r.cols.last_update_utc ?? 0) + tolerance
+        ) {
+          continue // local cookie is newer (beyond the tolerance, if any) → keep it
         }
         const params: Record<string, unknown> = {}
         const host = String(r.cols.host_key)

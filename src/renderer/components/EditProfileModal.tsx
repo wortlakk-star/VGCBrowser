@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Icon } from './Icon'
 import type {
   AccountStatus,
   Cookie,
@@ -255,7 +256,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
         <header className="modal-head">
           <h2>Sửa profile</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
@@ -292,7 +293,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
             </label>
 
             <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: 'var(--accent, #4fd1a1)' }}>
-              👤 Tài khoản
+              Tài khoản
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <label>
@@ -416,11 +417,11 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               {proxyResult &&
                 (proxyResult.ok ? (
                   <span className="ok">
-                    ✓ {proxyResult.ip} · {proxyResult.country}
+                    {proxyResult.ip} · {proxyResult.country}
                     {proxyResult.city ? ` · ${proxyResult.city}` : ''} · {proxyResult.timezone}
                   </span>
                 ) : (
-                  <span className="err">✗ {proxyResult.error}</span>
+                  <span className="err">{proxyResult.error}</span>
                 ))}
               {proxyResult?.ok && (
                 <button className="btn" onClick={applyProxyGeo}>
@@ -428,7 +429,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
                 </button>
               )}
               <button className="btn" onClick={saveProxyToManager} disabled={proxy.type === 'none'}>
-                💾 Lưu proxy
+                Lưu proxy
               </button>
             </div>
             <p className="hint">Proxy có mật khẩu sẽ tự chạy qua relay nội bộ khi mở.</p>
@@ -439,13 +440,13 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               <h3>Cookies</h3>
               <div>
                 <button className="btn" onClick={importCookiesNow}>
-                  ↧ Nhập (JSON)
+                  Nhập (JSON)
                 </button>
                 <button className="btn" style={{ marginLeft: 6 }} onClick={exportCookiesNow}>
-                  ↥ Xuất
+                  Xuất
                 </button>
                 <button className="btn" style={{ marginLeft: 6 }} onClick={runCookieRobot}>
-                  🤖 Cookie robot
+                  Cookie robot
                 </button>
               </div>
             </div>
@@ -467,7 +468,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
                       onChange={(e) => updateCookieValue(i, e.target.value)}
                     />
                     <button className="btn ghost" onClick={() => deleteCookie(i)}>
-                      ✕
+                      
                     </button>
                   </li>
                 ))}
@@ -510,7 +511,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
                   <li key={e}>
                     <span className="mono small">{e}</span>
                     <button className="btn ghost" onClick={() => removeExtension(i)}>
-                      ✕
+                      
                     </button>
                   </li>
                 ))}

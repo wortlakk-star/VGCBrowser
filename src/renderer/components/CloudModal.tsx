@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Profile } from '../../shared/types'
 import { getCloud, pullCloudProfileList, pushCloudProfileList } from '../cloud'
+import { Icon } from './Icon'
 
 const TEAM_SHARING_ENABLED = false
 
@@ -247,9 +248,9 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 560 }}>
         <header className="modal-head">
-          <h2>☁ Cloud</h2>
+          <h2>Cloud</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
@@ -260,7 +261,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
             <section className="card">
               <h3>Chưa cấu hình Supabase</h3>
               <p className="hint">
-                Mở <b>⚙ Cài đặt → Cloud</b>, dán <b>Project URL</b> + <b>anon key</b>, và chạy{' '}
+                Mở <b>Cài đặt → Cloud</b>, dán <b>Project URL</b> + <b>anon key</b>, và chạy{' '}
                 <code>supabase/schema.sql</code> trong SQL Editor của project.
               </p>
             </section>
@@ -325,10 +326,10 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
                 )}
                 <div className="proxy-check">
                   <button className="btn primary" onClick={push} disabled={busy}>
-                    ↥ Đẩy lên (kèm phiên)
+                    Đẩy lên (kèm phiên)
                   </button>
                   <button className="btn" onClick={pull} disabled={busy}>
-                    ↧ Kéo về (kèm phiên)
+                    Kéo về (kèm phiên)
                   </button>
                 </div>
                 <p className="hint">

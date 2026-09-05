@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import type { AccountStatus, Profile, ProfileStatus, SavedProxy } from '../../shared/types'
+import { Icon, flagEmoji, timeAgo } from './Icon'
 
 interface Props {
   profiles: Profile[]
@@ -47,29 +48,65 @@ function browserSummary(ua: string): string {
   return m ? `Chrome ${m[1]}` : 'Chromium'
 }
 
-/** Proxy status line (IP + country, or "no proxy" / error). */
+/** Deterministic avatar colour per profile (pleasant hues, brand-adjacent). */
+const AVATAR_HUES = [214, 199, 187, 232, 262, 168, 206, 246, 180, 224]
+function avatarStyle(id: string): CSSProperties {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
+  const hue = AVATAR_HUES[h % AVATAR_HUES.length]
+  return {
+    ['--av-bg' as string]: `linear-gradient(135deg, hsl(${hue} 78% 56%), hsl(${(hue + 28) % 360} 82% 46%))`
+  }
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/[\s—–-]+/).filter(Boolean)
+  const a = parts[0]?.[0] ?? '?'
+  const b = parts.length > 1 ? parts[parts.length - 1][0] : ''
+  return (a + b).toUpperCase()
+}
+
+function osIcon(os: string): string {
+  return os === 'macos' ? 'laptop' : os === 'android' ? 'wifi' : 'monitor'
+}
+
+function osLabel(os: string): string {
+  return os === 'macos' ? 'macOS' : os === 'windows' ? 'Windows' : os === 'android' ? 'Android' : os
+}
+
+/** Proxy status line (flag + country + IP + latency, or "no proxy" / error). */
 function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
   if (!p.proxy || p.proxy.type === 'none' || !p.proxy.host) {
     return (
-      <span className="dim">
-        <span className="pdot off" />Không proxy
+      <span className="proxy-none">
+        <Icon name="globe" size={14} />
+        Không proxy
       </span>
     )
   }
+  // Flag emoji only where the OS can draw them (macOS). Windows has no flag glyphs — it
+  // would print the two regional-indicator letters, so there we show a country badge.
+  const mac = /Mac/i.test(navigator.platform)
+  const line = (cc: string | undefined, ip: string | undefined, ms?: number): JSX.Element => (
+    <span className="proxy-line proxy-ok">
+      {mac && flagEmoji(cc) ? (
+        <span className="flag">{flagEmoji(cc)}</span>
+      ) : (
+        <span className="cc">{(cc || '').toUpperCase() || '??'}</span>
+      )}
+      <span className="ip">{ip}</span>
+      {typeof ms === 'number' && ms > 0 && (
+        <span className={`latency ${ms > 400 ? 'slow' : ''}`}>{ms} ms</span>
+      )}
+    </span>
+  )
   const pc = p.proxyCheck
-  if (pc?.status === 'ok' && pc.ip) {
-    return (
-      <span className="proxy-ok">
-        <span className="flag">{pc.countryCode ? '' : '🌐'}</span>
-        <span className="pdot on" />
-        {(pc.countryCode || '').toUpperCase()} · {pc.ip}
-      </span>
-    )
-  }
+  if (pc?.status === 'ok' && pc.ip) return line(pc.countryCode, pc.ip, pc.latencyMs)
   if (pc?.status === 'error') {
     return (
-      <span style={{ color: 'var(--red)' }}>
-        <span className="pdot off" />✗ proxy lỗi
+      <span className="proxy-err">
+        <Icon name="alert" size={14} />
+        Proxy lỗi
       </span>
     )
   }
@@ -80,25 +117,20 @@ function proxyInfo(p: Profile, proxyPool: SavedProxy[]): JSX.Element {
       (x.username || '') === (p.proxy.username || '') &&
       (x.password || '') === (p.proxy.password || '')
   )
-  if (sp && sp.lastStatus === 'ok' && sp.lastIp) {
-    return (
-      <span className="proxy-ok">
-        <span className="pdot on" />
-        {(sp.lastCountryCode || '').toUpperCase()} · {sp.lastIp}
-      </span>
-    )
-  }
+  if (sp && sp.lastStatus === 'ok' && sp.lastIp) return line(sp.lastCountryCode, sp.lastIp, sp.latencyMs)
   if (sp && sp.lastStatus === 'error') {
     return (
-      <span style={{ color: 'var(--red)' }}>
-        <span className="pdot off" />✗ proxy lỗi
+      <span className="proxy-err">
+        <Icon name="alert" size={14} />
+        Proxy lỗi
       </span>
     )
   }
   return (
-    <span>
+    <span className="proxy-line">
       <span className="pdot on" />
-      {p.proxy.host} <span className="dim">· chưa check</span>
+      <span className="ip">{p.proxy.host}</span>
+      <span className="dim small">· chưa check</span>
     </span>
   )
 }
@@ -133,8 +165,8 @@ export function ProfileTable({
   // — otherwise bottom-row menus render off the bottom of the window and can't be used.
   const openMenu = (id: string, btn: HTMLElement): void => {
     const rect = btn.getBoundingClientRect()
-    const MENU_W = 230
-    const EST_H = 360 // approx full menu height; used only to decide flip direction
+    const MENU_W = 240
+    const EST_H = 380 // approx full menu height; used only to decide flip direction
     const left = Math.max(8, Math.min(rect.right - MENU_W, window.innerWidth - MENU_W - 8))
     const spaceBelow = window.innerHeight - rect.bottom
     const flipUp = spaceBelow < EST_H && rect.top > spaceBelow
@@ -182,9 +214,10 @@ export function ProfileTable({
             <th className="col-check">
               <input type="checkbox" checked={allSelected} onChange={onToggleSelectAll} />
             </th>
-            <th className="col-name">Tên</th>
-            <th className="col-status">Tình trạng</th>
-            <th className="col-proxy">Proxy &amp; Vị trí</th>
+            <th className="col-name">Profile</th>
+            <th className="col-status">Trạng thái</th>
+            <th className="col-proxy">Proxy &amp; vị trí</th>
+            <th className="col-used">Dùng gần đây</th>
             <th className="col-act" />
           </tr>
         </thead>
@@ -193,23 +226,46 @@ export function ProfileTable({
             const status = statuses[p.id] ?? 'stopped'
             const active = status === 'running' || status === 'starting'
             const sel = selected.has(p.id)
+            const used = timeAgo(p.lastUsedAt)
+            const recent = !!p.lastUsedAt && Date.now() - Date.parse(p.lastUsedAt) < 86_400_000
             return (
-              <tr key={p.id} className={sel ? 'sel' : ''}>
+              <tr key={p.id} className={`${sel ? 'sel' : ''} ${status === 'running' ? 'running' : ''}`}>
                 <td className="col-check">
                   <input type="checkbox" checked={sel} onChange={() => onToggleSelect(p.id)} />
                 </td>
                 <td className="col-name">
-                  <div className="pname">
-                    {p.name}
-                    {p.account?.status && ACCT_STATUS[p.account.status] && (
-                      <span className={`acct-pill ${ACCT_STATUS[p.account.status].cls}`}>
-                        {ACCT_STATUS[p.account.status].label}
+                  <div className="pcell">
+                    <div className="pavatar" style={avatarStyle(p.id)}>
+                      {initials(p.name)}
+                      <span className="os-badge" title={osLabel(p.os)}>
+                        <Icon name={osIcon(p.os)} size={11} strokeWidth={2.2} />
                       </span>
-                    )}
-                  </div>
-                  <div className="psub">
-                    {p.os} · {browserSummary(p.fingerprint?.userAgent ?? '')}
-                    {p.group && <span className="pgroup">{p.group}</span>}
+                    </div>
+                    <div className="ptext">
+                      <div className="pname">
+                        <span title={p.name}>{p.name}</span>
+                        {p.account?.status && ACCT_STATUS[p.account.status] && (
+                          <span className={`acct-pill ${ACCT_STATUS[p.account.status].cls}`}>
+                            {ACCT_STATUS[p.account.status].label}
+                          </span>
+                        )}
+                      </div>
+                      <div className="psub">
+                        <span>{browserSummary(p.fingerprint?.userAgent ?? '')}</span>
+                        {p.account?.user && (
+                          <>
+                            <span className="sep">·</span>
+                            <span title={p.account.user}>{p.account.user}</span>
+                          </>
+                        )}
+                        {p.group && (
+                          <span className="pgroup">
+                            <Icon name="folder" size={10} />
+                            {p.group}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </td>
                 <td className="col-status">
@@ -221,34 +277,41 @@ export function ProfileTable({
                 <td className="col-proxy">
                   <div className="proxy-cell">
                     <span className="mono">{proxyInfo(p, proxyPool)}</span>
-                    {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
+                    <span className="proxy-tools">
+                      {p.proxy && p.proxy.type !== 'none' && p.proxy.host && (
+                        <button
+                          className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
+                          title="Kiểm tra proxy (IP + vị trí)"
+                          disabled={checkingProxy.has(p.id)}
+                          onClick={() => void runProxyCheck(p.id)}
+                        >
+                          <Icon name="refresh" size={13} strokeWidth={2.2} />
+                        </button>
+                      )}
                       <button
-                        className={`proxy-check-btn${checkingProxy.has(p.id) ? ' spinning' : ''}`}
-                        title="Kiểm tra proxy (IP + vị trí)"
-                        disabled={checkingProxy.has(p.id)}
-                        onClick={() => void runProxyCheck(p.id)}
+                        className="proxy-check-btn"
+                        title="Chọn / đổi / thêm proxy (có sẵn · nhập tay · mua mới)"
+                        onClick={() => onOpenProxyPicker(p)}
                       >
-                        ↻
+                        <Icon name="plus" size={13} strokeWidth={2.4} />
                       </button>
-                    )}
-                    <button
-                      className="proxy-check-btn"
-                      title="Chọn / đổi / thêm proxy (có sẵn · nhập tay · mua mới)"
-                      onClick={() => onOpenProxyPicker(p)}
-                    >
-                      +
-                    </button>
+                    </span>
                   </div>
+                </td>
+                <td className="col-used">
+                  <span className={`last-used ${recent ? 'recent' : ''}`}>{used}</span>
                 </td>
                 <td className="col-act">
                   <div className="row-actions">
                     {active ? (
                       <button className="run-btn stop" onClick={() => onStop(p.id)}>
-                        ■ Dừng
+                        <Icon name="stop" size={13} strokeWidth={2.4} />
+                        Dừng
                       </button>
                     ) : (
                       <button className="run-btn" onClick={() => onRun(p.id)}>
-                        ▸ Chạy
+                        <Icon name="play" size={13} strokeWidth={2.4} />
+                        Chạy
                       </button>
                     )}
                     <div className="menu-wrap">
@@ -261,7 +324,7 @@ export function ProfileTable({
                           else openMenu(p.id, e.currentTarget)
                         }}
                       >
-                        ⋯
+                        <Icon name="more" size={18} strokeWidth={2.6} />
                       </button>
                       {menuFor === p.id && (
                         <div
@@ -275,7 +338,8 @@ export function ProfileTable({
                               setMenuFor(null)
                             }}
                           >
-                            🌐 Kiểm tra proxy
+                            <Icon name="globe" size={16} />
+                            Kiểm tra proxy
                           </button>
                           <button
                             onClick={() => {
@@ -283,7 +347,8 @@ export function ProfileTable({
                               setMenuFor(null)
                             }}
                           >
-                            🧪 Kiểm tra fingerprint
+                            <Icon name="fingerprint" size={16} />
+                            Kiểm tra fingerprint
                           </button>
                           <button
                             onClick={() => {
@@ -291,7 +356,8 @@ export function ProfileTable({
                               setMenuFor(null)
                             }}
                           >
-                            ✏️ Sửa
+                            <Icon name="edit" size={16} />
+                            Sửa profile
                           </button>
                           <button
                             onClick={() => {
@@ -299,7 +365,8 @@ export function ProfileTable({
                               setMenuFor(null)
                             }}
                           >
-                            ⧉ Nhân bản
+                            <Icon name="copy" size={16} />
+                            Nhân bản
                           </button>
                           <button
                             onClick={() => {
@@ -307,7 +374,8 @@ export function ProfileTable({
                               setMenuFor(null)
                             }}
                           >
-                            🔗 Chia sẻ
+                            <Icon name="share" size={16} />
+                            Chia sẻ
                           </button>
                           <div className="menu-sep" />
                           <label className="menu-group">
@@ -351,7 +419,8 @@ export function ProfileTable({
                                 setMenuFor(null)
                               }}
                             >
-                              🔑 Copy mã 2FA
+                              <Icon name="key" size={16} />
+                              Copy mã 2FA
                             </button>
                           )}
                           <div className="menu-sep" />
@@ -362,7 +431,8 @@ export function ProfileTable({
                               setMenuFor(null)
                             }}
                           >
-                            🗑 Xoá profile
+                            <Icon name="trash" size={16} />
+                            Xoá profile
                           </button>
                         </div>
                       )}

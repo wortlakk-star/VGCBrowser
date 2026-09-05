@@ -1,0 +1,321 @@
+<title>VGC Browser Aurora</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Be+Vietnam+Pro:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #f3f5fa;
+    --surface: #ffffff;
+    --surface-2: #eaeef6;
+    --line: rgba(15, 23, 42, 0.1);
+    --line-strong: rgba(15, 23, 42, 0.18);
+    --ink: #0f172a;
+    --ink-2: #3b4658;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --accent-2: #0891b2;
+    --accent-soft: rgba(37, 99, 235, 0.1);
+    --good: #059669;
+    --good-soft: rgba(5, 150, 105, 0.12);
+    --frame: #0b0f1a;
+    --shadow: 0 18px 50px rgba(15, 23, 42, 0.14);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0b0f1a;
+      --surface: #121828;
+      --surface-2: #171e30;
+      --line: rgba(255, 255, 255, 0.08);
+      --line-strong: rgba(255, 255, 255, 0.16);
+      --ink: #e8ecf5;
+      --ink-2: #c3cad9;
+      --muted: #8a94ab;
+      --accent: #3d8bff;
+      --accent-2: #22d3ee;
+      --accent-soft: rgba(61, 139, 255, 0.14);
+      --good: #34d399;
+      --good-soft: rgba(52, 211, 153, 0.14);
+      --frame: #05070d;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0b0f1a;
+    --surface: #121828;
+    --surface-2: #171e30;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.16);
+    --ink: #e8ecf5;
+    --ink-2: #c3cad9;
+    --muted: #8a94ab;
+    --accent: #3d8bff;
+    --accent-2: #22d3ee;
+    --accent-soft: rgba(61, 139, 255, 0.14);
+    --good: #34d399;
+    --good-soft: rgba(52, 211, 153, 0.14);
+    --frame: #05070d;
+    --shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: 'Be Vietnam Pro', 'Segoe UI', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 48px 28px 80px; }
+  h1, h2, h3 { font-family: 'Bricolage Grotesque', 'Be Vietnam Pro', sans-serif; letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .eyebrow::before { content: ''; width: 28px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .masthead { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 40px; align-items: end; padding-bottom: 36px; border-bottom: 1px solid var(--line); }
+  .masthead h1 { font-size: clamp(40px, 6vw, 64px); font-weight: 800; line-height: 1; margin: 14px 0 16px; font-variation-settings: 'opsz' 96; }
+  .masthead h1 em { font-style: normal; background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .brief { max-width: 62ch; color: var(--ink-2); font-size: 16px; }
+  .meta { display: grid; gap: 10px; font-size: 13px; }
+  .meta div { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px dashed var(--line); }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  section { padding: 40px 0 8px; }
+  section > h2 { font-size: 26px; font-weight: 700; margin: 8px 0 6px; }
+  .lede { color: var(--muted); max-width: 66ch; margin: 0 0 22px; }
+
+  .spec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .spec-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px; }
+  .spec-card h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 14px; }
+  .swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .sw { display: grid; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); }
+  .sw i { display: block; height: 44px; border-radius: 9px; border: 1px solid var(--line-strong); }
+  .sw b { color: var(--ink); font-weight: 600; font-family: 'Be Vietnam Pro', sans-serif; font-size: 12px; }
+  .type-sample { display: grid; gap: 10px; }
+  .type-sample .disp { font-family: 'Inter', 'Be Vietnam Pro', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.03em; }
+  .type-sample .body { font-family: 'Inter', 'Be Vietnam Pro', sans-serif; font-size: 14px; color: var(--ink-2); }
+  .type-sample .mono { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--muted); }
+  .rules { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; font-size: 14px; color: var(--ink-2); }
+  .rules li { padding-left: 18px; position: relative; }
+  .rules li::before { content: ''; position: absolute; left: 0; top: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .shot { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 10px; box-shadow: var(--shadow); }
+  .shot figure { margin: 0; }
+  .shot img { display: block; width: 100%; height: auto; border-radius: 10px; background: var(--frame); }
+  .shot figcaption { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 6px 4px; font-size: 13px; color: var(--muted); }
+  .shot figcaption b { color: var(--ink); font-weight: 600; }
+  .tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+  .tag.new { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
+
+  .screens { display: grid; gap: 28px; }
+  .screen { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start; }
+  .screen .notes h3 { font-size: 19px; font-weight: 700; margin: 4px 0 10px; }
+  .screen .notes p { margin: 0 0 12px; color: var(--ink-2); font-size: 14px; }
+  .screen .notes ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 13.5px; color: var(--ink-2); }
+  .screen .notes li { padding-left: 22px; position: relative; }
+  .screen .notes li::before { content: '✓'; position: absolute; left: 0; top: 0; color: var(--good); font-weight: 700; }
+  .screen .notes li.wait::before { content: '·'; color: var(--muted); }
+
+  .changes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 28px; margin: 0; padding: 0; list-style: none; }
+  .changes li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; font-size: 14px; color: var(--ink-2); padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .changes li span:first-child { color: var(--good); font-weight: 700; }
+  .changes li b { color: var(--ink); font-weight: 600; }
+
+  pre { margin: 0; background: var(--frame); color: #dbe3f3; border-radius: 12px; padding: 16px 18px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.7; overflow-x: auto; }
+  pre .c { color: #7c8aa5; }
+  .run { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+  .run .side { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; font-size: 13.5px; color: var(--ink-2); }
+  .run .side h3 { font-size: 14px; margin-bottom: 8px; }
+  .run .side ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  @media (max-width: 900px) {
+    .masthead, .compare, .screen, .run, .changes { grid-template-columns: 1fr; }
+    .spec { grid-template-columns: 1fr; }
+    .wrap { padding: 32px 18px 60px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <span class="eyebrow">Bản thiết kế giao diện · 05/09/2026</span>
+      <h1>VGC Browser <em>Aurora</em></h1>
+      <p class="brief">Giao diện quản lý profile được làm lại theo tinh thần dashboard cao cấp kiểu GoLogin/Multilogin: nền navy sâu, dải màu xanh dương – cyan lấy từ logo, chữ Inter, icon vector, bảng profile đọc được trạng thái trong một cái liếc. Mọi chức năng giữ nguyên, chỉ đổi cách trình bày.</p>
+    </div>
+    <dl class="meta">
+      <div><dt>Phiên bản</dt><dd>2.1.72 → UI v3</dd></div>
+      <div><dt>File đổi</dt><dd>styles.css · 5 component mới/viết lại · 11 modal dọn emoji</dd></div>
+      <div><dt>Font</dt><dd>Inter Variable · tự host (144 KB)</dd></div>
+      <div><dt>Kiểm tra</dt><dd>tsc · electron-vite build · 10 ảnh chụp</dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <span class="eyebrow">Hệ thống thiết kế</span>
+    <h2>Bảng màu, chữ và ba nguyên tắc</h2>
+    <p class="lede">Tất cả màu trong app đều đi qua token, nên chế độ sáng chỉ đổi token chứ không viết lại CSS. Màu nhấn dùng cho hành động chính; xanh lá, đỏ, vàng chỉ dành cho trạng thái.</p>
+    <div class="spec">
+      <div class="spec-card">
+        <h3>Bảng màu (tối)</h3>
+        <div class="swatches">
+          <div class="sw"><i style="background:#0b0f1a"></i><b>Navy Ink</b>#0b0f1a</div>
+          <div class="sw"><i style="background:#121828"></i><b>Panel</b>#121828</div>
+          <div class="sw"><i style="background:#e8ecf5"></i><b>Frost</b>#e8ecf5</div>
+          <div class="sw"><i style="background:linear-gradient(135deg,#3b82f6,#22d3ee)"></i><b>Signal</b>3b82f6→22d3ee</div>
+          <div class="sw"><i style="background:#34d399"></i><b>Running</b>#34d399</div>
+          <div class="sw"><i style="background:#f87171"></i><b>Die / lỗi</b>#f87171</div>
+        </div>
+      </div>
+      <div class="spec-card">
+        <h3>Chữ</h3>
+        <div class="type-sample">
+          <div class="disp">Tất cả hồ sơ — Inter 800</div>
+          <div class="body">Nội dung bảng, nút, nhãn: Inter 400–650, 13.5 px, tinh chỉnh khoảng cách chữ −0.5%. Hỗ trợ đầy đủ dấu tiếng Việt (subset riêng).</div>
+          <div class="mono">104.28.212.19 · 142 ms — JetBrains Mono cho IP, mã lệnh</div>
+        </div>
+      </div>
+      <div class="spec-card">
+        <h3>Nguyên tắc</h3>
+        <ul class="rules">
+          <li>Một màu nhấn duy nhất cho hành động chính; trạng thái dùng màu ngữ nghĩa riêng.</li>
+          <li>Không emoji trong giao diện. Icon vector cùng nét 1.9 px, đổi màu theo ngữ cảnh.</li>
+          <li>Thông báo quan trọng dính 15 giây, bấm để ẩn; tiến trình thường tự tan.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Trước · sau</span>
+    <h2>Màn hình chính</h2>
+    <p class="lede">Cùng dữ liệu mẫu, cùng kích thước 1440×900. Bên phải là bản mới.</p>
+    <div class="compare">
+      <div class="shot"><figure><img src="{{IMG:old-app-dark}}" alt="Giao diện cũ, chế độ tối"><figcaption><b>Trước</b><span class="tag">2.1.72</span></figcaption></figure></div>
+      <div class="shot"><figure><img src="{{IMG:app-dark}}" alt="Giao diện mới, chế độ tối"><figcaption><b>Sau</b><span class="tag new">Aurora</span></figcaption></figure></div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Từng màn hình</span>
+    <h2>Những gì cần nhìn</h2>
+    <div class="screens">
+      <div class="screen">
+        <div class="notes">
+          <h3>Bảng profile</h3>
+          <p>Mỗi dòng trả lời ba câu hỏi: đang chạy không, proxy ở đâu, dùng lần cuối khi nào.</p>
+          <ul>
+            <li>Avatar chữ cái với huy hiệu hệ điều hành, tên + tình trạng tài khoản (Live / Die / Banned).</li>
+            <li>Dòng phụ: Chrome, email đăng nhập, chip nhóm.</li>
+            <li>Proxy: mã nước, IP đơn cách, độ trễ đổi màu khi chậm.</li>
+            <li>Vạch xanh bên trái và chấm nhấp nháy cho profile đang chạy.</li>
+            <li>Cột "Dùng gần đây" mới, hiển thị tương đối.</li>
+          </ul>
+        </div>
+        <div class="shot"><figure><img src="{{IMG:app-light}}" alt="Bảng profile, chế độ sáng"><figcaption><b>Chế độ sáng</b><span class="tag">1440×900</span></figcaption></figure></div>
+      </div>
+
+      <div class="screen">
+        <div class="notes">
+          <h3>Chọn hàng loạt và thông báo</h3>
+          <p>Thanh thao tác nổi lên khi chọn profile, neo góc dưới trái. Thông báo đồng bộ ở góc dưới phải, không bao giờ đè lên nhau.</p>
+          <ul>
+            <li>Mở, Mở lưới, Dừng, Đăng nhập Gmail, Nuôi acc, Xuất, Xoá — mỗi nút có icon.</li>
+            <li>Toast có tiêu đề + icon theo loại: đang đồng bộ, đã xong, lưu ý, lỗi.</li>
+          </ul>
+        </div>
+        <div class="shot"><figure><img src="{{IMG:app-dark-bulk-toast}}" alt="Thanh chọn hàng loạt và toast cảnh báo"><figcaption><b>2 profile được chọn + cảnh báo đồng bộ</b></figcaption></figure></div>
+      </div>
+
+      <div class="screen">
+        <div class="notes">
+          <h3>Thanh công cụ gọn hơn</h3>
+          <p>Từ 8 nút dàn ngang xuống còn tìm kiếm, bộ lọc, Làm mới, hai menu thả xuống và nút tạo profile.</p>
+          <ul>
+            <li>"Nhập / Xuất": nhập .json, nhập acc hàng loạt, xuất tất cả.</li>
+            <li>"Công cụ": khớp múi giờ theo proxy, hẹn giờ nuôi acc, kho proxy, đồng bộ cloud.</li>
+            <li>Menu dòng (⋯) có icon, chọn nhóm và trạng thái tại chỗ, copy mã 2FA.</li>
+          </ul>
+        </div>
+        <div>
+          <div class="shot" style="margin-bottom:16px"><figure><img src="{{IMG:app-dark-tools}}" alt="Menu Công cụ"><figcaption><b>Menu Công cụ</b></figcaption></figure></div>
+          <div class="shot"><figure><img src="{{IMG:app-dark-rowmenu}}" alt="Menu hành động của một profile"><figcaption><b>Menu hành động của một dòng</b></figcaption></figure></div>
+        </div>
+      </div>
+
+      <div class="screen">
+        <div class="notes">
+          <h3>Đăng nhập</h3>
+          <p>Nền aurora xanh dương – cyan trên lưới mờ, thẻ kính, ô nhập có icon, ba huy hiệu năng lực.</p>
+          <ul>
+            <li>Chuyển động chậm 14 giây, tắt khi hệ điều hành yêu cầu giảm chuyển động.</li>
+          </ul>
+        </div>
+        <div class="compare">
+          <div class="shot"><figure><img src="{{IMG:old-auth-dark}}" alt="Màn đăng nhập cũ"><figcaption><b>Trước</b></figcaption></figure></div>
+          <div class="shot"><figure><img src="{{IMG:auth-dark}}" alt="Màn đăng nhập mới"><figcaption><b>Sau</b><span class="tag new">Aurora</span></figcaption></figure></div>
+        </div>
+      </div>
+
+      <div class="screen">
+        <div class="notes">
+          <h3>Modal</h3>
+          <p>Tất cả modal dùng chung khung: tiêu đề, nút đóng vector, thẻ nội dung, chân trang tách nền. Ô nhập cao 38 px, viền sáng khi chọn.</p>
+          <ul>
+            <li>Bộ chọn dạng phân đoạn (segmented) thay cho hàng nút rời.</li>
+            <li>Đã gỡ 109 emoji khỏi tiêu đề, nút và chuỗi trong 11 modal.</li>
+          </ul>
+        </div>
+        <div>
+          <div class="shot" style="margin-bottom:16px"><figure><img src="{{IMG:modal-create-dark}}" alt="Modal tạo profile"><figcaption><b>Tạo profile</b></figcaption></figure></div>
+          <div class="shot" style="margin-bottom:16px"><figure><img src="{{IMG:modal-settings-dark}}" alt="Modal cài đặt"><figcaption><b>Cài đặt</b></figcaption></figure></div>
+          <div class="shot"><figure><img src="{{IMG:modal-proxy-dark}}" alt="Modal kho proxy"><figcaption><b>Kho proxy</b></figcaption></figure></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Thay đổi trong mã</span>
+    <h2>Đã làm gì</h2>
+    <ul class="changes">
+      <li><span>✓</span><div><b>styles.css</b> viết lại thành hệ thống token, 2 chế độ, giữ mọi class cũ để modal không vỡ.</div></li>
+      <li><span>✓</span><div><b>Icon.tsx</b> bộ icon SVG 55 hình, thêm hàm thời gian tương đối và cờ quốc gia (chỉ macOS).</div></li>
+      <li><span>✓</span><div><b>Sidebar</b> thương hiệu + phiên bản, thẻ tài khoản, nút tạo, nhóm có icon, thẻ mức dùng, đổi giao diện sáng/tối.</div></li>
+      <li><span>✓</span><div><b>ProfileTable</b> avatar, huy hiệu OS, proxy có mã nước và độ trễ, cột dùng gần đây, menu icon.</div></li>
+      <li><span>✓</span><div><b>App</b> header trang với chip thống kê, thanh công cụ có Dropdown, thanh chọn nổi, toast mới, trạng thái trống có hướng dẫn.</div></li>
+      <li><span>✓</span><div><b>AuthScreen</b> nền aurora, ô nhập có icon, huy hiệu năng lực.</div></li>
+      <li><span>✓</span><div><b>Font Inter</b> tự host trong app (CSP không cho tải font ngoài), 3 subset gồm tiếng Việt.</div></li>
+      <li><span>✓</span><div><b>Bộ xem trước</b> <code>npm run ui:preview</code> dựng giao diện với dữ liệu giả và chụp 10 ảnh bằng Chrome, không cần Electron.</div></li>
+    </ul>
+  </section>
+
+  <section>
+    <span class="eyebrow">Chạy thử</span>
+    <h2>Xem trên máy bạn</h2>
+    <div class="run">
+      <pre><span class="c"># trong thư mục VGCBrowser, sau khi git pull</span>
+npm install
+npm run ui:preview          <span class="c"># chụp 10 ảnh vào test/ui-preview/shots/</span>
+npm run dev                 <span class="c"># chạy app thật với giao diện mới</span></pre>
+      <div class="side">
+        <h3>Lưu ý</h3>
+        <ul>
+          <li>Cờ quốc gia chỉ hiện trên macOS; Windows dùng huy hiệu mã nước vì hệ điều hành không có font cờ.</li>
+          <li>Chưa chụp được cửa sổ Electron thật trên máy chủ này; ảnh trên là bản dựng renderer với dữ liệu mẫu.</li>
+          <li>Chưa commit. Bản vá đồng bộ phiên và giao diện nằm cùng thư mục làm việc.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>VGC Browser · giao diện Aurora · bản xem xét nội bộ</span>
+    <span>Ảnh chụp 1440×900, Chrome 152, dữ liệu mẫu</span>
+  </footer>
+</div>

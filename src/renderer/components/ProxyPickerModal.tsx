@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Profile, ProxyProviderId, ProxyType, SavedProxy } from '../../shared/types'
 import { parseLine } from '../lib/proxy-parse'
+import { Icon } from './Icon'
 
 interface Props {
   profile: Profile
@@ -12,9 +13,9 @@ interface Props {
 
 type Mode = 'pool' | 'manual' | 'generate'
 const MODES: Array<{ v: Mode; label: string }> = [
-  { v: 'pool', label: '📦 Có sẵn' },
-  { v: 'manual', label: '⌨ Nhập tay' },
-  { v: 'generate', label: '✨ Tạo/Mua mới' }
+  { v: 'pool', label: 'Có sẵn' },
+  { v: 'manual', label: 'Nhập tay' },
+  { v: 'generate', label: 'Tạo/Mua mới' }
 ]
 const PROVIDERS: Array<[ProxyProviderId, string]> = [
   ['evomi', 'Evomi (residential)'],
@@ -116,7 +117,7 @@ export function ProxyPickerModal({ profile, pool, onApply, onClose }: Props): JS
         <header className="modal-head">
           <h2>Proxy — {profile.name}</h2>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
@@ -143,7 +144,7 @@ export function ProxyPickerModal({ profile, pool, onApply, onClose }: Props): JS
                   value={poolId}
                   onChange={(e) => setPoolId(e.target.value)}
                 >
-                  <option value="">🚫 Bỏ proxy (chạy không proxy)</option>
+                  <option value="">Bỏ proxy (chạy không proxy)</option>
                   {hasEmbedded && (
                     <option value="" disabled>
                       Hiện tại: {profile.proxy.host} (ngoài kho)
@@ -151,7 +152,7 @@ export function ProxyPickerModal({ profile, pool, onApply, onClose }: Props): JS
                   )}
                   {free.map((x) => (
                     <option key={x.id} value={x.id}>
-                      {x.assignedTo === profile.id ? '✓ ' : ''}
+                      {x.assignedTo === profile.id ? '' : ''}
                       {x.label} ({x.type} {x.host}:{x.port})
                     </option>
                   ))}

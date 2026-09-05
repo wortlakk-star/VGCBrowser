@@ -20,3 +20,10 @@ test/tostring.cjs
 test/rectbase.ts
 test/rectbase.cjs
 test/deep.cjs
+test/bootstrap.cjs
+test/stop.cjs
+test/ui-preview/dist/
+test/ui-preview/shots/
+test/ui-preview/old/
+test/ui-preview/dist-old/
+test/ui-preview/review.html

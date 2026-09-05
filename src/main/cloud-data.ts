@@ -43,6 +43,14 @@ import {
 import { getProfileKey, ownerForProfile } from './profile-share'
 import type { Cookie, SavedLogin, SavedCookie } from '../shared/types'
 import { requireProfileId, requireUuid, sanitizeCookies } from './validation'
+import { dbg } from './dbg'
+import { getMachineId } from './machine-id'
+
+/** ETags this process synced (uploaded or extracted) per profile — the in-memory twin of the
+ *  sync-meta tag file. When that file cannot be written (odd permissions / dedup tools) the
+ *  anti-clobber guard would otherwise refuse every later upload on this machine; within one
+ *  app session this map keeps the truth. */
+const memoryTags = new Map<string, string>()
 
 /** Encryption key for a profile's cloud data. Cross-account sharing is disabled until
  *  per-recipient key envelopes exist, so this currently resolves to the account key. */
@@ -340,9 +348,11 @@ export async function getSessionSyncTag(id: string): Promise<string> {
   return readSyncTag(session.uid, id)
 }
 
-async function writeSyncTag(uid: string, id: string, tag: string): Promise<void> {
+/** Returns false when the tag could NOT be recorded — the caller logs/warns, because a local tag
+ *  that lags the cloud makes every later close on this machine trip the anti-clobber guard. */
+async function writeSyncTag(uid: string, id: string, tag: string): Promise<boolean> {
   const safeTag = tag.replace(/[^a-z0-9._:+\/-]/gi, '').slice(0, 512)
-  if (!safeTag) return
+  if (!safeTag) return false
   const root = join(app.getPath('userData'), 'sync-meta')
   const accountRoot = join(root, requireUuid(uid, 'Account ID'))
   const path = syncTagPath(uid, id)
@@ -352,14 +362,24 @@ async function writeSyncTag(uid: string, id: string, tag: string): Promise<void>
     await ensurePrivateDirectory(accountRoot)
     try {
       const current = await fs.lstat(path)
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1) return
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1) {
+        dbg(`[sync ${id}] refusing to write tag: unsafe existing tag file`)
+        return false
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        dbg(`[sync ${id}] tag lstat failed: ${(error as Error).message}`)
+        return false
+      }
     }
     await fs.writeFile(temp, safeTag, { mode: 0o600, flag: 'wx' })
     await fs.rename(temp, path)
-  } catch {
-    // Best effort. A missing tag causes a safe re-download on the next open.
+    return true
+  } catch (error) {
+    // A missing tag causes a safe re-download on the next open — but it also blocks the next
+    // upload (anti-clobber sees "cloud advanced past what we synced"), so make it visible.
+    dbg(`[sync ${id}] tag write FAILED: ${error instanceof Error ? error.message : String(error)}`)
+    return false
   } finally {
     await fs.unlink(temp).catch(() => {})
   }
@@ -403,25 +423,41 @@ async function getCloudObjectInfo(
  *  CLOSED — a failed read usually coincides with a failed upload anyway, and never overwriting is
  *  the safe default). False (allow) only when the cloud is DEFINITELY absent (404) or holds
  *  exactly the version we last synced. */
-export async function cloudSessionAdvanced(id: string): Promise<boolean> {
+export interface CloudSessionState {
+  /** Uploading now would overwrite a cloud session this machine never synced (or unreadable). */
+  advanced: boolean
+  /** The cloud object's current ETag ('' when absent/unreadable). */
+  cloudTag: string
+  /** The ETag this machine last synced ('' when none). */
+  localTag: string
+  /** HTTP status of the probe (200/206 present, 404/400 absent, other = error, 0 = network). */
+  status: number
+}
+
+export async function cloudSessionState(id: string): Promise<CloudSessionState> {
   const session = getCloudSession()
-  if (!session) return false // not signed in → no cloud object to protect
+  if (!session) return { advanced: false, cloudTag: '', localTag: '', status: 0 } // not signed in
   const s = await getSettings()
-  if (!s.supabaseUrl || !s.supabaseAnonKey) return false
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return { advanced: false, cloudTag: '', localTag: '', status: 0 }
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
-  const localTag = await readSyncTag(session.uid, id)
+  const localTag = (await readSyncTag(session.uid, id)) || memoryTags.get(id) || ''
   const info = await getCloudObjectInfo(url, session.accessToken, s.supabaseAnonKey)
+  const base = { cloudTag: info.etag, localTag, status: info.status }
   // Supabase Storage returns 400 (not only 404) for a MISSING object — the download paths already
   // treat 400 as "not uploaded yet". Match that here: a truly-present object always answers the
   // Range GET with 200/206, so allowing on 400/404 can never clobber real data; it only prevents a
   // permanently-blocked FIRST upload.
-  if (info.status === 404 || info.status === 400) return false // nothing there → safe to upload
+  if (info.status === 404 || info.status === 400) return { advanced: false, ...base } // nothing there
   if (info.status === 200 || info.status === 206) {
     // Cloud holds a session. Safe ONLY if it is exactly the one we last synced.
-    return !localTag || !info.etag || info.etag !== localTag
+    return { advanced: !localTag || !info.etag || info.etag !== localTag, ...base }
   }
-  return true // unreadable (server error / network) → fail closed, never risk a clobber
+  return { advanced: true, ...base } // unreadable (server error / network) → fail closed
+}
+
+export async function cloudSessionAdvanced(id: string): Promise<boolean> {
+  return (await cloudSessionState(id)).advanced
 }
 
 /** Thrown by uploadProfileData when the cloud session advanced past ours (anti-clobber). Tagged
@@ -596,8 +632,17 @@ export async function ensureSafeProfileDestination(id: string): Promise<string> 
   return root
 }
 
-/** Zip the profile's user-data-dir and upload it to the user's cloud bucket. */
-export async function uploadProfileData(id: string): Promise<void> {
+export interface UploadProfileDataOptions {
+  /** Anti-clobber override: when the cloud advanced to EXACTLY this ETag, still upload. The
+   *  close flow passes the tag the previous holder published onto THIS open's lock row — i.e.
+   *  the advance was the late hand-off of a stale holder, and this machine (the one that holds
+   *  the current epoch) is the live session that must win. Any other advance still refuses. */
+  allowCloudTag?: string
+}
+
+/** Zip the profile's user-data-dir and upload it to the user's cloud bucket. Resolves with the
+ *  new cloud ETag (the tag to publish for a waiting machine). */
+export async function uploadProfileData(id: string, opts: UploadProfileDataOptions = {}): Promise<string> {
   const session = getCloudSession()
   if (!session) throw new Error('Chưa đăng nhập cloud')
   const s = await getSettings()
@@ -606,6 +651,7 @@ export async function uploadProfileData(id: string): Promise<void> {
   const zip = buildZip(id)
   // Don't overwrite a good cloud session with a partial one (locked cookie DB).
   if (!zipHasCriticalSession(zip, id)) {
+    dbg(`[sync ${id}] upload refused: empty/partial local snapshot`)
     throw new Error(
       'Bỏ qua lưu phiên: snapshot local đang trống hoặc chưa hoàn chỉnh. Giữ nguyên bản cloud cũ.'
     )
@@ -633,10 +679,20 @@ export async function uploadProfileData(id: string): Promise<void> {
   // overwriting would permanently destroy the other machine's fresh session — the exact data loss
   // the profile lock exists to prevent. cloudSessionAdvanced() fails CLOSED on an unreadable cloud
   // object and allows a first upload to an empty (404) key.
-  if (await cloudSessionAdvanced(id)) {
-    throw new CloudAdvancedError(
-      'Bỏ qua lưu phiên: bản cloud đã mới hơn hoặc không đọc được — không ghi đè để tránh mất dữ liệu.'
+  const state = await cloudSessionState(id)
+  if (state.advanced) {
+    const handoffOverride =
+      !!opts.allowCloudTag && !!state.cloudTag && state.cloudTag === opts.allowCloudTag
+    dbg(
+      `[sync ${id}] anti-clobber: cloud=${state.cloudTag.slice(0, 16) || '-'} local=${state.localTag.slice(0, 16) || '-'} status=${state.status} override=${handoffOverride}`
     )
+    if (!handoffOverride) {
+      throw new CloudAdvancedError(
+        state.status === 200 || state.status === 206
+          ? 'Bỏ qua lưu phiên: bản cloud đã mới hơn (máy khác vừa lưu) — không ghi đè để tránh mất dữ liệu.'
+          : 'Bỏ qua lưu phiên: không đọc được bản cloud (mạng/máy chủ) — không ghi đè để tránh mất dữ liệu.'
+      )
+    }
   }
 
   const res = await cloudFetch(url, {
@@ -653,6 +709,7 @@ export async function uploadProfileData(id: string): Promise<void> {
   if (!res.ok) {
     const detail = await responseText(res).catch(() => '')
     const mb = (body.length / 1048576).toFixed(1)
+    dbg(`[sync ${id}] upload FAILED http=${res.status} ${mb}MB ${detail.slice(0, 120)}`)
     if (res.status === 413 || detail.includes('too large')) {
       throw new Error(
         `Dữ liệu phiên quá lớn (${mb}MB) vượt giới hạn cloud (64MB). Thử xoá bớt cache trong profile.`
@@ -663,18 +720,41 @@ export async function uploadProfileData(id: string): Promise<void> {
   // Record the new cloud ETag as our synced version, so the next open recognises this
   // upload as "already have it" (skips a redundant download) and, crucially, so a later
   // failed upload leaves the marker on the LAST-GOOD version (freshness guard above).
-  const newTag = (res.headers.get('etag') || '').replace(/"/g, '')
+  let newTag = (res.headers.get('etag') || '').replace(/"/g, '')
   await res.body?.cancel().catch(() => {})
-  if (newTag) {
-    await writeSyncTag(session.uid, id, newTag)
-  } else {
-    const tag = await getCloudEtag(url, session.accessToken, s.supabaseAnonKey)
-    if (tag) await writeSyncTag(session.uid, id, tag)
-  }
+  if (!newTag) newTag = await getCloudEtag(url, session.accessToken, s.supabaseAnonKey)
+  if (newTag) memoryTags.set(id, newTag)
+  const tagged = newTag ? await writeSyncTag(session.uid, id, newTag) : false
+  dbg(`[sync ${id}] upload ok ${(body.length / 1048576).toFixed(1)}MB tag=${newTag.slice(0, 16) || '-'} tagged=${tagged}`)
 
   // Mark that this profile now has cloud session data (atomic patch — never write back
-  // a whole stale profile snapshot, which could clobber a concurrent edit).
-  await patchProfile(id, { cloudDataAt: new Date().toISOString() })
+  // a whole stale profile snapshot, which could clobber a concurrent edit). Best-effort and
+  // BEFORE the bookkeeping check below: the upload itself succeeded.
+  await patchProfile(id, { cloudDataAt: new Date().toISOString() }).catch(() => {})
+
+  if (newTag && !tagged) {
+    // The upload succeeded but this machine could not persist the marker. memoryTags keeps
+    // this app session correct; after a restart the next open simply re-downloads. Surface it.
+    throw new SyncTagError(
+      'Đã lưu phiên lên cloud nhưng không ghi được dấu đồng bộ cục bộ (kiểm tra quyền ghi thư mục sync-meta). Trong phiên app này vẫn lưu tiếp được bình thường.',
+      newTag
+    )
+  }
+  return newTag // '' when the server gave no ETag and the re-probe failed — the upload is done
+}
+
+/** Thrown AFTER a successful upload when the local sync tag could not be written. The session IS
+ *  in the cloud (`tag` is its ETag — publish it for a waiting machine); only this machine's
+ *  bookkeeping is off. */
+export class SyncTagError extends Error {
+  readonly code = 'SYNC_TAG'
+  constructor(
+    message: string,
+    readonly tag: string
+  ) {
+    super(message)
+    this.name = 'SyncTagError'
+  }
 }
 
 /**
@@ -698,9 +778,14 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   // tabs. Skip and keep local (it re-uploads on the next close).
   const cloudInfo = await getCloudObjectInfo(url, session.accessToken, s.supabaseAnonKey)
   const cloudTag = cloudInfo.etag
-  if (cloudInfo.bound && cloudTag && (await readSyncTag(session.uid, id)) === cloudTag) {
+  const localTagNow = await readSyncTag(session.uid, id)
+  if (cloudInfo.bound && cloudTag && localTagNow === cloudTag) {
+    dbg(`[sync ${id}] download skipped: cloud tag ${cloudTag.slice(0, 16)} already synced here`)
     return false
   }
+  dbg(
+    `[sync ${id}] download: status=${cloudInfo.status} cloud=${cloudTag.slice(0, 16) || '-'} local=${localTagNow.slice(0, 16) || '-'}`
+  )
 
   const res = await cloudFetch(url, {
     headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
@@ -846,10 +931,20 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   } finally {
     await fs.rm(staging, { recursive: true, force: true }).catch(() => {})
   }
-  // Remember the cloud version we now hold so the next open can tell if cloud changed.
+  // Remember the cloud version we now hold so the next open can tell if cloud changed — and so
+  // the close-time anti-clobber guard knows this machine synced exactly this version.
   const newTag = (migratedTag || res.headers.get('etag') || cloudTag || '').replace(/"/g, '')
-  if (newTag) await writeSyncTag(session.uid, id, newTag)
+  if (newTag) {
+    memoryTags.set(id, newTag)
+    const tagged = await writeSyncTag(session.uid, id, newTag)
+    if (!tagged) dbg(`[sync ${id}] extracted ${newTag.slice(0, 16)} but the local tag could not be written (memory fallback active)`)
+  }
   return true
+}
+
+/** The ETag this process last synced for `id` (uploaded or extracted), '' if none. */
+export function lastSyncedTag(id: string): string {
+  return memoryTags.get(id) ?? ''
 }
 
 // ── Cross-machine COOKIES (encrypted transport, engine-agnostic) ─────────────
@@ -965,7 +1060,9 @@ export async function uploadProfilePasswords(id: string, logins: SavedLogin[]): 
   if (!s.supabaseUrl || !s.supabaseAnonKey) return
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${passwordsObjectPath(ownerUid, id)}`
-  const json = JSON.stringify(logins.slice(0, MAX_SAVED_LOGINS))
+  // v2 envelope: the uploader's machine id lets the importer tell a hand-off from another
+  // machine (incoming wins near-ties) from its own earlier upload (strict newer-wins).
+  const json = JSON.stringify({ v: 2, machine: getMachineId(), rows: logins.slice(0, MAX_SAVED_LOGINS) })
   if (Buffer.byteLength(json, 'utf8') > MAX_JSON_PLAINTEXT_BYTES) {
     throw new Error('Dữ liệu mật khẩu vượt giới hạn 16 MB.')
   }
@@ -997,38 +1094,79 @@ export async function uploadProfilePasswords(id: string, logins: SavedLogin[]): 
   await res.body?.cancel().catch(() => {})
 }
 
-/** Fetch + decrypt the profile's cloud saved logins. [] if none / not decryptable. */
-export async function downloadProfilePasswords(id: string): Promise<SavedLogin[]> {
+/** A decrypted credential object: its rows plus the machine that uploaded it (null for legacy
+ *  objects that carried a bare array). */
+export interface CloudRows<T> {
+  rows: T[]
+  uploader: string | null
+}
+
+/** Accepts both the v2 envelope `{v, machine, rows}` and the legacy bare array. */
+function parseRowsEnvelope<T>(plaintext: string, cap: number): CloudRows<T> | null {
+  const parsed = JSON.parse(plaintext) as unknown
+  if (Array.isArray(parsed)) return { rows: parsed.slice(0, cap) as T[], uploader: null }
+  if (parsed && typeof parsed === 'object') {
+    const o = parsed as { rows?: unknown; machine?: unknown }
+    if (Array.isArray(o.rows)) {
+      return {
+        rows: o.rows.slice(0, cap) as T[],
+        uploader: typeof o.machine === 'string' && o.machine ? o.machine.slice(0, 128) : null
+      }
+    }
+  }
+  return null
+}
+
+/** Fetch + decrypt the profile's cloud saved logins. Empty rows when the cloud has none (or
+ *  not signed in); NULL when the cloud object exists but could not be fetched or decrypted —
+ *  callers must treat null as "unknown" (never as "empty"), otherwise the next close would
+ *  overwrite the cloud copy with a partial local set. */
+export async function downloadProfilePasswords(id: string): Promise<CloudRows<SavedLogin> | null> {
+  const empty: CloudRows<SavedLogin> = { rows: [], uploader: null }
   const session = getCloudSession()
-  if (!session) return []
+  if (!session) return empty
   const s = await getSettings()
-  if (!s.supabaseUrl || !s.supabaseAnonKey) return []
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return empty
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${passwordsObjectPath(ownerUid, id)}`
-  const res = await cloudFetch(url, {
-    headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
-  })
+  let res: Response
+  try {
+    res = await cloudFetch(url, {
+      headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+    })
+  } catch (err) {
+    dbg(`[creds ${id}] passwords fetch failed: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
   if (res.status === 404 || res.status === 400) {
     await res.body?.cancel().catch(() => {})
-    return []
+    return empty
   }
   if (!res.ok) {
     await res.body?.cancel().catch(() => {})
-    return []
+    dbg(`[creds ${id}] passwords fetch http=${res.status}`)
+    return null
   }
   try {
     const data = await responseJson<{ enc?: string }>(res)
-    if (!data || typeof data.enc !== 'string') return []
+    if (!data || typeof data.enc !== 'string') return null
     const secret = await keyForProfile(id)
-    if (!secret) return []
+    if (!secret) {
+      dbg(`[creds ${id}] passwords: no account secret → cannot decrypt`)
+      return null
+    }
     const decoded = decryptProfileJson(secret, 'passwords', id, data.enc)
-    if (!decoded) return []
-    const arr = JSON.parse(decoded.plaintext) as SavedLogin[]
-    const logins = Array.isArray(arr) ? arr.slice(0, MAX_SAVED_LOGINS) : []
-    if (decoded.legacy && logins.length) await uploadProfilePasswords(id, logins).catch(() => {})
-    return logins
-  } catch {
-    return []
+    if (!decoded) {
+      dbg(`[creds ${id}] passwords: decrypt failed (wrong passphrase / corrupt)`)
+      return null
+    }
+    const out = parseRowsEnvelope<SavedLogin>(decoded.plaintext, MAX_SAVED_LOGINS)
+    if (!out) return null
+    if (decoded.legacy && out.rows.length) await uploadProfilePasswords(id, out.rows).catch(() => {})
+    return out
+  } catch (err) {
+    dbg(`[creds ${id}] passwords parse failed: ${err instanceof Error ? err.message : String(err)}`)
+    return null
   }
 }
 
@@ -1053,7 +1191,7 @@ export async function uploadProfileCookiesDb(id: string, cookies: SavedCookie[])
   if (!s.supabaseUrl || !s.supabaseAnonKey) return
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesDbObjectPath(ownerUid, id)}`
-  const json = JSON.stringify(cookies.slice(0, MAX_SAVED_COOKIES))
+  const json = JSON.stringify({ v: 2, machine: getMachineId(), rows: cookies.slice(0, MAX_SAVED_COOKIES) })
   if (Buffer.byteLength(json, 'utf8') > MAX_JSON_PLAINTEXT_BYTES) {
     throw new Error('Dữ liệu cookie DB vượt giới hạn 16 MB.')
   }
@@ -1083,37 +1221,54 @@ export async function uploadProfileCookiesDb(id: string, cookies: SavedCookie[])
   await res.body?.cancel().catch(() => {})
 }
 
-/** Fetch + decrypt the profile's cloud cookies. [] if none / not decryptable. */
-export async function downloadProfileCookiesDb(id: string): Promise<SavedCookie[]> {
+/** Fetch + decrypt the profile's cloud cookies. Empty rows when the cloud has none (or not
+ *  signed in); NULL when the object exists but could not be fetched/decrypted (see
+ *  downloadProfilePasswords). */
+export async function downloadProfileCookiesDb(id: string): Promise<CloudRows<SavedCookie> | null> {
+  const empty: CloudRows<SavedCookie> = { rows: [], uploader: null }
   const session = getCloudSession()
-  if (!session) return []
+  if (!session) return empty
   const s = await getSettings()
-  if (!s.supabaseUrl || !s.supabaseAnonKey) return []
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return empty
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${cookiesDbObjectPath(ownerUid, id)}`
-  const res = await cloudFetch(url, {
-    headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
-  })
+  let res: Response
+  try {
+    res = await cloudFetch(url, {
+      headers: { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+    })
+  } catch (err) {
+    dbg(`[creds ${id}] cookies fetch failed: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
   if (res.status === 404 || res.status === 400) {
     await res.body?.cancel().catch(() => {})
-    return []
+    return empty
   }
   if (!res.ok) {
     await res.body?.cancel().catch(() => {})
-    return []
+    dbg(`[creds ${id}] cookies fetch http=${res.status}`)
+    return null
   }
   try {
     const data = await responseJson<{ enc?: string }>(res)
-    if (!data || typeof data.enc !== 'string') return []
+    if (!data || typeof data.enc !== 'string') return null
     const secret = await keyForProfile(id)
-    if (!secret) return []
+    if (!secret) {
+      dbg(`[creds ${id}] cookies: no account secret → cannot decrypt`)
+      return null
+    }
     const decoded = decryptProfileJson(secret, 'cookiesdb', id, data.enc)
-    if (!decoded) return []
-    const arr = JSON.parse(decoded.plaintext) as SavedCookie[]
-    const cookies = Array.isArray(arr) ? arr.slice(0, MAX_SAVED_COOKIES) : []
-    if (decoded.legacy && cookies.length) await uploadProfileCookiesDb(id, cookies).catch(() => {})
-    return cookies
-  } catch {
-    return []
+    if (!decoded) {
+      dbg(`[creds ${id}] cookies: decrypt failed (wrong passphrase / corrupt)`)
+      return null
+    }
+    const out = parseRowsEnvelope<SavedCookie>(decoded.plaintext, MAX_SAVED_COOKIES)
+    if (!out) return null
+    if (decoded.legacy && out.rows.length) await uploadProfileCookiesDb(id, out.rows).catch(() => {})
+    return out
+  } catch (err) {
+    dbg(`[creds ${id}] cookies parse failed: ${err instanceof Error ? err.message : String(err)}`)
+    return null
   }
 }

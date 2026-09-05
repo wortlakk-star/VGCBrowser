@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Profile, ProxyConfig, SavedProxy } from '../../shared/types'
 import { pushCloudProfileList } from '../cloud'
+import { Icon } from './Icon'
 
 interface Props {
   profile: Profile
@@ -71,9 +72,9 @@ export function ShareModal({ profile, proxies, onClose }: Props): JSX.Element {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
-          <h3>🔗 Chia sẻ profile: {profile.name}</h3>
+          <h3>Chia sẻ profile: {profile.name}</h3>
           <button className="btn" onClick={onClose}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 

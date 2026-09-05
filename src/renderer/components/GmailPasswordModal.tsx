@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GmailChangeStatus, OsType, Profile, ProxyConfig, SavedProxy } from '../../shared/types'
+import { Icon } from './Icon'
 
 interface Props {
   profiles: Profile[]
@@ -27,13 +28,13 @@ interface Row {
 const STATUS_LABEL: Record<RowStatus, string> = {
   pending: 'Chờ',
   running: 'Đang chạy…',
-  done: '✓ Đã đổi',
-  wrong_password: '✗ Sai mật khẩu cũ',
-  weak_password: '✗ Mật khẩu mới bị từ chối',
-  captcha: '⚠ Dính captcha',
-  needs_manual: '⚠ Cần xác minh tay',
-  not_found: '✗ Không có profile',
-  error: '✗ Lỗi'
+  done: 'Đã đổi',
+  wrong_password: 'Sai mật khẩu cũ',
+  weak_password: 'Mật khẩu mới bị từ chối',
+  captcha: 'Dính captcha',
+  needs_manual: 'Cần xác minh tay',
+  not_found: 'Không có profile',
+  error: 'Lỗi'
 }
 
 const OK_TAG = 'gmail-ok'
@@ -358,9 +359,9 @@ export function GmailPasswordModal({ profiles, proxies, onClose, onChanged }: Pr
     <div className="modal-backdrop" onClick={running ? undefined : onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 820 }}>
         <header className="modal-head">
-          <h3>🔑 Đổi mật khẩu Gmail hàng loạt</h3>
+          <h3>Đổi mật khẩu Gmail hàng loạt</h3>
           <button className="btn" onClick={onClose} disabled={running}>
-            ✕
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
         </header>
 
