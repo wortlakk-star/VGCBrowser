@@ -1,7 +1,7 @@
 diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
 --- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
 +++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
-@@ -4,6 +4,12 @@
+@@ -4,6 +4,13 @@
  
  #include "third_party/blink/renderer/modules/webgpu/gpu_adapter.h"
  
@@ -10,11 +10,12 @@ diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_pa
 +#include <string>
 +
 +#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
 +#include "base/strings/string_util.h"
  #include "services/metrics/public/cpp/ukm_builders.h"
  #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
-@@ -30,6 +36,136 @@
+@@ -30,6 +37,183 @@
  
  namespace {
  
@@ -26,9 +27,12 @@ diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_pa
 +// identical for every profile on one machine (a same-machine correlator). Derive the
 +// WebGPU identity from the same claimed renderer string so both APIs describe one
 +// coherent GPU. Spellings follow Dawn's gpu_info.json js_enum_case(): "ampere",
-+// "lovelace", "blackwell", "rdna-2", "gcn-4", "gen-9", "gen-12lp", "common-3"…
-+// Subgroup sizes follow the claimed vendor (NVIDIA 32/32, AMD RDNA 32/64, GCN 64/64,
-+// Intel 8/32, Apple 32/32). Absent switches ⇒ stock behaviour.
++// "lovelace", "blackwell", "rdna-2", "gcn-4", "gen-9", "gen-12lp", "xe-lpg"; Apple GPUs
++// are named by Metal family ("metal-3" on macOS 13+, "common-3" before — see
++// dawn/native/metal/PhysicalDeviceMTL.mm). Subgroup sizes follow what each backend
++// reports for the claimed vendor: D3D12 WaveLaneCount (NVIDIA 32/32, AMD RDNA 32/64,
++// GCN 64/64, Intel 8/32) and Metal (Apple 32/32, any other vendor 4/64).
++// Absent switches ⇒ stock behaviour.
 +struct VgcGpuIdentity {
 +  const char* vendor;
 +  const char* architecture;
@@ -60,34 +64,76 @@ diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_pa
 +  return s.find(needle) != std::string::npos;
 +}
 +
-+std::optional<VgcGpuIdentity> VgcWebGpuIdentity() {
++// Lower-case and drop the "(r)" / "(tm)" marks real strings carry
++// ("Intel(R) Arc(TM) A770 Graphics" → "intel arc a770 graphics") so markers match.
++std::string VgcNormalize(std::string s) {
++  s = base::ToLowerASCII(s);
++  base::ReplaceSubstringsAfterOffset(&s, 0, "(r)", "");
++  base::ReplaceSubstringsAfterOffset(&s, 0, "(tm)", "");
++  base::ReplaceSubstringsAfterOffset(&s, 0, "  ", " ");
++  return s;
++}
++
++// Major version of --vgc-ua-platform-version ("14.5.0" → 14), 0 if absent.
++unsigned VgcClaimedOsMajor() {
++  const std::string v = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++      "vgc-ua-platform-version");
++  unsigned major = 0;
++  const size_t dot = v.find('.');
++  base::StringToUint(dot == std::string::npos ? v : v.substr(0, dot), &major);
++  return major;
++}
++
++std::optional<VgcGpuIdentity> VgcWebGpuIdentity(bool metal_backend) {
 +  const base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
-+  const std::string renderer =
-+      base::ToLowerASCII(cmd->GetSwitchValueASCII("vgc-webgl-renderer"));
-+  const std::string vendor =
-+      base::ToLowerASCII(cmd->GetSwitchValueASCII("vgc-webgl-vendor"));
++  const std::string renderer = VgcNormalize(cmd->GetSwitchValueASCII("vgc-webgl-renderer"));
++  const std::string vendor = VgcNormalize(cmd->GetSwitchValueASCII("vgc-webgl-vendor"));
 +  if (renderer.empty() && vendor.empty())
 +    return std::nullopt;
 +  const std::string all = vendor + " " + renderer;
++  // Metal reports 4/64 for every non-Apple vendor (derivative group / uint64 ballot).
++  const uint32_t metal_min = 4, metal_max = 64;
++
++  if (VgcHas(all, "apple")) {
++    const unsigned os_major = VgcClaimedOsMajor();
++    return VgcGpuIdentity{"apple", os_major && os_major < 13 ? "common-3" : "metal-3", 32, 32};
++  }
 +
 +  if (VgcHas(all, "nvidia") || VgcHas(all, "geforce") || VgcHas(all, "quadro")) {
 +    const unsigned rtx = VgcModelNumber(renderer, "rtx ");
 +    const unsigned gtx = VgcModelNumber(renderer, "gtx ");
++    const unsigned mx = VgcModelNumber(renderer, "mx");
 +    const char* arch = "ampere";
-+    if (rtx >= 5000)
++    if (VgcHas(renderer, "blackwell"))
 +      arch = "blackwell";
-+    else if (rtx >= 4000 || VgcHas(renderer, " ada"))
++    else if (VgcHas(renderer, " ada"))
++      arch = "lovelace";
++    else if (VgcHas(renderer, "quadro rtx") || VgcHas(renderer, " t600") ||
++             VgcHas(renderer, " t1000") || VgcHas(renderer, " t400"))
++      arch = "turing";
++    else if (rtx == 2050)
++      arch = "ampere";  // GA107 laptop part despite the 20xx name
++    else if (rtx >= 5000)
++      arch = "blackwell";
++    else if (rtx >= 4000)
 +      arch = "lovelace";
 +    else if (rtx >= 3000 || VgcHas(renderer, "rtx a"))
 +      arch = "ampere";
-+    else if (rtx >= 2000 || gtx >= 1600 || VgcHas(renderer, " t600") ||
-+             VgcHas(renderer, " t1000") || VgcHas(renderer, " t400"))
++    else if (rtx >= 2000 || gtx >= 1600)
 +      arch = "turing";
 +    else if (gtx >= 1000)
 +      arch = "pascal";
-+    else if (gtx >= 700)
++    else if (gtx == 750 || gtx == 745 || gtx >= 900)
 +      arch = "maxwell";
-+    return VgcGpuIdentity{"nvidia", arch, 32, 32};
++    else if (gtx >= 600)
++      arch = "kepler";
++    else if (mx >= 570)
++      arch = "ampere";
++    else if (mx >= 450)
++      arch = "turing";
++    else if (mx >= 100)
++      arch = "pascal";
++    return VgcGpuIdentity{"nvidia", arch, metal_backend ? metal_min : 32u, metal_backend ? metal_max : 32u};
 +  }
 +
 +  if (VgcHas(all, "amd") || VgcHas(all, "radeon")) {
@@ -109,6 +155,7 @@ diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_pa
 +      arch = "gcn-5";
 +      smin = smax = 64;
 +    }
++    if (metal_backend) { smin = metal_min; smax = metal_max; }
 +    return VgcGpuIdentity{"amd", arch, smin, smax};
 +  }
 +
@@ -119,44 +166,46 @@ diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_pa
 +    const unsigned arc_b = VgcModelNumber(renderer, "arc b");
 +    const char* arch = "gen-12lp";
 +    if (arc_b)
-+      arch = "xe-2hpg";
++      arch = "xe-2hpg";  // Arc B5xx (Battlemage)
 +    else if (arc_a)
-+      arch = "gen-12hp";
++      arch = "gen-12hp";  // Arc A3xx…A7xx (Alchemist)
 +    else if (VgcHas(renderer, "arc 1"))
 +      arch = "xe-2lpg";  // Arc 130V / 140V (Lunar Lake)
-+    else if (VgcHas(renderer, "iris(r) xe") || VgcHas(renderer, "iris xe"))
++    else if (VgcHas(renderer, "arc graphics"))
++      arch = "xe-lpg";  // Meteor Lake "Intel(R) Arc(TM) Graphics"
++    else if (VgcHas(renderer, "iris xe"))
 +      arch = "gen-12lp";
-+    else if (VgcHas(renderer, "iris(r) plus") || VgcHas(renderer, "iris plus"))
++    else if (VgcHas(renderer, "iris plus"))
 +      arch = "gen-11";
 +    else if (uhd >= 700)
 +      arch = "gen-12lp";  // UHD 710/730/750/770 (Alder/Raptor Lake)
++    else if (hd >= 5000 && hd < 6100)
++      arch = "gen-8";  // HD 5500 / 6000 (Broadwell)
++    else if (hd >= 4000 && hd < 5000)
++      arch = "gen-7";  // HD 4000 / 4400 / 4600 (Ivy/Haswell)
 +    else if (uhd >= 600 || hd >= 500)
 +      arch = "gen-9";  // UHD 610/620/630, HD 520/530/620/630
-+    else if (hd >= 4000)
-+      arch = "gen-7";
-+    return VgcGpuIdentity{"intel", arch, 8, 32};
++    return VgcGpuIdentity{"intel", arch, metal_backend ? metal_min : 8u, metal_backend ? metal_max : 32u};
 +  }
-+
-+  if (VgcHas(all, "apple"))
-+    return VgcGpuIdentity{"apple", "common-3", 32, 32};
 +
 +  if (VgcHas(all, "adreno") || VgcHas(all, "qualcomm"))
 +    return VgcGpuIdentity{"qualcomm", "adreno-8xx", 64, 64};
 +
 +  // Claimed GPU of an unknown family: report nothing rather than the real one.
-+  return VgcGpuIdentity{"", "", 4, 128};
++  return VgcGpuIdentity{"", "", metal_backend ? metal_min : 4u, metal_backend ? metal_max : 128u};
 +}
 +
 +
  GPUSupportedFeatures* MakeFeatureNameSet(wgpu::Adapter adapter) {
    GPUSupportedFeatures* features = MakeGarbageCollected<GPUSupportedFeatures>();
    DCHECK(features->FeatureNameSet().empty());
-@@ -111,6 +247,17 @@
+@@ -111,6 +295,18 @@
    }
    subgroup_min_size_ = info.subgroupMinSize;
    subgroup_max_size_ = info.subgroupMaxSize;
 +  // VGC Core: make the WebGPU identity agree with the claimed WebGL GPU.
-+  if (const std::optional<VgcGpuIdentity> vgc = VgcWebGpuIdentity()) {
++  if (const std::optional<VgcGpuIdentity> vgc =
++          VgcWebGpuIdentity(backend_type_ == wgpu::BackendType::Metal)) {
 +    vendor_ = String(vgc->vendor);
 +    architecture_ = String(vgc->architecture);
 +    subgroup_min_size_ = vgc->subgroup_min;

@@ -318,9 +318,17 @@ export function hardwareVariant(
   const memChoices = (preset.mobile ? [4, 8] : MEMORY).filter(
     (m) => !environment.maxDeviceMemory || m <= environment.maxDeviceMemory
   )
+  // A host smaller than every pool value (2-3 vCPU VPS, <4 GB RAM) claims exactly what it
+  // has: Chrome reports real core counts, and 2 GB is a valid deviceMemory value.
+  const maxCores = environment.maxHardwareConcurrency
+  const maxMem = environment.maxDeviceMemory
   return {
-    hardwareConcurrency: coreChoices.length ? pick(coreChoices, rng) : Math.min(...CORES),
-    deviceMemory: memChoices.length ? pick(memChoices, rng) : Math.min(...MEMORY),
+    hardwareConcurrency: coreChoices.length
+      ? pick(coreChoices, rng)
+      : Math.max(1, Math.floor(maxCores ?? Math.min(...CORES))),
+    deviceMemory: memChoices.length
+      ? pick(memChoices, rng)
+      : [0.25, 0.5, 1, 2, 4, 8].filter((m) => m <= (maxMem ?? 8)).pop() ?? 0.25,
     webgl: environment.webgl ?? pick(gpuPool(os, environment.webglFamily), rng)
   }
 }

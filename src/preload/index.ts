@@ -167,6 +167,9 @@ const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
 
   // Forced-update gate: is this build still allowed to run?
+  /** GPU family of this machine ('NVIDIA' | 'AMD' | 'Intel' | 'Apple' | …) or null. */
+  hostGpuFamily: (): Promise<string | null> => ipcRenderer.invoke('host:gpuFamily'),
+
   versionGate: (): Promise<{
     blocked: boolean
     current: string

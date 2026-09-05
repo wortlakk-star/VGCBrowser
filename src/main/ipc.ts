@@ -5,6 +5,7 @@
 
 import { ipcMain, dialog, BrowserWindow, app, shell, type IpcMainInvokeEvent } from 'electron'
 import { checkVersionGate } from './version-gate'
+import { hostGpuFamily } from './host-fingerprint'
 import { refreshLicense, precheckEmail, shouldRevoke } from './license'
 import { randomUUID } from 'crypto'
 import { constants as fsConstants, promises as fs } from 'fs'
@@ -262,8 +263,11 @@ export function registerIpc(): void {
     const src = await getProfile(id)
     if (!src) throw new Error(`Không tìm thấy profile: ${id}`)
     const now = new Date().toISOString()
+    // Drop the variety marker so the store derives a NEW hardware trio (cores/RAM/GPU) for
+    // the new id — a copy must not be a same-machine twin of its source.
+    const { fpv: _fpv, ...rest } = src
     const copy: Profile = {
-      ...src,
+      ...rest,
       id: randomUUID(),
       name: `${src.name} (copy)`,
       createdAt: now,
@@ -362,14 +366,18 @@ export function registerIpc(): void {
       .filter((p): p is Partial<Profile> => !!p && typeof p === 'object' && !Array.isArray(p))
       .map((p: Partial<Profile>) => {
       const os: OsType = hostOs()
+      const id = randomUUID()
       return {
         ...p,
-        id: randomUUID(),
+        id,
+        // Imported profiles get their own hardware trio derived from the new id (fpv left
+        // unset → the store's one-time variety pass runs), never the exporter's.
+        fpv: undefined,
         name: p.name || 'Imported profile',
         notes: p.notes ?? '',
         tags: Array.isArray(p.tags) ? p.tags : [],
         os,
-        fingerprint: cohereFingerprint(p.fingerprint),
+        fingerprint: cohereFingerprint(p.fingerprint, id),
         proxy: p.proxy ?? { type: 'none' },
         startUrls: Array.isArray(p.startUrls) ? p.startUrls : [],
         // Normalize an out-of-vocabulary account.status (foreign export / other version) so a bad
@@ -426,6 +434,10 @@ export function registerIpc(): void {
     if (os && os !== hostOs()) throw new Error('Chỉ tạo fingerprint cùng OS với máy đang chạy')
     return generateFingerprint(hostOs(), hostFingerprintEnvironment())
   })
+  // GPU family this machine really renders with (null when only virtual adapters are
+  // visible) — the edit modal offers only models of that family, since any other family is
+  // swapped at launch (adaptFingerprintToHost) and would silently differ from the UI.
+  handle('host:gpuFamily', () => hostGpuFamily() ?? null)
 
   // Current 6-digit 2FA code for a stored base32 secret (empty if the secret is invalid).
   handle('totp:now', (_e, secret: string) =>

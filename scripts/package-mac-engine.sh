@@ -2,7 +2,14 @@
 set -euo pipefail
 
 SRC="${1:-$HOME/vgc-chromium/src/out/vgc/Chromium.app}"
-VER="${2:-$(node -e "console.log(require('./package.json').version)")}"
+# Engine version is EXPLICIT: it names the zip and the app gates WebGPU spoofing on it
+# (>= 0.1.101 means the engine carries vgc-webgpu-identity.patch). Never default it to
+# the app version — that would satisfy the gate with any engine.
+VER="${2:-}"
+if [ -z "$VER" ]; then echo "Usage: $0 <Chromium.app> <engine-version e.g. 0.1.101> [needs VGC_CHROMIUM_SRC for the WebGPU check]" >&2; exit 1; fi
+if [ -n "${VGC_CHROMIUM_SRC:-}" ] && ! grep -q VgcWebGpuIdentity "$VGC_CHROMIUM_SRC/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc"; then
+  echo "Engine tree $VGC_CHROMIUM_SRC lacks vgc-webgpu-identity.patch; refusing to package $VER" >&2; exit 1
+fi
 ARCH="$(uname -m)"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/release"

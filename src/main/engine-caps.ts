@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { app } from 'electron'
 import type { AppSettings } from '../shared/types'
 
 /** First engine build whose WebGPU adapter identity follows --vgc-webgl-* (patch
@@ -18,7 +19,14 @@ const WEBGPU_IDENTITY_MIN_MAC_VERSION = [0, 1, 101]
 function manifestUrl(enginePath: string): string {
   try {
     const dir = dirname(enginePath)
-    for (const candidate of [join(dir, '.vgc-engine.json'), join(dir, '..', 'mac-engine.json')]) {
+    // Windows: <engine>/chromium/.vgc-engine.json next to chrome.exe. macOS: the binary is
+    // <engine>/VGC Core.app/Contents/MacOS/Chromium and the downloader writes
+    // <engine>/mac-engine.json (three levels up).
+    for (const candidate of [
+      join(dir, '.vgc-engine.json'),
+      join(dir, '..', '..', '..', 'mac-engine.json'),
+      join(dir, '..', 'mac-engine.json')
+    ]) {
       if (!existsSync(candidate)) continue
       const j = JSON.parse(readFileSync(candidate, 'utf8')) as { url?: unknown }
       if (typeof j.url === 'string') return j.url
@@ -64,7 +72,11 @@ export function engineHasWebGpuIdentity(
   enginePath: string,
   settings: Pick<AppSettings, 'engineUrl' | 'engineUrlMac'>
 ): boolean {
-  if (process.env.VGC_ENGINE_PATH && enginePath === process.env.VGC_ENGINE_PATH) return true
+  // A developer-built engine (dev run only) is assumed current; a packaged app ignores
+  // the env var so nothing outside the release can flip the gate.
+  if (!app.isPackaged && process.env.VGC_ENGINE_PATH && enginePath === process.env.VGC_ENGINE_PATH) {
+    return true
+  }
   if (process.platform === 'win32') {
     return engineBuildNumber(enginePath, settings) >= WEBGPU_IDENTITY_MIN_WIN_BUILD
   }

@@ -15,9 +15,11 @@ not ship.
 
 1. Fetch Chromium and check out the exact `chromeVersion` tag.
 2. Run `gclient sync -D --no-history` and `gclient runhooks`.
-3. Apply both files in `engine-src/patches/`:
+3. Apply all three files in `engine-src/patches/`:
    - `vgc-native-all.patch`
    - `vgc-uach-chrome-brand.patch`
+   - `vgc-webgpu-identity.patch` (package the result as engine 0.1.101+; the app only
+     stops disabling WebGPU for Mac engines >= 0.1.101)
 4. Apply platform branding assets separately.
 5. Generate `out/vgc` with `engine-src/args.gn` and the target CPU.
 6. Build with `autoninja -C out/vgc chrome`.
@@ -53,5 +55,5 @@ npm run build
 The engine test and advanced audits use CDP pipe plus a local loopback page. They do
 not expose a DevTools TCP endpoint or depend on a public test website.
 
-When rebasing to a new Chromium release, regenerate both patch artifacts from the
+When rebasing to a new Chromium release, regenerate all three patch artifacts from the
 reviewed source diff, build on every target OS, and repeat the complete verification.

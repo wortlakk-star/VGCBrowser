@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './Icon'
-import { gpuPool } from '../../shared/fingerprint'
+import { gpuPool, type GpuFamily } from '../../shared/fingerprint'
 import type {
   AccountStatus,
   Cookie,
@@ -44,8 +44,9 @@ const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
       ? 'android'
       : 'linux'
 // The same pool the generator draws from (real Chrome strings, PCI ids included), so a
-// hand-picked GPU is never a string no real machine reports.
-const GPUS = gpuPool(HOST_OS)
+// hand-picked GPU is never a string no real machine reports. Narrowed to the host's GPU
+// family once known (see the hostGpuFamily effect) — other families are swapped at launch.
+const ALL_GPUS = gpuPool(HOST_OS)
 const OS_OPTIONS: OsType[] = [HOST_OS]
 const PROXY_TYPES: ProxyType[] = ['none', 'http', 'https', 'socks5']
 // Must stay in step with the generator's lists in src/shared/fingerprint.ts.
@@ -56,6 +57,15 @@ const CORES = [4, 6, 8, 12, 16]
 const MEMORY = [4, 8]
 
 export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Element {
+  const [gpus, setGpus] = useState(ALL_GPUS)
+  useEffect(() => {
+    void window.vgc
+      .hostGpuFamily()
+      .then((family) => {
+        if (family) setGpus(gpuPool(HOST_OS, family as GpuFamily))
+      })
+      .catch(() => {})
+  }, [])
   const [name, setName] = useState(profile.name)
   const [group, setGroup] = useState(profile.group ?? '')
   const [tags, setTags] = useState(profile.tags.join(', '))
@@ -580,11 +590,11 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
                 <select
                   value={fp.webgl.renderer}
                   onChange={(e) => {
-                    const gpu = GPUS.find((g) => g.renderer === e.target.value)
+                    const gpu = gpus.find((g) => g.renderer === e.target.value)
                     if (gpu) patchFp({ webgl: { ...gpu } })
                   }}
                 >
-                  {[fp.webgl, ...GPUS.filter((g) => g.renderer !== fp.webgl.renderer)].map((g) => (
+                  {[fp.webgl, ...gpus.filter((g) => g.renderer !== fp.webgl.renderer)].map((g) => (
                     <option key={g.renderer} value={g.renderer}>
                       {g.renderer.replace(/^ANGLE \([^,]+, /, '').replace(/ Direct3D.*$/, '')}
                     </option>

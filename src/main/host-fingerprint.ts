@@ -55,12 +55,20 @@ function pickRealGpu(entries: string[]): { name: string; deviceId: string } {
 }
 
 let cachedHostGpuModel: { name: string; deviceId: string } | null | undefined
+let gpuDetectionFailed = false
+
+/** True when the last GPU enumeration THREW (PowerShell timeout, WMI down) rather than
+ *  genuinely finding no real GPU. Callers that would persist a family-dependent choice
+ *  (the store's one-time variety pass) wait for a later, successful enumeration. */
+export function hostGpuDetectionFailed(): boolean {
+  return gpuDetectionFailed
+}
 
 /** The real host GPU model (and PCI device id on Windows), or null when only virtual /
- *  remote-desktop adapters are present. */
+ *  remote-desktop adapters are present. A failed enumeration is NOT cached — the next
+ *  call retries. */
 function hostGpuModel(): { name: string; deviceId: string } | null {
   if (cachedHostGpuModel !== undefined) return cachedHostGpuModel
-  cachedHostGpuModel = null
   try {
     if (process.platform === 'darwin') {
       const raw = execFileSync('/usr/sbin/system_profiler', ['SPDisplaysDataType', '-json'], {
@@ -90,9 +98,14 @@ function hostGpuModel(): { name: string; deviceId: string } | null {
       )
       const picked = pickRealGpu(raw.split(/\r?\n/))
       cachedHostGpuModel = picked.name ? picked : null
+    } else {
+      cachedHostGpuModel = null
     }
+    gpuDetectionFailed = false
   } catch {
-    cachedHostGpuModel = null
+    // Transient failure: leave the cache empty so the next call retries.
+    gpuDetectionFailed = true
+    return null
   }
   return cachedHostGpuModel
 }

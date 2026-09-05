@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type { Profile, Fingerprint } from '../shared/types'
 import { CHROME_BUILD, hardwareVariant } from '../shared/fingerprint'
 import { accountKey } from './session'
-import { cohereFingerprint, hostFingerprintEnvironment, hostOs } from './host-fingerprint'
+import { cohereFingerprint, hostFingerprintEnvironment, hostGpuDetectionFailed, hostOs } from './host-fingerprint'
 
 /** Bump when the per-profile hardware derivation changes and every profile must be re-derived. */
 const FP_VARIETY_VERSION = 2
@@ -99,10 +99,15 @@ function normalizeProfiles(profiles: Profile[]): boolean {
     // profile's identity and are kept (and user edits respected).
     if (p.fpv !== FP_VARIETY_VERSION) {
       hostEnv ??= hostFingerprintEnvironment()
-      const variant = hardwareVariant(host, hostEnv, p.id)
-      p.fingerprint = { ...(p.fingerprint as Fingerprint), ...variant }
-      p.fpv = FP_VARIETY_VERSION
-      changed = true
+      // If GPU enumeration failed (PowerShell/WMI hiccup) the family is unknown; do NOT
+      // bake a random-family GPU into every profile — leave fpv unset so the pass runs
+      // on a later load once the real family is known.
+      if (!hostGpuDetectionFailed()) {
+        const variant = hardwareVariant(host, hostEnv, p.id)
+        p.fingerprint = { ...(p.fingerprint as Fingerprint), ...variant }
+        p.fpv = FP_VARIETY_VERSION
+        changed = true
+      }
     }
     // Keep the claimed Chrome version aligned with the VGC Core engine. A profile that
     // still claims Chrome 149 while the engine's UA-CH advertises 151 is a version
