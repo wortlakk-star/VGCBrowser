@@ -18,6 +18,7 @@ import type {
   RpaResult,
   WarmSchedule,
   GmailProgress,
+  LoginCheckResult,
   OsType,
   Profile,
   ProfileRuntimeState,
@@ -76,6 +77,11 @@ const api = {
 
   loginClean: (id: string): Promise<ProfileRuntimeState> =>
     ipcRenderer.invoke('profiles:loginClean', id),
+
+  /** "Already logged into Google?" without opening the browser (never claims/kicks the
+   *  cross-machine lock). See LoginCheckResult in shared/types.ts. */
+  checkLogin: (id: string): Promise<LoginCheckResult> =>
+    ipcRenderer.invoke('profiles:checkLogin', id),
 
   launchMany: (ids: string[]): Promise<void> =>
     ipcRenderer.invoke('profiles:launchMany', ids),

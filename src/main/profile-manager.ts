@@ -30,6 +30,7 @@ import type {
   Cookie,
   DataSyncState,
   Fingerprint,
+  LoginCheckResult,
   ProfileRuntimeState,
   SavedCookie,
   SavedLogin
@@ -61,12 +62,17 @@ import {
   exportLogins,
   importLogins,
   credentialStoresReady,
+  credentialExportReady,
+  CREDENTIAL_UNREADY_TEXT,
   engineKeyReadable,
   resetEngineKeyCache,
   mergeCookieSets,
   mergeLoginSets,
   cookieKey,
-  loginKey
+  loginKey,
+  checkGoogleLoginOffline,
+  matchGoogleLoginCookies,
+  GOOGLE_LOGIN_COOKIE_NAMES
 } from './password-bridge'
 import { getAccountSecret } from './account-secret'
 import { dbg } from './dbg'
@@ -439,10 +445,41 @@ async function uploadCredentials(
   try {
     if (!expectedUid || !sameAccount(expectedUid)) return out
     const dir = profileDataDir(id)
-    const [localCookies, localLogins] = await Promise.all([
-      exportCookies(dir, id).catch(() => []),
-      exportLogins(dir, id).catch(() => [])
+    // exportCookies/exportLogins return a bare [] for BOTH "genuinely zero rows" AND "could not
+    // read right now" (the Cookies/Login Data DB still has a pending WAL/journal — typically
+    // because the engine ignored a graceful close and was force-killed). Those two cases used to
+    // be indistinguishable here, so a close on a "heavy" profile that always needs force-killing
+    // silently uploaded the OLD cloud set as if the local read had confirmed it empty, then
+    // reported the close as a full success — the session's new logins/cookies were never actually
+    // captured, and the profile looked "broken" (always logged out) while others "just worked".
+    // Check readiness FIRST so an unreadable side is reported honestly instead of masked as empty.
+    // NOTE on the retry below: it only helps the narrow case where the WAL clears on its own
+    // shortly after (a graceful close whose checkpoint hadn't quite settled, or SQLite's own
+    // auto-checkpoint firing). It does NOT recover the harder case this bug was named for — an
+    // engine force-killed with an open WAL leaves no process behind to ever checkpoint it, so the
+    // retry just spends up to 3s before still (correctly) reporting unready. That harder case
+    // needs either a native SQLite able to checkpoint arbitrary files, or a bootstrap-engine-style
+    // recovery relaunch (see bootstrapProfileStores) — out of scope here; this fix's job is to
+    // stop MISREPORTING that case as success, not to make the WAL itself recoverable.
+    let ready = await credentialExportReady(dir)
+    for (let attempt = 0; attempt < 6 && (!ready.cookies || !ready.logins); attempt++) {
+      await sleepMs(500)
+      ready = await credentialExportReady(dir)
+    }
+    const [localCookiesRaw, localLoginsRaw] = await Promise.all([
+      ready.cookies ? exportCookies(dir, id).catch(() => null) : Promise.resolve(null),
+      ready.logins ? exportLogins(dir, id).catch(() => null) : Promise.resolve(null)
     ])
+    if (!ready.cookies || localCookiesRaw === null) {
+      const why = ready.cookiesReason ? CREDENTIAL_UNREADY_TEXT[ready.cookiesReason] : 'lỗi đọc Cookies DB cục bộ'
+      out.errors.push(`cookie: ${why}`)
+    }
+    if (!ready.logins || localLoginsRaw === null) {
+      const why = ready.loginsReason ? CREDENTIAL_UNREADY_TEXT[ready.loginsReason] : 'lỗi đọc Login Data cục bộ'
+      out.errors.push(`mật khẩu: ${why}`)
+    }
+    const localCookies = localCookiesRaw ?? []
+    const localLogins = localLoginsRaw ?? []
     if (!sameAccount(expectedUid)) return out
     let base = cloud
     if (!base || !base.cookiesKnown || !base.loginsKnown) {
@@ -462,6 +499,10 @@ async function uploadCredentials(
     const tasks: Array<Promise<void>> = []
     if (!base.cookiesKnown) {
       out.skipped.push('cookie (không đọc được bản cloud)')
+    } else if (!ready.cookies) {
+      // Local read unready this cycle — already recorded in out.errors above. Do NOT upload:
+      // the cloud set is left exactly as-is (nothing lost), and re-uploading would just waste a
+      // round-trip re-saving what's already there while still missing this session's new rows.
     } else {
       let baseCookies = base.cookies
       if (snapshot?.cookiesKnown && localCookies.length) {
@@ -479,6 +520,9 @@ async function uploadCredentials(
     }
     if (!base.loginsKnown) {
       out.skipped.push('mật khẩu (không đọc được bản cloud)')
+    } else if (!ready.logins) {
+      // Local read unready this cycle — already recorded in out.errors above. Same reasoning as
+      // the cookie branch: leave the cloud set untouched rather than re-upload a stale copy.
     } else {
       let baseLogins = base.logins
       if (snapshot?.loginsKnown && localLogins.length) {
@@ -792,7 +836,12 @@ async function settleLockAfterClose(id: string, entry: RunningProfile, res: Clos
       return
     }
     if (currentEpoch !== entry.lockEpoch) {
-      if (res.ok && res.tag) await publishSessionTag(id, currentEpoch, res.tag)
+      // Publish whenever the ZIP made it to the cloud (res.tag), REGARDLESS of res.ok — ok also
+      // turns false on a credential-only failure (e.g. Cookies/Login Data WAL still pending after
+      // a force-kill), and that must not throw away a perfectly good, fresher-than-nothing zip
+      // upload. The waiting machine would otherwise fall back to an OLDER cloud copy for no
+      // reason — the exact kind of loss the hand-off protocol exists to prevent.
+      if (res.tag) await publishSessionTag(id, currentEpoch, res.tag)
       else if (res.ok) await publishFailedMarker(id, currentEpoch, 'đã lưu nhưng không lấy được mã phiên (ETag)')
       else await publishFailedMarker(id, currentEpoch, res.reason ?? 'không rõ')
       return // the newer open holds the lock
@@ -1340,94 +1389,106 @@ async function launchProfileImpl(
   let handoffTag: string | undefined
   let handoffDownloaded = false
   if (getCloudSession()) {
-    // Read-only look at the lock row first (never bumps the epoch): who holds it, by name —
-    // for the messages below — and, for UNATTENDED launches (steal:false), the decision not to
-    // kick a machine where the user is actually working in this profile.
     // A previous VGC instance may have died and left this profile's engine running: close it
-    // (flushing its session to disk) before touching the dir or the lock.
+    // (flushing its session to disk) before touching the dir or the lock. Local safety net —
+    // runs regardless of soloMode (it is not a cross-machine check).
     await reapOrphanEngine(id, userDataDir)
-    const peek = await peekProfileLock(id, 5_000)
-    if (opts.steal === false) {
-      // Unattended launch: refuse when a live machine holds the profile — AND when we cannot
-      // tell (unreadable lock). Skipping a warm-up is safe; kicking a working user is not.
-      if (!peek.ok) {
-        dbg(`[open ${id}] unattended launch refused: lock unreadable (${peek.reason})`)
-        throw new Error('Không đọc được trạng thái khoá profile — bỏ qua chạy tự động.')
-      }
-      if (heldElsewhere(peek.row, false)) {
-        const who = peek.row?.holderName || 'máy khác'
-        dbg(`[open ${id}] unattended launch refused: held by ${peek.row?.holderDevice} (${who})`)
-        throw new Error(`Profile đang mở ở ${who} — bỏ qua chạy tự động (không đá máy đang dùng).`)
+    // Cross-machine EXCLUSIVE LOCK (peek/claim/hand-off/kick) — skipped entirely for a soloMode
+    // profile (Profile.soloMode, shared/types.ts): it never takes another machine's session over
+    // and is never taken over itself. Session data (further down) still syncs normally either
+    // way — soloMode only removes this round-trip + the kick behaviour it enforces. `peek`
+    // defaults to "nothing to report" so the code below that reads it stays well-typed even
+    // though it is only ever reached (both here and in the try below) when soloMode is off.
+    let peek: Awaited<ReturnType<typeof peekProfileLock>> = { ok: true, row: null, reason: null }
+    if (!profile.soloMode) {
+      // Read-only look at the lock row first (never bumps the epoch): who holds it, by name —
+      // for the messages below — and, for UNATTENDED launches (steal:false), the decision not to
+      // kick a machine where the user is actually working in this profile.
+      peek = await peekProfileLock(id, 5_000)
+      if (opts.steal === false) {
+        // Unattended launch: refuse when a live machine holds the profile — AND when we cannot
+        // tell (unreadable lock). Skipping a warm-up is safe; kicking a working user is not.
+        if (!peek.ok) {
+          dbg(`[open ${id}] unattended launch refused: lock unreadable (${peek.reason})`)
+          throw new Error('Không đọc được trạng thái khoá profile — bỏ qua chạy tự động.')
+        }
+        if (heldElsewhere(peek.row, false)) {
+          const who = peek.row?.holderName || 'máy khác'
+          dbg(`[open ${id}] unattended launch refused: held by ${peek.row?.holderDevice} (${who})`)
+          throw new Error(`Profile đang mở ở ${who} — bỏ qua chạy tự động (không đá máy đang dùng).`)
+        }
       }
     }
     try {
-      // Cross-machine EXCLUSIVE lock: claim this profile (bumps the epoch) so any OTHER open
-      // currently running it detects the higher epoch on its next poll, saves its session, and
-      // closes. Wait for a live previous holder to hand off BEFORE we download — so we always
-      // pull the newest session, never a stale one. Fail-open: a null claim (not signed in / lock
-      // service unreachable / migration not applied) opens without cross-machine protection —
-      // and SAYS so when we are signed in (a silent unprotected open is how dual runs happen).
-      // A network that already black-holed the peek gets ONE claim attempt, not three.
-      const networkDead = !peek.ok && (peek.reason === 'timeout' || peek.reason === 'network')
-      const claim = await claimProfileLock(id, { attempts: networkDead ? 1 : undefined })
-      if (claim.result) {
-        lockClaimed = true
-        lockEpoch = claim.result.epoch
-        const prev = claim.result.previousHolder
-        if (prev) {
-          const prevIsMe = prev === getMachineId()
-          const prevName =
-            peek.row?.holderDevice === prev && peek.row?.holderName ? peek.row.holderName : null
-          const who = prevIsMe ? 'máy này (phiên trước)' : `máy ${prevName ?? 'khác'}`
-          // Wait whenever a previous holder existed — even a STALE heartbeat can be a live
-          // machine whose polls briefly failed. Fresh → 30 s base; stale → 6 s grace. The wait
-          // then EXTENDS for as long as the kicked side keeps reporting "saving" (up to 3 min),
-          // so a slow flush + upload is never cut off by a blind fixed budget.
-          const handoffBudget = claim.result.previousFresh ? 30_000 : 6_000
-          broadcastData({ id, phase: 'download', message: `${who} đang mở — chờ lưu phiên…` })
-          const outcome = await waitForHandoff(id, lockEpoch, handoffBudget, {
-            holderLabel: prevIsMe ? 'Phiên trước trên máy này' : `Máy ${prevName ?? 'khác'}`,
-            onProgress: (m) => broadcastData({ id, phase: 'download', message: m })
+      if (!profile.soloMode) {
+        // Cross-machine EXCLUSIVE lock: claim this profile (bumps the epoch) so any OTHER open
+        // currently running it detects the higher epoch on its next poll, saves its session, and
+        // closes. Wait for a live previous holder to hand off BEFORE we download — so we always
+        // pull the newest session, never a stale one. Fail-open: a null claim (not signed in / lock
+        // service unreachable / migration not applied) opens without cross-machine protection —
+        // and SAYS so when we are signed in (a silent unprotected open is how dual runs happen).
+        // A network that already black-holed the peek gets ONE claim attempt, not three.
+        const networkDead = !peek.ok && (peek.reason === 'timeout' || peek.reason === 'network')
+        const claim = await claimProfileLock(id, { attempts: networkDead ? 1 : undefined })
+        if (claim.result) {
+          lockClaimed = true
+          lockEpoch = claim.result.epoch
+          const prev = claim.result.previousHolder
+          if (prev) {
+            const prevIsMe = prev === getMachineId()
+            const prevName =
+              peek.row?.holderDevice === prev && peek.row?.holderName ? peek.row.holderName : null
+            const who = prevIsMe ? 'máy này (phiên trước)' : `máy ${prevName ?? 'khác'}`
+            // Wait whenever a previous holder existed — even a STALE heartbeat can be a live
+            // machine whose polls briefly failed. Fresh → 30 s base; stale → 6 s grace. The wait
+            // then EXTENDS for as long as the kicked side keeps reporting "saving" (up to 3 min),
+            // so a slow flush + upload is never cut off by a blind fixed budget.
+            const handoffBudget = claim.result.previousFresh ? 30_000 : 6_000
+            broadcastData({ id, phase: 'download', message: `${who} đang mở — chờ lưu phiên…` })
+            const outcome = await waitForHandoff(id, lockEpoch, handoffBudget, {
+              holderLabel: prevIsMe ? 'Phiên trước trên máy này' : `Máy ${prevName ?? 'khác'}`,
+              onProgress: (m) => broadcastData({ id, phase: 'download', message: m })
+            })
+            dbg(
+              `[open ${id}] handoff ${outcome.status} after ${outcome.waitedMs}ms prev=${prev} fresh=${claim.result.previousFresh}`
+            )
+            if (outcome.status === 'superseded') {
+              const msg = 'Profile vừa được mở ở máy/cửa sổ khác — không mở lại ở đây.'
+              broadcast({ id, status: 'error', error: msg })
+              throw new SupersededError(msg)
+            }
+            if (outcome.status === 'ready') handoffTag = outcome.tag
+            if (outcome.status === 'failed') {
+              openedStale = true
+              broadcastData({
+                id,
+                phase: 'warn',
+                sticky: true,
+                message: `${who} KHÔNG lưu được phiên (${outcome.reason}) — mở bằng bản cloud cũ hơn; phiên mới nhất vẫn nằm trên máy đó.`
+              })
+            } else if (outcome.status === 'timeout' && !prevIsMe) {
+              // Another machine that never answered = asleep / offline / crashed: its work since its
+              // last save is NOT in the cloud. Open the last saved copy, but say so — and remember
+              // it, so the close here handles a late upload from that machine deliberately.
+              openedStale = true
+              broadcastData({
+                id,
+                phase: 'warn',
+                sticky: true,
+                message: `${who} không phản hồi (đang ngủ / mất mạng?) — mở bằng bản cloud gần nhất; những gì làm trên máy đó sau lần lưu cuối chưa có ở đây.`
+              })
+            }
+          }
+        } else if (claim.reason && claim.reason !== 'signed-out') {
+          dbg(`[open ${id}] lock unavailable (${claim.reason}) → opening WITHOUT cross-machine protection`)
+          broadcastData({
+            id,
+            phase: 'warn',
+            sticky: true,
+            message: `Không kết nối được khoá đồng bộ (${claim.reason}) — mở KHÔNG có bảo vệ chống mở trùng máy. Nếu máy khác đang mở profile này, hãy đóng ở đó trước.`
           })
-          dbg(
-            `[open ${id}] handoff ${outcome.status} after ${outcome.waitedMs}ms prev=${prev} fresh=${claim.result.previousFresh}`
-          )
-          if (outcome.status === 'superseded') {
-            const msg = 'Profile vừa được mở ở máy/cửa sổ khác — không mở lại ở đây.'
-            broadcast({ id, status: 'error', error: msg })
-            throw new SupersededError(msg)
-          }
-          if (outcome.status === 'ready') handoffTag = outcome.tag
-          if (outcome.status === 'failed') {
-            openedStale = true
-            broadcastData({
-              id,
-              phase: 'warn',
-              sticky: true,
-              message: `${who} KHÔNG lưu được phiên (${outcome.reason}) — mở bằng bản cloud cũ hơn; phiên mới nhất vẫn nằm trên máy đó.`
-            })
-          } else if (outcome.status === 'timeout' && !prevIsMe) {
-            // Another machine that never answered = asleep / offline / crashed: its work since its
-            // last save is NOT in the cloud. Open the last saved copy, but say so — and remember
-            // it, so the close here handles a late upload from that machine deliberately.
-            openedStale = true
-            broadcastData({
-              id,
-              phase: 'warn',
-              sticky: true,
-              message: `${who} không phản hồi (đang ngủ / mất mạng?) — mở bằng bản cloud gần nhất; những gì làm trên máy đó sau lần lưu cuối chưa có ở đây.`
-            })
-          }
         }
-      } else if (claim.reason && claim.reason !== 'signed-out') {
-        dbg(`[open ${id}] lock unavailable (${claim.reason}) → opening WITHOUT cross-machine protection`)
-        broadcastData({
-          id,
-          phase: 'warn',
-          sticky: true,
-          message: `Không kết nối được khoá đồng bộ (${claim.reason}) — mở KHÔNG có bảo vệ chống mở trùng máy. Nếu máy khác đang mở profile này, hãy đóng ở đó trước.`
-        })
-      }
+      } // end !profile.soloMode (claim/hand-off) — session sync continues below regardless
       // Every cloud object (session zip, cookies, logins) is sealed with the account key. On a
       // machine where the cloud passphrase was never entered nothing below can be decrypted —
       // the zip download would throw and the credential bridge would silently merge nothing,
@@ -2179,6 +2240,78 @@ export async function getProfileCookies(id: string): Promise<Cookie[] | null> {
   return r.injector.getCookies()
 }
 
+/**
+ * "Is this profile already signed into Google?" WITHOUT launching the browser — so a bulk job
+ * (e.g. before running the Gmail change-password tool over a list) can skip profiles that are
+ * already signed in without opening each one first, and a cross-machine profile is never
+ * claimed/kicked just to find out. Tries, in order:
+ *   1. LIVE — the profile is already running here: ask its real cookie jar over CDP (the most
+ *      authoritative source, and free since it's already open).
+ *   2. LOCAL — read this machine's Cookies DB straight off disk (closed profiles only; a
+ *      currently-running profile's DB has a live WAL this can't see through).
+ *   3. CLOUD — this machine has never opened the profile locally (no Cookies DB yet): check the
+ *      cloud cookie object instead (decrypted here, nothing launched anywhere, on any machine).
+ */
+export async function checkProfileLogin(id: string): Promise<LoginCheckResult> {
+  requireProfileId(id)
+  const now = Date.now()
+  const entry = running.get(id)
+  if (entry?.injector) {
+    try {
+      const cookies = await entry.injector.getCookies()
+      // Same matching rule as matchGoogleLoginCookies (exact .google.com/google.com domain, the
+      // shared name list, non-empty value, not expired) so 'live' and 'local'/'cloud' can never
+      // disagree about the SAME session just because the profile happens to be open or closed.
+      const nowSec = Date.now() / 1000
+      const matched = cookies.filter(
+        (c) =>
+          (c.domain === '.google.com' || c.domain === 'google.com') &&
+          GOOGLE_LOGIN_COOKIE_NAMES.includes(c.name) &&
+          c.value.length > 0 &&
+          (c.expires == null || c.expires < 0 || c.expires > nowSec)
+      )
+      return {
+        loggedIn: matched.length > 0,
+        matchedCookies: matched.map((c) => c.name),
+        source: 'live',
+        reason: 'ok',
+        checkedAt: now
+      }
+    } catch {
+      // fall through to the offline paths below (e.g. the CDP pipe just died)
+    }
+  }
+  const dir = profileDataDir(id)
+  const local = await checkGoogleLoginOffline(dir)
+  if (local.reason !== 'no-cookies-db') {
+    return {
+      loggedIn: local.matched.length > 0,
+      matchedCookies: local.matched.map((c) => String(c.cols.name)),
+      source: 'local',
+      reason: local.reason,
+      checkedAt: now
+    }
+  }
+  // Never opened on this machine — nothing local to read yet. Check the cloud copy instead.
+  if (!getCloudSession()) {
+    return { loggedIn: false, matchedCookies: [], source: 'cloud', reason: 'not-signed-in', checkedAt: now }
+  }
+  try {
+    const cloud = await downloadProfileCookiesDb(id)
+    if (!cloud) return { loggedIn: false, matchedCookies: [], source: 'cloud', reason: 'no-cloud-data', checkedAt: now }
+    const matched = matchGoogleLoginCookies(cloud.rows)
+    return {
+      loggedIn: matched.length > 0,
+      matchedCookies: matched.map((c) => String(c.cols.name)),
+      source: 'cloud',
+      reason: 'ok',
+      checkedAt: now
+    }
+  } catch {
+    return { loggedIn: false, matchedCookies: [], source: 'cloud', reason: 'error', checkedAt: now }
+  }
+}
+
 /** Default warm-up sites for the cookie robot. */
 const WARMUP_URLS = [
   'https://www.google.com',
@@ -2227,17 +2360,24 @@ export async function manualUploadProfileData(id: string): Promise<void> {
   if (running.has(id)) {
     throw new Error('Profile đang mở ở máy này — đóng profile trước khi đẩy phiên lên cloud.')
   }
-  const peek = await peekProfileLock(id)
-  // Refuse while ANY other machine holds the row — fresh or stale. A sleeping/offline holder
-  // still has the live session on its disk; pushing over its cloud base would get its later
-  // close refused by anti-clobber. The row clears when that machine closes the profile (or
-  // when anyone opens it normally, which claims the lock).
-  if (peek.row?.holderDevice && peek.row.holderDevice !== getMachineId()) {
-    const age = peek.row.heartbeatAt ? Math.round((Date.now() - peek.row.heartbeatAt) / 60000) : null
-    throw new Error(
-      `Profile đang được máy ${peek.row.holderName ?? 'khác'} giữ${age != null ? ` (tín hiệu cuối ${age} phút trước)` : ''} — ` +
-        'không đẩy đè phiên. Đóng profile ở máy đó (hoặc mở rồi đóng ở đây) trước.'
-    )
+  // soloMode profiles never claim the lock on open (see launchProfileImpl), so their row is
+  // never populated while genuinely running elsewhere — this peek-based refusal has no signal
+  // to check for them and must not run, or it would defeat the whole point of soloMode (an idle
+  // machine's push refused as "held elsewhere" when nothing actually holds a row to peek).
+  const profile = await getProfile(id)
+  if (!profile?.soloMode) {
+    const peek = await peekProfileLock(id)
+    // Refuse while ANY other machine holds the row — fresh or stale. A sleeping/offline holder
+    // still has the live session on its disk; pushing over its cloud base would get its later
+    // close refused by anti-clobber. The row clears when that machine closes the profile (or
+    // when anyone opens it normally, which claims the lock).
+    if (peek.row?.holderDevice && peek.row.holderDevice !== getMachineId()) {
+      const age = peek.row.heartbeatAt ? Math.round((Date.now() - peek.row.heartbeatAt) / 60000) : null
+      throw new Error(
+        `Profile đang được máy ${peek.row.holderName ?? 'khác'} giữ${age != null ? ` (tín hiệu cuối ${age} phút trước)` : ''} — ` +
+          'không đẩy đè phiên. Đóng profile ở máy đó (hoặc mở rồi đóng ở đây) trước.'
+      )
+    }
   }
   await withDataLock(id, async () => {
     await uploadProfileData(id)

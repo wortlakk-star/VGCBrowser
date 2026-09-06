@@ -240,6 +240,107 @@ export async function engineKeyReadable(userDataDir: string): Promise<boolean> {
   return (await engineKey(userDataDir)) !== null
 }
 
+/** Why a side is not ready — a typed code, not free text, so callers can branch on it (and build
+ *  their own message) instead of string-matching. */
+export type CredentialUnreadyReason = 'wal-pending' | 'key-unavailable'
+
+export const CREDENTIAL_UNREADY_TEXT: Record<CredentialUnreadyReason, string> = {
+  'wal-pending': 'WAL/journal chưa flush (engine bị đóng cưỡng bức)',
+  'key-unavailable': 'không đọc được khoá mã hoá máy (Keychain/DPAPI) lúc này'
+}
+
+/**
+ * Can `exportCookies`/`exportLogins` actually read a TRUSTWORTHY snapshot right now — as
+ * opposed to a bare `[]` they'd also return if the DB's WAL/journal is still pending (engine
+ * still writing, or was just force-killed after ignoring a graceful close) or the machine key
+ * is temporarily unreadable? Those two functions return `[]` for BOTH "genuinely zero rows"
+ * and "could not read" — indistinguishable to a caller, which historically made a close-time
+ * upload silently union in an EMPTY set as if it were confirmed-empty, report success, and
+ * never actually save the session's new logins/cookies (this was the #1 cause of "some
+ * profiles never keep their login" — the profile just always takes long enough to close that
+ * it gets force-killed with its WAL still open). Call this BEFORE exportCookies/exportLogins
+ * at close time; when a flag here is false, treat that side as UNKNOWN (skip uploading it,
+ * same as a failed cloud download) rather than as "confirmed empty".
+ */
+export async function credentialExportReady(userDataDir: string): Promise<{
+  cookies: boolean
+  logins: boolean
+  cookiesReason?: CredentialUnreadyReason
+  loginsReason?: CredentialUnreadyReason
+}> {
+  const ck = cookiesDbPath(userDataDir)
+  const ld = loginDataPath(userDataDir)
+  const cookiesExists = existsSync(ck)
+  const loginsExists = existsSync(ld)
+  const cookiesPending = cookiesExists && hasPendingSqliteWrites(ck)
+  const loginsPending = loginsExists && hasPendingSqliteWrites(ld)
+  // The machine's os_crypt key can also be transiently unreadable (Keychain busy right after
+  // wake, a DPAPI hiccup) — exportCookies/exportLogins silently return [] in that case too (via
+  // their own internal engineKey() check), the exact "empty vs unreadable" ambiguity this
+  // function exists to resolve. Only probe the key when there's something to decrypt — a
+  // brand-new profile with no DB yet has nothing to read regardless of key state, so skip a
+  // possibly-slow Keychain/DPAPI round-trip for a case that's already correctly "nothing to export".
+  const keyOk = cookiesExists || loginsExists ? await engineKeyReadable(userDataDir) : true
+  return {
+    // A DB that doesn't exist yet is genuinely "nothing to export" (a brand-new profile), not
+    // "unreadable" — only a PENDING WAL/journal on an EXISTING DB, or an unreadable key, is untrustworthy.
+    cookies: !cookiesPending && keyOk,
+    logins: !loginsPending && keyOk,
+    cookiesReason: cookiesPending ? 'wal-pending' : !keyOk ? 'key-unavailable' : undefined,
+    loginsReason: loginsPending ? 'wal-pending' : !keyOk ? 'key-unavailable' : undefined
+  }
+}
+
+// ── Offline login check (no browser launch) ──────────────────────────────────
+// "Is this profile already signed into Google?" without opening the engine — so a bulk job
+// (or a user just wanting to know) never pays the cost of a full launch, and for a cross-machine
+// profile never triggers the exclusive-lock hand-off/kick just to find out. GAIA (Google account)
+// login is carried by a small, well-known cluster of cookies on the .google.com domain; SID is
+// the primary session cookie, the __Secure-* variants are its HTTPS-only counterparts on modern
+// Chrome. Any ONE present and unexpired is enough to call the account signed in.
+export const GOOGLE_LOGIN_COOKIE_NAMES = ['SID', '__Secure-1PSID', '__Secure-3PSID']
+
+/** Which of `rows` are a valid (unexpired, non-empty) Google/GAIA login cookie. Works on rows
+ *  from ANY source — a local disk export or the decrypted cloud cookie object — since both are
+ *  the same SavedCookie shape, so a caller can check a profile that only ever ran on another
+ *  machine by matching the CLOUD row set instead of a local export. */
+export function matchGoogleLoginCookies(rows: SavedCookie[]): SavedCookie[] {
+  const nowUs = chromeNowUs()
+  return rows.filter((c) => {
+    const host = String(c.cols.host_key ?? '')
+    const name = String(c.cols.name ?? '')
+    return (
+      (host === '.google.com' || host === 'google.com') &&
+      GOOGLE_LOGIN_COOKIE_NAMES.includes(name) &&
+      !cookieExpired(c, nowUs) &&
+      c.value.length > 0
+    )
+  })
+}
+
+/** Offline Google-login check for a profile's LOCAL Cookies DB — reads straight off disk, same
+ *  mechanism as the cross-machine credential bridge, no CDP, no engine process. Only reliable
+ *  while the profile is CLOSED: while it's running the DB has a live WAL this can't see through
+ *  (`reason: 'db-locked'`). A profile never opened on THIS machine has no local Cookies DB yet
+ *  (`reason: 'no-cookies-db'`) — the caller should fall back to the cloud cookie object
+ *  (downloadProfileCookiesDb + matchGoogleLoginCookies) for an answer in that case. */
+export async function checkGoogleLoginOffline(userDataDir: string): Promise<{
+  matched: SavedCookie[]
+  reason: 'ok' | 'no-cookies-db' | 'db-locked' | 'engine-key-unavailable' | 'error'
+}> {
+  if (!existsSync(cookiesDbPath(userDataDir))) return { matched: [], reason: 'no-cookies-db' }
+  const ready = await credentialExportReady(userDataDir)
+  if (!ready.cookies) {
+    return { matched: [], reason: ready.cookiesReason === 'key-unavailable' ? 'engine-key-unavailable' : 'db-locked' }
+  }
+  try {
+    const rows = await exportCookies(userDataDir, 'login-check')
+    return { matched: matchGoogleLoginCookies(rows), reason: 'ok' }
+  } catch {
+    return { matched: [], reason: 'error' }
+  }
+}
+
 // ── Cross-machine MERGE helpers (used by the close-time upload) ──────────────
 // The cloud credential objects are whole-set replacements, so a close must upload the UNION of
 // what this machine has and what the cloud already holds — never just the local set. Otherwise

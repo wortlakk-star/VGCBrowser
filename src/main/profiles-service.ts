@@ -80,6 +80,7 @@ export async function updateProfile(id: string, patch: Partial<Profile>): Promis
   if ('cookies' in patch) safe.cookies = sanitizeCookies(patch.cookies)
   if ('extensions' in patch) safe.extensions = sanitizeExtensions(patch.extensions)
   if ('account' in patch) safe.account = sanitizeAccount(patch.account)
+  if ('soloMode' in patch) safe.soloMode = patch.soloMode === true
   const updated = await patchProfile(id, { ...safe, updatedAt: new Date().toISOString() })
   if (!updated) throw new Error(`Không tìm thấy profile: ${id}`)
   return updated

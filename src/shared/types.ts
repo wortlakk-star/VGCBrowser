@@ -173,6 +173,18 @@ export interface Profile {
   /** ISO time the profile's browser DATA (cookies/session) was last uploaded to
    *  cloud storage. Set ⇒ this profile has session data in the cloud bucket. */
   cloudDataAt?: string
+  /** true = this profile never claims the cross-machine EXCLUSIVE LOCK on open — it is never
+   *  taken over/kicked by another machine opening it, and opening it here never kicks another
+   *  machine that has it open. Session data (the cloud zip + cookies/passwords union) still
+   *  syncs exactly as before — this only removes the lock/handoff round-trip (the peek + claim
+   *  + wait-for-handoff + hold-poll on every open, a small but real cost that adds up across a
+   *  bulk launch of many profiles). Meant for a profile the user deliberately runs on more than
+   *  one machine at a time, or wants opening to never disturb a session elsewhere. Trade-off:
+   *  without the lock, two machines can genuinely run it at once; the upload anti-clobber guard
+   *  (cloud-data.ts) still refuses to silently overwrite a session it never downloaded, so nothing
+   *  is destroyed — a losing close just shows "couldn't save, cloud changed" instead of being lost.
+   *  Default (false/undefined) keeps today's behaviour: lock ON, exclusivity enforced. */
+  soloMode?: boolean
   /** Result of the automatic proxy check run each time the profile is opened. */
   proxyCheck?: {
     status: 'ok' | 'error'
@@ -366,6 +378,25 @@ export interface ProfileRuntimeState {
   pid?: number
   startedAt?: string
   error?: string
+}
+
+/** Outcome of the offline "already logged in?" check (profile-manager.ts checkProfileLogin) —
+ *  never launches the browser, so it's safe to call before a bulk job or just to check a
+ *  profile's status. `source` says where the answer came from; `reason` says why when it isn't
+ *  'ok' (loggedIn/matchedCookies are only meaningful when reason is 'ok'). */
+export interface LoginCheckResult {
+  loggedIn: boolean
+  matchedCookies: string[]
+  source: 'live' | 'local' | 'cloud'
+  reason:
+    | 'ok'
+    | 'no-cookies-db'
+    | 'db-locked'
+    | 'engine-key-unavailable'
+    | 'not-signed-in'
+    | 'no-cloud-data'
+    | 'error'
+  checkedAt: number
 }
 
 /** Shape accepted by the create-profile IPC; everything optional, sensible defaults applied. */

@@ -360,19 +360,18 @@ async function writeSyncTag(uid: string, id: string, tag: string): Promise<boole
   try {
     await ensurePrivateDirectory(root)
     await ensurePrivateDirectory(accountRoot)
-    try {
-      const current = await fs.lstat(path)
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1) {
-        dbg(`[sync ${id}] refusing to write tag: unsafe existing tag file`)
-        return false
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        dbg(`[sync ${id}] tag lstat failed: ${(error as Error).message}`)
-        return false
-      }
-    }
     await fs.writeFile(temp, safeTag, { mode: 0o600, flag: 'wx' })
+    // Atomic rename REPLACES whatever currently occupies `path` — a regular file, a stale
+    // symlink, or a hardlinked one — it never writes THROUGH an existing symlink (rename(2)
+    // replaces the directory entry itself; it does not dereference it), so there is no
+    // symlink-attack surface here even if some external tool (Time Machine, an AV quarantine
+    // copy, iCloud/OneDrive syncing userData) left something odd at `path`. SELF-HEALS: this
+    // used to lstat the existing file first and PERMANENTLY refuse to write once it looked
+    // "unsafe" — with no way to ever recover, every future close for that ONE profile tripped
+    // the anti-clobber guard forever (readSyncTag() keeps returning '' → cloudSessionState()
+    // sees "no local tag" → treats its OWN prior upload as "the cloud advanced" and refuses to
+    // save), while every other profile's tag file (never touched) kept working — exactly the
+    // "some profiles save, some don't" symptom. Writing fresh every time removes that trap.
     await fs.rename(temp, path)
     return true
   } catch (error) {
@@ -432,13 +431,24 @@ export interface CloudSessionState {
   localTag: string
   /** HTTP status of the probe (200/206 present, 404/400 absent, other = error, 0 = network). */
   status: number
+  /** WHY `advanced` is true — lets the caller give an honest reason instead of always blaming
+   *  "another machine", which is only actually true for 'mismatch'.
+   *  - 'no-local-tag': the cloud holds a session but THIS machine has no record of ever syncing
+   *    one — near-certainly its OWN bookkeeping gap (e.g. a stale sync-meta write once failed;
+   *    see writeSyncTag's self-heal comment) rather than a real foreign upload, since the normal
+   *    way to reach "cloud has data" IS this machine uploading it.
+   *  - 'mismatch': both tags are present and DIFFER — a genuinely different, newer upload exists.
+   *  - 'unreadable': the cloud object's status could not be determined (network/server error). */
+  reason: 'none' | 'no-local-tag' | 'mismatch' | 'unreadable'
 }
 
 export async function cloudSessionState(id: string): Promise<CloudSessionState> {
   const session = getCloudSession()
-  if (!session) return { advanced: false, cloudTag: '', localTag: '', status: 0 } // not signed in
+  if (!session) return { advanced: false, cloudTag: '', localTag: '', status: 0, reason: 'none' } // not signed in
   const s = await getSettings()
-  if (!s.supabaseUrl || !s.supabaseAnonKey) return { advanced: false, cloudTag: '', localTag: '', status: 0 }
+  if (!s.supabaseUrl || !s.supabaseAnonKey) {
+    return { advanced: false, cloudTag: '', localTag: '', status: 0, reason: 'none' }
+  }
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
   const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath(ownerUid, id)}`
   const localTag = (await readSyncTag(session.uid, id)) || memoryTags.get(id) || ''
@@ -448,12 +458,14 @@ export async function cloudSessionState(id: string): Promise<CloudSessionState> 
   // treat 400 as "not uploaded yet". Match that here: a truly-present object always answers the
   // Range GET with 200/206, so allowing on 400/404 can never clobber real data; it only prevents a
   // permanently-blocked FIRST upload.
-  if (info.status === 404 || info.status === 400) return { advanced: false, ...base } // nothing there
+  if (info.status === 404 || info.status === 400) return { advanced: false, ...base, reason: 'none' } // nothing there
   if (info.status === 200 || info.status === 206) {
     // Cloud holds a session. Safe ONLY if it is exactly the one we last synced.
-    return { advanced: !localTag || !info.etag || info.etag !== localTag, ...base }
+    if (!info.etag) return { advanced: true, ...base, reason: 'unreadable' }
+    if (!localTag) return { advanced: true, ...base, reason: 'no-local-tag' }
+    return { advanced: info.etag !== localTag, ...base, reason: info.etag !== localTag ? 'mismatch' : 'none' }
   }
-  return { advanced: true, ...base } // unreadable (server error / network) → fail closed
+  return { advanced: true, ...base, reason: 'unreadable' } // unreadable (server error / network) → fail closed
 }
 
 export async function cloudSessionAdvanced(id: string): Promise<boolean> {
@@ -687,11 +699,17 @@ export async function uploadProfileData(id: string, opts: UploadProfileDataOptio
       `[sync ${id}] anti-clobber: cloud=${state.cloudTag.slice(0, 16) || '-'} local=${state.localTag.slice(0, 16) || '-'} status=${state.status} override=${handoffOverride}`
     )
     if (!handoffOverride) {
-      throw new CloudAdvancedError(
-        state.status === 200 || state.status === 206
+      // 'mismatch' is the only case that's ACTUALLY "another machine" — say so. 'no-local-tag'
+      // is near-certainly this machine's own bookkeeping gap (see CloudSessionState.reason and
+      // writeSyncTag's self-heal): blaming "máy khác vừa lưu" there is misleading and makes a
+      // one-machine user think someone/something else touched their profile when nothing did.
+      const msg =
+        state.reason === 'mismatch'
           ? 'Bỏ qua lưu phiên: bản cloud đã mới hơn (máy khác vừa lưu) — không ghi đè để tránh mất dữ liệu.'
-          : 'Bỏ qua lưu phiên: không đọc được bản cloud (mạng/máy chủ) — không ghi đè để tránh mất dữ liệu.'
-      )
+          : state.reason === 'no-local-tag'
+            ? 'Bỏ qua lưu phiên: máy này không có dấu đồng bộ cục bộ cho profile này (có thể do một lần ghi file trước đó thất bại) — không ghi đè để an toàn. Mở lại profile để tải phiên cloud và tự khắc phục.'
+            : 'Bỏ qua lưu phiên: không đọc được bản cloud (mạng/máy chủ) — không ghi đè để tránh mất dữ liệu.'
+      throw new CloudAdvancedError(msg)
     }
   }
 

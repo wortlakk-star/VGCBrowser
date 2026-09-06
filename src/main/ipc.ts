@@ -68,7 +68,8 @@ import {
   stopAllForRevoke,
   runningProfileIds,
   manualUploadProfileData,
-  manualDownloadProfileData
+  manualDownloadProfileData,
+  checkProfileLogin
 } from './profile-manager'
 import {
   listProxies,
@@ -756,6 +757,10 @@ export function registerIpc(): void {
       : await dialog.showOpenDialog(opts)
     return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0]
   })
+
+  // Offline "already logged in?" check — never launches the engine, so a cross-machine profile
+  // is never claimed/kicked just to find out (see profile-manager.ts checkProfileLogin).
+  handle('profiles:checkLogin', (_e, id: string) => checkProfileLogin(requireProfileId(id)))
 
   handle('cookies:export', async (_e, id: string) => {
     const cookies = await getProfileCookies(id)

@@ -5,6 +5,7 @@ import type {
   AccountStatus,
   Cookie,
   Fingerprint,
+  LoginCheckResult,
   OsType,
   Profile,
   ProxyCheckResult,
@@ -89,6 +90,10 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
   const [group, setGroup] = useState(profile.group ?? '')
   const [tags, setTags] = useState(profile.tags.join(', '))
   const [notes, setNotes] = useState(profile.notes)
+  const [soloMode, setSoloMode] = useState(profile.soloMode === true)
+  const [loginCheck, setLoginCheck] = useState<LoginCheckResult | null>(null)
+  const [loginCheckError, setLoginCheckError] = useState('')
+  const [checkingLogin, setCheckingLogin] = useState(false)
   const [accUser, setAccUser] = useState(profile.account?.user ?? '')
   const [accPass, setAccPass] = useState(profile.account?.pass ?? '')
   const [accTotp, setAccTotp] = useState(profile.account?.totp ?? '')
@@ -253,13 +258,41 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
         cookies,
         extensions,
         fingerprint: fp,
-        account: acct
+        account: acct,
+        soloMode
       })
       onSaved()
       onClose()
     } finally {
       setSaving(false)
     }
+  }
+
+  const checkLogin = async (): Promise<void> => {
+    setCheckingLogin(true)
+    setLoginCheck(null)
+    setLoginCheckError('')
+    try {
+      setLoginCheck(await window.vgc.checkLogin(profile.id))
+    } catch (e) {
+      setLoginCheckError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCheckingLogin(false)
+    }
+  }
+
+  const loginCheckLabel = (r: LoginCheckResult): string => {
+    const src = r.source === 'live' ? 'đang chạy' : r.source === 'local' ? 'máy này' : 'cloud'
+    if (r.reason === 'ok') return r.loggedIn ? `✅ Đã đăng nhập Google (${src})` : `— Chưa đăng nhập Google (${src})`
+    const why: Record<string, string> = {
+      'no-cookies-db': 'Chưa từng mở profile này trên máy nào — không có dữ liệu để kiểm tra.',
+      'db-locked': 'Profile đang chạy ở đâu đó, dữ liệu chưa flush xong — thử lại sau khi đóng.',
+      'engine-key-unavailable': 'Không đọc được khoá mã hoá máy (Keychain/DPAPI) lúc này.',
+      'not-signed-in': 'Chưa đăng nhập tài khoản cloud VGC.',
+      'no-cloud-data': 'Chưa có dữ liệu phiên trên cloud cho profile này.',
+      error: 'Lỗi không xác định khi kiểm tra.'
+    }
+    return `⚠️ Không kiểm tra được: ${why[r.reason] ?? r.reason}`
   }
 
   const screenValue = `${fp.screen.width}x${fp.screen.height}`
@@ -305,6 +338,21 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               Ghi chú
               <textarea value={notes} rows={2} onChange={(e) => setNotes(e.target.value)} />
             </label>
+            <label className="checks">
+              <span>
+                <input
+                  type="checkbox"
+                  checked={soloMode}
+                  onChange={(e) => setSoloMode(e.target.checked)}
+                />{' '}
+                Chạy 1 mình (bỏ qua kiểm tra máy khác)
+              </span>
+            </label>
+            <p className="hint" style={{ marginTop: -4 }}>
+              Bật khi chỉ mở profile này trên MỘT máy, hoặc muốn cố tình mở song song nhiều máy: mở
+              profile sẽ không còn kiểm tra/khoá với máy khác, và mở ở máy này sẽ KHÔNG đóng phiên
+              đang chạy ở máy khác nữa. Dữ liệu phiên (cookie/mật khẩu) vẫn đồng bộ cloud như cũ.
+            </p>
 
             <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: 'var(--accent, #4fd1a1)' }}>
               Tài khoản
@@ -339,6 +387,15 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
                   <option value="banned">Banned</option>
                 </select>
               </label>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+              <button type="button" className="btn" disabled={checkingLogin} onClick={() => void checkLogin()}>
+                {checkingLogin ? 'Đang kiểm tra…' : 'Kiểm tra đăng nhập (không mở profile)'}
+              </button>
+              {loginCheck && <span style={{ fontSize: 13 }}>{loginCheckLabel(loginCheck)}</span>}
+              {loginCheckError && (
+                <span style={{ fontSize: 13, color: 'var(--danger, #e5484d)' }}>⚠️ Lỗi: {loginCheckError}</span>
+              )}
             </div>
 
             <label>
