@@ -47,13 +47,41 @@ jobs:
       - name: Fetch engine (with retry)
         shell: bash
         run: |
-          # The host (Hostinger/LiteSpeed) intermittently refuses GitHub's runners for a
-          # while; print what it answers and back off longer between attempts.
-          curl -sSI --max-time 30 "$VGC_ENGINE_URL" | head -3 || true
-          for i in 1 2 3 4 5 6 7 8; do
-            node scripts/fetch-engine.mjs && break || { echo "fetch attempt $i failed; retrying in $((i*30))s"; sleep $((i*30)); }
-          done
-          test -f engine/chromium/chrome.exe || { echo "engine still missing after retries"; exit 1; }
+          # Every line of this step is also kept in fetch-engine.log, which the next step
+          # copies to the host when the fetch fails: GitHub job logs are not readable
+          # without repo auth, and a run that fails 8 times in 20 minutes with no visible
+          # reason (2.1.77) is not diagnosable otherwise. The curl probe answers the first
+          # question by itself: do the bytes that reach the runner match the pinned hash?
+          set -o pipefail
+          {
+            node -v
+            echo "== HEAD $VGC_ENGINE_URL"
+            curl -sSI --max-time 30 "$VGC_ENGINE_URL" | head -8 || true
+            echo "== full download probe"
+            curl -sS --max-time 900 -o probe.zip \
+              -w 'code=%{http_code} size=%{size_download} speed=%{speed_download} B/s ip=%{remote_ip}\n' \
+              "$VGC_ENGINE_URL" || true
+            echo "sha256 expected $VGC_ENGINE_SHA256"
+            echo "sha256 received $(sha256sum probe.zip | cut -d' ' -f1)"
+            rm -f probe.zip
+            for i in 1 2 3; do
+              node scripts/fetch-engine.mjs && break || { echo "fetch attempt $i failed; retrying in $((i*30))s"; sleep $((i*30)); }
+            done
+            test -f engine/chromium/chrome.exe || { echo "engine still missing after retries"; exit 1; }
+          } 2>&1 | tee fetch-engine.log
+      - name: Keep the fetch log on vgcbrowser.com when the fetch failed
+        if: failure()
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+        run: |
+          { [ -n "$SSH_KEY" ] && [ -f fetch-engine.log ]; } || exit 0
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Outside public_html on purpose: diagnostics, not a download.
+          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new fetch-engine.log \
+            u469659181@212.85.28.201:domains/vgcbrowser.com/ci-fetch-${{ github.run_id }}.log
       - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
       - name: Verify unsigned Windows installer
         shell: pwsh
