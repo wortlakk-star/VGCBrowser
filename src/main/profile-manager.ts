@@ -171,7 +171,7 @@ const running = new Map<string, RunningProfile>()
 
 /** How often an open profile checks the cloud lock to see if another machine took it over.
  *  Also the holder's heartbeat cadence. Small payload, only while a profile is open. */
-const LOCK_HOLD_POLL_MS = 6000
+const LOCK_HOLD_POLL_MS = 2500
 
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -863,12 +863,19 @@ async function checkKicked(id: string): Promise<void> {
   // extends instead of expiring on a fixed budget while the engine is still flushing. Kept on
   // the drain chain so the settle never publishes the final tag before this lands.
   entry.savingDrain = publishSavingMarker(id, poll.epoch, 0).catch(() => {})
-  broadcastData({
-    id,
-    phase: 'warn',
-    sticky: true,
-    message: 'Profile này vừa được mở ở máy khác — đang lưu phiên ở đây rồi đóng để chuyển sang máy đó.'
-  })
+  // Name the machine that took over (read-only peek; best-effort) so the message says where
+  // the session is going.
+  void peekProfileLock(id, 3_000)
+    .then((peek) => {
+      const name = peek.row?.holderName && peek.row.holderDevice !== getMachineId() ? peek.row.holderName : null
+      broadcastData({
+        id,
+        phase: 'warn',
+        sticky: true,
+        message: `Profile này vừa được mở ở ${name ? `máy ${name}` : 'máy khác'} — đang lưu phiên ở đây rồi đóng để chuyển sang máy đó.`
+      })
+    })
+    .catch(() => {})
   // GRACEFUL exit request (WM_CLOSE on Windows, SIGTERM on macOS) so Chromium flushes its
   // write-behind stores — the freshest login on the kicked machine is exactly what must reach
   // the cloud. The 'exit' handler then uploads the session, publishes the tag and keeps the
@@ -1309,6 +1316,13 @@ async function launchProfileImpl(
   // to the orphan via Chromium's process singleton and exits, corrupting the close bookkeeping).
   if (reapAll) await reapAll.catch(() => {})
 
+  // Timezone / geolocation lookup for the proxy's exit IP starts NOW, in parallel with the
+  // cloud hand-off + download below (it needs nothing from them), so its up-to-6 s no longer
+  // adds to the wait; it is awaited right before the fingerprint is finalised.
+  const hasProxyForGeo =
+    !!profile.proxy && profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
+  const geoLookup = (hasProxyForGeo ? checkProxy(profile.proxy) : directGeo()).catch(() => null)
+
   // GoLogin-style AUTO-sync: whenever logged into cloud, ALWAYS pull the latest
   // session (cookies/logins/storage) from the cloud before opening — the cloud is
   // the source of truth. 404 (nothing uploaded yet, e.g. a brand-new profile) is
@@ -1372,6 +1386,7 @@ async function launchProfileImpl(
           const handoffBudget = claim.result.previousFresh ? 30_000 : 6_000
           broadcastData({ id, phase: 'download', message: `${who} đang mở — chờ lưu phiên…` })
           const outcome = await waitForHandoff(id, lockEpoch, handoffBudget, {
+            holderLabel: prevIsMe ? 'Phiên trước trên máy này' : `Máy ${prevName ?? 'khác'}`,
             onProgress: (m) => broadcastData({ id, phase: 'download', message: m })
           })
           dbg(
@@ -1428,6 +1443,16 @@ async function launchProfileImpl(
       broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
       // Cloud cookies + saved logins: downloaded ONCE here — merged into the local stores below
       // and kept on the RunningProfile so the close can upload the UNION without re-downloading.
+      // When this machine already has its credential stores (every open after the first), the
+      // session zip is fetched + extracted CONCURRENTLY with this credential download — the two
+      // touch different cloud objects and different local files. A first open must keep the
+      // order (bootstrap between them, see below), so it stays sequential.
+      const storesReady = credentialStoresReady(userDataDir)
+      let earlyZip: Promise<boolean> | null = null
+      if (storesReady) {
+        earlyZip = withDataLock(id, () => downloadProfileData(id))
+        earlyZip.catch(() => {})
+      }
       cloudCreds = await fetchCloudCredentials(id)
       if (!cloudCreds.cookiesKnown || !cloudCreds.loginsKnown) {
         credsUnmerged = true
@@ -1488,7 +1513,7 @@ async function launchProfileImpl(
       // here (it churned the session). downloadProfileData preserves the local copies.
       let got = false
       try {
-        got = await withDataLock(id, () => downloadProfileData(id))
+        got = await (earlyZip ?? withDataLock(id, () => downloadProfileData(id)))
         handoffDownloaded = true
       } catch (dlErr) {
         // We launch on whatever is local — an OLDER base than the cloud. Remember that: the
@@ -1504,8 +1529,9 @@ async function launchProfileImpl(
       dbg(
         `[open ${id}] downloaded=${got} bootstrapped=${bootstrapped ?? 'n/a'} credsMerged=${merged} stale=${openedStale}`
       )
-      // Legacy CDP cookie seed — only used in CDP mode; native mode ignores it.
-      syncedCookies = await downloadProfileCookies(id).catch(() => [])
+      // Legacy CDP cookie seed — only used in CDP mode; native mode never reads it, so skip
+      // the round-trip there.
+      if (!skipCdp) syncedCookies = await downloadProfileCookies(id).catch(() => [])
       broadcastData({ id, phase: 'done', message: got ? 'Đã đồng bộ dữ liệu mới nhất' : undefined })
     } catch (err) {
       if (err instanceof SupersededError) throw err
@@ -1552,8 +1578,6 @@ async function launchProfileImpl(
   // tell. Looked up live so it works with rotating residential proxies; capped at
   // 6s and falls back to the profile's stored fingerprint so launch never hangs.
   let fp: Fingerprint = cohereFingerprint(profile.fingerprint, id)
-  const hasProxyForGeo =
-    !!profile.proxy && profile.proxy.type !== 'none' && !!profile.proxy.host && !!profile.proxy.port
   // Align timezone/geo to the EXIT IP — the proxy's when there is one, otherwise the
   // machine's REAL public IP. A no-proxy profile that keeps a random stored timezone
   // (e.g. Europe/Paris) while the real IP is elsewhere (e.g. Vietnam) is incoherent and
@@ -1567,8 +1591,10 @@ async function launchProfileImpl(
         phase: 'download',
         message: hasProxyForGeo ? 'Đang khớp múi giờ/vị trí theo proxy…' : 'Đang khớp múi giờ theo IP thật…'
       })
+      // Usually already resolved (it ran during the cloud sync); a still-pending lookup gets
+      // at most 6 s more so the launch never hangs on a dead geo endpoint.
       const geo = await Promise.race([
-        hasProxyForGeo ? checkProxy(profile.proxy) : directGeo(),
+        geoLookup,
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000))
       ])
       if (geo && geo.ok) {
@@ -2100,6 +2126,10 @@ function requestEngineExit(id: string, entry: RunningProfile): void {
     // starting (window not up yet) or it is ALREADY shutting down (last window closed, stores
     // still flushing). Both resolve on their own within seconds — so retry gently instead of
     // force-killing mid-flush; the force timer in stopProfile remains the only escalation.
+    // (An engine-side `--vgc-quit` graceful-shutdown switch was tried and measured here: it
+    // changed nothing in a real close/restore test — Chromium's own session restore, not the
+    // shutdown request, decides which tabs come back — so it was dropped rather than shipping
+    // a new engine build for no verified benefit.)
     const attempt = (n: number): void => {
       if (running.get(id) !== entry) return
       execFile('taskkill', ['/PID', String(proc.pid)], { windowsHide: true, timeout: 5000 }, (err) => {

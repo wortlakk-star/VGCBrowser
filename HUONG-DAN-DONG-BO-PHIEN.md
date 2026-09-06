@@ -7,7 +7,7 @@
 
 | Thành phần | Ở đâu | Làm gì |
 |---|---|---|
-| Khoá độc quyền | `src/main/profile-lock.ts` + `supabase/profile-locks.sql` | Mỗi lần mở là một "epoch" tăng dần. Máy đang giữ profile poll 6 s/lần; thấy epoch cao hơn → **bị đá**: lưu phiên rồi đóng. |
+| Khoá độc quyền | `src/main/profile-lock.ts` + `supabase/profile-locks.sql` | Mỗi lần mở là một "epoch" tăng dần. Máy đang giữ profile poll 2,5 s/lần; thấy epoch cao hơn → **bị đá**: lưu phiên rồi đóng (trước đây 6 s/lần). |
 | Bàn giao phiên | cột `session_tag` của bảng `profile_locks` | Máy bị đá ghi `saving:<n>` (n tăng 4 s/lần) trong lúc lưu → máy mới **chờ tiếp** chừng nào bộ đếm còn nhảy (tối đa 3 phút). Lưu xong ghi ETag thật; lưu hỏng ghi `failed:<lý do>`. |
 | Gói phiên (zip) | `src/main/cloud-data.ts` | Local Storage / IndexedDB / Preferences / tab → Supabase Storage, mã hoá bằng khoá tài khoản. **Không** chứa Cookies / Login Data / Local State (khoá os_crypt riêng từng máy). |
 | Cầu nối cookie + mật khẩu | `src/main/password-bridge.ts` | Khi đóng: giải mã bằng khoá máy này → **hợp nhất** với bản cloud (cookie bạn đã xoá/đăng xuất trong phiên này thì không bị "sống lại"; nếu profile vừa chạy ở máy khác thì tải lại bản cloud mới nhất trước khi gộp) → upload. Khi mở: tải về → gộp vào DB cục bộ, mã hoá lại bằng khoá máy này. Không bao giờ ghi đè cả bộ bằng bản thiếu. |

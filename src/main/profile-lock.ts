@@ -307,14 +307,17 @@ export async function waitForHandoff(
   id: string,
   epoch: number,
   baseBudgetMs: number,
-  opts: { savingCapMs?: number; onProgress?: (msg: string) => void } = {}
+  opts: { savingCapMs?: number; onProgress?: (msg: string) => void; holderLabel?: string } = {}
 ): Promise<HandoffOutcome> {
   const start = Date.now()
   const savingCap = opts.savingCapMs ?? 180_000
+  const who = opts.holderLabel ?? 'Máy khác'
   let deadline = start + baseBudgetMs
   let lastSaving = ''
   let sawSaving = false
   let lastHeartbeat = start
+  let lastProgress = 0
+  const elapsed = (): string => `${Math.round((Date.now() - start) / 1000)} s`
   while (Date.now() < deadline) {
     const { row } = await peekProfileLock(id)
     if (row && row.epoch != null && row.epoch !== epoch) {
@@ -332,10 +335,16 @@ export async function waitForHandoff(
         // The counter moved → the holder is alive and still saving → 20 s more from THIS move
         // (computed once per move, so a dead holder's last marker buys exactly 20 s).
         deadline = Math.min(start + savingCap, Math.max(deadline, changedAt + 20_000))
-        opts.onProgress?.('Máy khác đang lưu phiên… (đang chờ để lấy bản mới nhất)')
+      }
+      if (Date.now() - lastProgress >= 2000) {
+        lastProgress = Date.now()
+        opts.onProgress?.(`${who} đang lưu phiên lên cloud… (${elapsed()}) — mở ngay khi lưu xong`)
       }
     } else if (tag) {
       return { status: 'ready', tag, waitedMs: Date.now() - start }
+    } else if (Date.now() - lastProgress >= 2000) {
+      lastProgress = Date.now()
+      opts.onProgress?.(`${who} đang mở profile này — đang báo máy đó đóng và lưu phiên… (${elapsed()})`)
     }
     if (Date.now() - lastHeartbeat >= 10_000) {
       lastHeartbeat = Date.now()
