@@ -1119,6 +1119,17 @@ select.search {
   .ptable .col-used {
     display: none;
   }
+  /* Secondary chips go before any text is squeezed: the latency chip (the IP is the
+     information), the group pill and the account e-mail (both still in the edit view). */
+  .ptable .latency,
+  .ptable .psub .pgroup,
+  .ptable .psub .sep,
+  .ptable .psub > span[title] {
+    display: none;
+  }
+  .ptable .col-proxy {
+    width: 210px;
+  }
 }
 @container (max-width: 759px) {
   .ptable {
@@ -1127,6 +1138,45 @@ select.search {
   /* Running/stopped stays legible from the row's green rail + the Chạy/Dừng button. */
   .ptable .col-status {
     display: none;
+  }
+}
+/* Tightest tier (a half-width window next to the sidebar): only the essentials — name,
+   account state as a dot, proxy IP, run/stop as an icon. Nothing overlaps, nothing scrolls. */
+@container (max-width: 619px) {
+  .ptable {
+    min-width: 480px;
+  }
+  .ptable .col-proxy {
+    width: 168px;
+  }
+  .ptable .col-act {
+    width: 88px;
+  }
+  .ptable .psub {
+    display: none;
+  }
+  /* LIVE / DIE / BANNED stays as its coloured dot so the name keeps the room. */
+  .ptable .acct-pill {
+    font-size: 0;
+    gap: 0;
+    padding: 4px;
+  }
+  .ptable .proxy-tools {
+    display: none;
+  }
+  .ptable .proxy-line .cc {
+    display: none;
+  }
+  /* Chạy / Dừng as an icon-only square (title carries the label). */
+  .ptable .run-btn {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+    font-size: 0;
+    gap: 0;
+  }
+  .ptable .run-btn .ic {
+    font-size: 13px;
   }
 }
 .ptable thead th {
@@ -1210,6 +1260,9 @@ select.search {
 .ptext {
   min-width: 0;
   flex: 1;
+  /* Clip, never bleed: a long sub-line (group pill, e-mail) used to run under the next
+     column's content when the window was narrow. */
+  overflow: hidden;
 }
 .pname {
   display: flex;
@@ -1353,6 +1406,9 @@ select.search {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+  /* The hover tools overlay the end of the line instead of reserving ~60px of the column
+     at all times, which clipped the latency chip ("142 r") even at full width. */
+  position: relative;
 }
 .proxy-cell .mono {
   flex: 1;
@@ -1443,10 +1499,20 @@ select.search {
   display: inline-flex;
   gap: 4px;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.12s;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  padding-left: 18px;
+  /* Opaque panel colour under the buttons (the hover tint is translucent) so the icons
+     never sit on top of the IP's last characters. */
+  background: linear-gradient(90deg, transparent, var(--panel) 14px);
 }
 .ptable tbody tr:hover .proxy-tools {
   opacity: 1;
+  pointer-events: auto;
 }
 .proxy-check-btn {
   width: 26px;

@@ -245,7 +245,10 @@ export function ProfileTable({
                       <div className="pname">
                         <span title={p.name}>{p.name}</span>
                         {p.account?.status && ACCT_STATUS[p.account.status] && (
-                          <span className={`acct-pill ${ACCT_STATUS[p.account.status].cls}`}>
+                          <span
+                            className={`acct-pill ${ACCT_STATUS[p.account.status].cls}`}
+                            title={`Tài khoản: ${ACCT_STATUS[p.account.status].label}`}
+                          >
                             {ACCT_STATUS[p.account.status].label}
                           </span>
                         )}
@@ -304,12 +307,12 @@ export function ProfileTable({
                 <td className="col-act">
                   <div className="row-actions">
                     {active ? (
-                      <button className="run-btn stop" onClick={() => onStop(p.id)}>
+                      <button className="run-btn stop" title="Dừng profile" onClick={() => onStop(p.id)}>
                         <Icon name="stop" size={13} strokeWidth={2.4} />
                         Dừng
                       </button>
                     ) : (
-                      <button className="run-btn" onClick={() => onRun(p.id)}>
+                      <button className="run-btn" title="Chạy profile" onClick={() => onRun(p.id)}>
                         <Icon name="play" size={13} strokeWidth={2.4} />
                         Chạy
                       </button>
