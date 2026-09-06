@@ -11,6 +11,9 @@ consumed by fingerprint generation, engine download verification, packaging, and
 code-signing hooks. A build whose executable version differs from this manifest must
 not ship.
 
+Per platform: `BUILD-WINDOWS-ENGINE.md` (Windows, tarball route on the VPS) and
+`BUILD-MAC-ENGINE.md` (macOS, one command: `engine-src/build-mac-engine.sh`).
+
 ## Source and patches
 
 1. Fetch Chromium and check out the exact `chromeVersion` tag.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './Icon'
-import { gpuPool, type GpuFamily } from '../../shared/fingerprint'
+import { gpuPool, screenPool, type GpuFamily } from '../../shared/fingerprint'
 import type {
   AccountStatus,
   Cookie,
@@ -34,7 +34,6 @@ const TIMEZONES = [
   'Asia/Tokyo'
 ]
 
-const SCREENS = ['1920x1080', '1366x768', '2560x1440', '1536x864', '1440x900']
 
 const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
   ? 'macos'
@@ -47,6 +46,18 @@ const HOST_OS: OsType = /Mac/i.test(navigator.userAgent)
 // hand-picked GPU is never a string no real machine reports. Narrowed to the host's GPU
 // family once known (see the hostGpuFamily effect) — other families are swapped at launch.
 const ALL_GPUS = gpuPool(HOST_OS)
+// The screens a profile may claim on THIS machine (at least the real primary display,
+// so any window fits inside the claimed screen) — the same pool the generator draws
+// from. The main process knows the real primary display; until it answers, the display
+// this window is on is a close stand-in.
+const SCREENS_FALLBACK = Array.from(
+  new Set(
+    screenPool(HOST_OS, {
+      minScreen: { width: window.screen.width, height: window.screen.height },
+      devicePixelRatio: window.devicePixelRatio
+    }).map((s) => `${s.width}x${s.height}`)
+  )
+)
 const OS_OPTIONS: OsType[] = [HOST_OS]
 const PROXY_TYPES: ProxyType[] = ['none', 'http', 'https', 'socks5']
 // Must stay in step with the generator's lists in src/shared/fingerprint.ts.
@@ -58,11 +69,19 @@ const MEMORY = [4, 8]
 
 export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Element {
   const [gpus, setGpus] = useState(ALL_GPUS)
+  const [screens, setScreens] = useState(SCREENS_FALLBACK)
   useEffect(() => {
     void window.vgc
       .hostGpuFamily()
       .then((family) => {
         if (family) setGpus(gpuPool(HOST_OS, family as GpuFamily))
+      })
+      .catch(() => {})
+    void window.vgc
+      .hostScreenPool()
+      .then((pool) => {
+        const list = Array.from(new Set(pool.map((s) => `${s.width}x${s.height}`)))
+        if (list.length) setScreens(list)
       })
       .catch(() => {})
   }, [])
@@ -550,7 +569,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
                     patchFp({ screen: { ...fp.screen, width: w, height: h } })
                   }}
                 >
-                  {[screenValue, ...SCREENS.filter((s) => s !== screenValue)].map((s) => (
+                  {[screenValue, ...screens.filter((s) => s !== screenValue)].map((s) => (
                     <option key={s} value={s}>
                       {s}
                     </option>

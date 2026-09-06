@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto'
 import type { CreateProfileInput, OsType, Profile } from '../shared/types'
 import { patchProfile, saveProfile } from './store'
 import { cohereFingerprint, hostOs, hostFingerprintEnvironment } from './host-fingerprint'
+import { FP_VARIETY_VERSION } from '../shared/fingerprint'
 import {
   cleanText,
   sanitizeAccount,
@@ -50,7 +51,7 @@ export async function createProfile(input: CreateProfileInput): Promise<Profile>
     // Hardware trio derived from the new id (per-profile, stable) unless the caller
     // supplied explicit values; fpv marks it so the store never re-derives it.
     fingerprint: cohereFingerprint(input.fingerprint, id),
-    fpv: 2,
+    fpv: FP_VARIETY_VERSION,
     proxy: sanitizeProxyConfig(input.proxy),
     startUrls: sanitizeStartUrls(input.startUrls),
     account: sanitizeAccount(input.account),

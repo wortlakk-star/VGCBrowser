@@ -157,9 +157,10 @@ export interface Profile {
   group?: string
   os: OsType
   fingerprint: Fingerprint
-  /** Fingerprint VARIETY version. 2 = the hardware trio (cores · RAM · GPU) was chosen
-   *  per profile (deterministic from the id) instead of copied from the host, so profiles
-   *  on one machine no longer share it. Older/absent ⇒ migrated once on load. */
+  /** Fingerprint VARIETY version (FP_VARIETY_VERSION in shared/fingerprint.ts). 2 = the
+   *  hardware trio (cores · RAM · GPU) was chosen per profile (deterministic from the id)
+   *  instead of copied from the host; 3 = the screen too. Lower/absent ⇒ the missing
+   *  dimensions are derived once on load; higher (a newer build) ⇒ left alone. */
   fpv?: number
   proxy: ProxyConfig
   startUrls: string[]

@@ -49,3 +49,13 @@ git apply --reverse --check /path/VGCBrowser/engine-src/patches/vgc-uach-chrome-
 
 Then rebuild and run `npm run verify`, `verify:tostring`, `verify:deep`, and
 `verify:correlation` before publishing.
+
+## Screen switches (vgc-native-all.patch, screen.cc / media_values.cc)
+
+- `--vgc-screen=WxH` and `--vgc-color-depth=N`: the claimed screen (screen.width/height,
+  availWidth/availHeight, device-width/height media queries).
+- `--vgc-avail-insets=LEFT,TOP,RIGHT,BOTTOM` (engine build 159+ / Mac 0.1.101+): the
+  host's REAL work-area insets in CSS px, so avail* keeps this machine's taskbar / menu
+  bar / dock shape. Without it the legacy 40 px bottom inset applies. The app passes it
+  only on single-display landscape hosts whose engine understands it
+  (`src/main/engine-caps.ts`).

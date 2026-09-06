@@ -22,6 +22,8 @@ test/rectbase.cjs
 test/deep.cjs
 test/bootstrap.cjs
 test/stop.cjs
+test/screen.cjs
+test/probe-gpu.cjs
 test/ui-preview/dist/
 test/ui-preview/shots/
 test/ui-preview/old/

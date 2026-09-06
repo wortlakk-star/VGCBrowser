@@ -30,8 +30,8 @@ jobs:
     env:
       # Keep URL and hash together: a hash for a newer engine than the URL means every
       # fetch attempt downloads the old zip and fails its SHA-256 check (2.1.77's first runs).
-      VGC_ENGINE_URL: https://vgcbrowser.com/dl/vgc-core-158.zip
-      VGC_ENGINE_SHA256: 51bf06becf542b9d4ed251026d660e19b35905732e407f8f8229b891767f7d26
+      VGC_ENGINE_URL: https://vgcbrowser.com/dl/vgc-core-159.zip
+      VGC_ENGINE_SHA256: 1ccb4569f06ee62308344f7d4f101e67993b42027074b3549bc8ab19bd294112
       VGC_ALLOW_UNSIGNED_BUILD: '1'
     steps:
       - uses: actions/checkout@v4

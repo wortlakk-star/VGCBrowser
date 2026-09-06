@@ -7,6 +7,7 @@ import {
   gpuFamilyOf,
   gpuPool,
   hardwareVariant,
+  launchScreen,
   rngFor,
   type FingerprintEnvironment,
   type GpuFamily
@@ -152,20 +153,36 @@ export function hostFingerprintEnvironment(): FingerprintEnvironment {
   const deviceMemory = ramGb < 4 ? 2 : ramGb < 8 ? 4 : 8
   let scaleFactor = process.platform === 'darwin' ? 2 : 1
   let displaySize: { width: number; height: number } | undefined
+  let colorDepth: number | undefined
+  let displays: number | undefined
+  let workAreaInsets: FingerprintEnvironment['workAreaInsets']
   try {
+    // The PRIMARY display is the bound (a real panel size, so the claim pool can contain
+    // it); a host with several displays does not claim a screen at all (see displays).
     const display = screen.getPrimaryDisplay()
     scaleFactor = display.scaleFactor || scaleFactor
     if (display.size.width >= 640 && display.size.height >= 480) {
       displaySize = { width: display.size.width, height: display.size.height }
     }
+    if (display.colorDepth === 24 || display.colorDepth === 30) colorDepth = display.colorDepth
+    displays = Math.max(1, screen.getAllDisplays().length)
+    const { bounds, workArea } = display
+    const insets = {
+      left: workArea.x - bounds.x,
+      top: workArea.y - bounds.y,
+      right: bounds.x + bounds.width - (workArea.x + workArea.width),
+      bottom: bounds.y + bounds.height - (workArea.y + workArea.height)
+    }
+    if (Object.values(insets).every((v) => Number.isInteger(v) && v >= 0 && v < 400)) workAreaInsets = insets
   } catch {
     // Electron screen is unavailable before app.ready; the platform default is safe.
   }
 
   // The host sets BOUNDS and the GPU FAMILY, not exact values: every profile then claims
-  // its own (deterministic) core count / RAM / GPU model within what this machine can
-  // plausibly be — instead of all profiles copying the host and becoming one big
-  // same-machine correlator (285 profiles × the identical "RTX 3050 Laptop", 32 cores).
+  // its own (deterministic) core count / RAM / GPU model / screen within what this
+  // machine can plausibly be — instead of all profiles copying the host and becoming one
+  // big same-machine correlator (285 profiles × the identical "RTX 3050 Laptop", 32
+  // cores, 1920×1080).
   const family = hostGpuFamily()
   const environment: FingerprintEnvironment = {
     language: locale,
@@ -173,7 +190,10 @@ export function hostFingerprintEnvironment(): FingerprintEnvironment {
     maxHardwareConcurrency: cores,
     maxDeviceMemory: deviceMemory,
     devicePixelRatio: scaleFactor,
-    ...(displaySize ? { screen: displaySize } : {}),
+    ...(displaySize ? { minScreen: displaySize } : {}),
+    ...(colorDepth ? { colorDepth } : {}),
+    ...(displays ? { displays } : {}),
+    ...(workAreaInsets ? { workAreaInsets } : {}),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     ...(family ? { webglFamily: family } : {})
   }
@@ -225,6 +245,17 @@ export function adaptFingerprintToHost(fp: Fingerprint, seedKey: string): Finger
   if (environment.webglFamily && claimedFamily !== environment.webglFamily) {
     next.webgl = variant.webgl
   }
+  // The screen this host can really show: the profile's own claim when it is in this
+  // host's pool (at least the real display, a panel that exists at this DPR/OS), else a
+  // deterministic pick from the pool. The colour depth is always the real panel's. Not
+  // persisted, like the GPU above.
+  const depth = environment.colorDepth ?? fp.screen.colorDepth
+  next.screen = {
+    ...fp.screen,
+    ...launchScreen(fp.screen, hostOs(), environment, seedKey),
+    colorDepth: depth,
+    pixelDepth: depth
+  }
   return next
 }
 
@@ -248,14 +279,14 @@ export function cohereFingerprint(candidate?: Fingerprint, seedKey?: string): Fi
     : baseline.deviceMemory
   const width = Number(candidate.screen?.width)
   const height = Number(candidate.screen?.height)
-  const candidateScreen =
+  // The profile's own screen is part of its identity (per-profile pick or a user edit)
+  // and is kept whenever it is a sane size; a host whose real display is larger swaps it
+  // for this launch only (adaptFingerprintToHost), never in the stored profile.
+  const screenValue =
     Number.isInteger(width) && width >= 800 && width <= 7680 &&
     Number.isInteger(height) && height >= 600 && height <= 4320
-      ? { width, height, colorDepth: 24, pixelDepth: 24 }
+      ? { width, height, colorDepth: baseline.screen.colorDepth, pixelDepth: baseline.screen.pixelDepth }
       : baseline.screen
-  // Use the real primary-display geometry whenever Electron can provide it. This keeps
-  // screen, DPR, media queries, compositor sizing and outerWidth on one physical model.
-  const screenValue = environment.screen ? baseline.screen : candidateScreen
   let timezone = baseline.timezone
   try {
     if (typeof candidate.timezone === 'string' && candidate.timezone.length <= 100) {

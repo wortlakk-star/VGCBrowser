@@ -35,8 +35,8 @@ import type {
   SavedLogin
 } from '../shared/types'
 import { ensureEngine, type EngineProgress } from './engine-download'
-import { engineHasWebGpuIdentity } from './engine-caps'
-import { adaptFingerprintToHost } from './host-fingerprint'
+import { engineHasAvailInsets, engineHasWebGpuIdentity } from './engine-caps'
+import { adaptFingerprintToHost, hostFingerprintEnvironment } from './host-fingerprint'
 import { checkProxy, directGeo } from './proxy-check'
 import { getProfile, patchProfile, listProfiles } from './store'
 import { getSettings } from './settings'
@@ -1684,15 +1684,32 @@ async function launchProfileImpl(
     // IDENTICAL real Windows font set — a high-entropy same-machine correlator Google uses
     // to link "different" profiles. fp.fonts is a per-profile subset of the real fonts.
     ...(fp.fonts && fp.fonts.length ? [`--vgc-fonts=${fp.fonts.join(',')}`] : []),
-    // Headful profiles use the host's real screen/DPR model. Headless has no physical
-    // display surface, so keep its native media queries aligned with the same profile.
-    ...(opts.headless
-      ? [
-          `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
-          `--vgc-color-depth=${fp.screen.colorDepth}`,
-          `--force-device-scale-factor=${fp.devicePixelRatio}`
-        ]
-      : []),
+    // The profile's own screen (screen.*, availWidth/Height, device-width/height media
+    // queries — engine screen.cc + media_values.cc). Every profile on one machine used to
+    // report the host's real display, one more same-machine correlator. The claimed size
+    // is at least the real display (adaptFingerprintToHost), so any window this host can
+    // show — maximized included — stays inside the claimed bounds, and the engine gets
+    // the host's REAL work-area insets so availTop/availHeight keep this machine's
+    // taskbar / menu-bar / dock shape (engine >= 159 / 0.1.101). A headful window keeps
+    // the real screen when the engine cannot take the insets (it would report a 40 px
+    // Windows taskbar on every host), when the host has several displays (a window on the
+    // second one would sit outside any single claimed screen) or a portrait panel. DPR
+    // stays the host's for headful windows (forcing it would rescale the real UI);
+    // headless has no display surface, so it is pinned to the profile's value there.
+    ...(() => {
+      const env = hostFingerprintEnvironment()
+      const insets = env.workAreaInsets
+      const engineInsets = engineHasAvailInsets(enginePath, settings)
+      const singleLandscape =
+        (env.displays ?? 1) === 1 && !(env.minScreen && env.minScreen.height > env.minScreen.width)
+      if (!opts.headless && !(engineInsets && insets && singleLandscape)) return []
+      return [
+        `--vgc-screen=${fp.screen.width}x${fp.screen.height}`,
+        `--vgc-color-depth=${fp.screen.colorDepth}`,
+        ...(engineInsets && insets ? [`--vgc-avail-insets=${insets.left},${insets.top},${insets.right},${insets.bottom}`] : []),
+        ...(opts.headless ? [`--force-device-scale-factor=${fp.devicePixelRatio}`] : [])
+      ]
+    })(),
     // Unique per-profile seed → engine seeds canvas/audio/client-rects/connection noise.
     `--vgc-seed=${seedFromString(id)}`,
     // Profile name shown in the OS window title (title bar / Cmd-Tab / Dock) so you

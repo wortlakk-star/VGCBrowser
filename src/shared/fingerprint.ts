@@ -18,12 +18,25 @@ export const CHROME_BUILD = {
 }
 const CHROME_BUILDS: Array<{ major: number; full: string }> = [CHROME_BUILD]
 
-const DESKTOP_SCREENS = [
-  { width: 1920, height: 1080 },
-  { width: 1366, height: 768 },
-  { width: 2560, height: 1440 },
-  { width: 1536, height: 864 },
-  { width: 1440, height: 900 }
+// Physical panel resolutions real Windows/Linux desktops and laptops ship with, weighted by
+// how common they are. A profile claims one of these AT THE HOST'S DPR: Chrome reports
+// screen.width/height in CSS px = physical / devicePixelRatio, so a 1920×1080 panel is
+// 1536×864 on a 125 % laptop and 1280×720 at 150 % — exactly what real machines show.
+const WIN_PANELS: Array<[number, number]> = [
+  [1920, 1080], [1920, 1080], [1920, 1080], [1920, 1080],
+  [2560, 1440], [2560, 1440],
+  [1366, 768], [1600, 900], [1680, 1050], [1920, 1200], [2560, 1080],
+  [3440, 1440], [3840, 2160], [2560, 1600], [1440, 900]
+]
+// macOS at a Retina (2×) scale: the CSS sizes the stock "default" scaled modes give —
+// MacBook Air 13/15, MacBook Pro 14/16, iMac 24, Studio Display, 4K/5K externals.
+const MAC_RETINA_SCREENS: Array<[number, number]> = [
+  [1440, 900], [1440, 900], [1512, 982], [1512, 982], [1728, 1117], [1470, 956],
+  [1680, 1050], [2240, 1260], [2560, 1440], [1920, 1080], [1280, 800]
+]
+// macOS on a non-Retina external (1×).
+const MAC_1X_SCREENS: Array<[number, number]> = [
+  [1920, 1080], [1920, 1080], [2560, 1440], [1920, 1200], [3440, 1440], [1680, 1050]
 ]
 
 const MOBILE_SCREENS = [
@@ -61,6 +74,11 @@ interface OsPreset {
 
 export type GpuFamily = 'NVIDIA' | 'AMD' | 'Intel' | 'Apple' | 'Qualcomm'
 
+/** Fingerprint VARIETY version stamped on profiles (Profile.fpv). Bump when the per-profile
+ *  derivation gains a new dimension and every stored profile must get it once:
+ *  2 = cores · RAM · GPU per profile, 3 = + screen per profile. */
+export const FP_VARIETY_VERSION = 3
+
 export interface FingerprintEnvironment {
   language?: string
   languages?: string[]
@@ -72,7 +90,22 @@ export interface FingerprintEnvironment {
   maxHardwareConcurrency?: number
   maxDeviceMemory?: number
   devicePixelRatio?: number
+  /** Exact screen — forces one size (rarely wanted; see minScreen). */
   screen?: { width: number; height: number }
+  /** The real primary display in CSS px. A profile may claim a screen this size or LARGER
+   *  (its window then always fits inside the claimed screen — even maximized — so
+   *  outerWidth/outerHeight/screenX never exceed the claimed bounds), never smaller: a
+   *  1920-wide maximized window on a claimed 1366-wide screen is an impossible machine. */
+  minScreen?: { width: number; height: number }
+  /** The real display's colour depth (24, or 30 on 10-bit Mac panels) — always reported
+   *  as is: the panel behind a claimed size is still this one. */
+  colorDepth?: number
+  /** Number of displays attached. Only a single-display host claims a screen: with two or
+   *  more, a window on the second display would sit outside any single claimed screen. */
+  displays?: number
+  /** The real work-area insets of the primary display in CSS px (taskbar, menu bar, dock),
+   *  passed to the engine so the claimed screen's avail* rect has this host's real shape. */
+  workAreaInsets?: { left: number; top: number; right: number; bottom: number }
   /** Exact GPU — forces one renderer string (rarely wanted; see webglFamily). */
   webgl?: { vendor: string; renderer: string }
   /** GPU FAMILY of the real host. Each profile then claims a DIFFERENT model of the same
@@ -333,6 +366,63 @@ export function hardwareVariant(
   }
 }
 
+type ScreenSize = { width: number; height: number }
+type ScreenEnvironment = Pick<FingerprintEnvironment, 'minScreen' | 'devicePixelRatio'>
+
+const sameSize = (a: ScreenSize, b: ScreenSize): boolean => a.width === b.width && a.height === b.height
+
+/**
+ * Screens a profile may claim on this host, in CSS px: the real primary display (always
+ * a coherent claim — it is what the machine is — and weighted highest, because it is the
+ * one claim that also survives fullscreen, where the viewport can only be the real
+ * panel) plus every pool entry at the host's DPR that is at least as large as it. At a
+ * fractional DPR (125 %, 150 %) only panels whose CSS size is integral are offered, so no
+ * claim depends on rounding. A portrait display, or one no pool entry can cover (a 5K
+ * desktop), has exactly one coherent claim: itself.
+ */
+export function screenPool(os: OsType, environment: ScreenEnvironment): ScreenSize[] {
+  const dpr = environment.devicePixelRatio && environment.devicePixelRatio > 0 ? environment.devicePixelRatio : 1
+  const min = environment.minScreen
+  if (min && min.height > min.width) return [{ ...min }]
+  let candidates: ScreenSize[]
+  if (os === 'macos') {
+    candidates = (dpr >= 1.5 ? MAC_RETINA_SCREENS : MAC_1X_SCREENS).map(([width, height]) => ({ width, height }))
+  } else {
+    candidates = WIN_PANELS.filter(([w, h]) => Number.isInteger(w / dpr) && Number.isInteger(h / dpr)).map(
+      ([w, h]) => ({ width: w / dpr, height: h / dpr })
+    )
+  }
+  if (!min) return candidates
+  const fits = candidates.filter((s) => s.width >= min.width && s.height >= min.height)
+  if (!fits.length) return [{ ...min }]
+  const extra = fits.some((s) => sameSize(s, min)) ? 2 : 3
+  for (let i = 0; i < extra; i++) fits.push({ ...min })
+  return fits
+}
+
+/** The screen a profile claims: a deterministic pick (by profile id) from screenPool. */
+export function screenVariant(os: OsType, environment: ScreenEnvironment, seed: string): ScreenSize {
+  return { ...pick(screenPool(os, environment), rngFor(seed + ':screen')) }
+}
+
+/**
+ * The screen a profile is LAUNCHED with on this host: its own stored claim when this
+ * host could really show it (it is in this host's pool: at least the real display, a
+ * panel that exists at this DPR/OS), otherwise a deterministic pick from the host's pool.
+ * Never persisted — the stored claim stays the profile's identity across machines.
+ */
+export function launchScreen(
+  stored: ScreenSize | undefined,
+  os: OsType,
+  environment: ScreenEnvironment,
+  seed: string
+): ScreenSize {
+  if (stored && screenPool(os, environment).some((s) => sameSize(s, stored))) {
+    return { width: stored.width, height: stored.height }
+  }
+  return screenVariant(os, environment, seed)
+}
+
 // Fonts present on essentially EVERY install of their OS. These are always exposed: every
 // real machine of that OS has them (so they don't distinguish "same machine" from "two
 // different machines"), and a Windows profile missing e.g. "Segoe UI" would itself be a
@@ -401,9 +491,10 @@ export function generateFingerprint(
   const preset = OS_PRESETS[os] ?? OS_PRESETS.windows
   const rng = rngFor(environment.seed)
   const build = pick(CHROME_BUILDS, rng)
-  const hw = hardwareVariant(os, environment, environment.seed ?? String(rng()))
+  const seed = environment.seed ?? String(rng())
+  const hw = hardwareVariant(os, environment, seed)
   const screen =
-    environment.screen ?? (preset.mobile ? pick(MOBILE_SCREENS, rng) : pick(DESKTOP_SCREENS, rng))
+    environment.screen ?? (preset.mobile ? pick(MOBILE_SCREENS, rng) : screenVariant(os, environment, seed))
   const timezone = environment.timezone ?? pick(TIMEZONES, rng)
   const language = environment.language ?? 'en-US'
   const languages = environment.languages?.length
@@ -425,8 +516,8 @@ export function generateFingerprint(
     vendor: 'Google Inc.',
     screen: {
       ...screen,
-      colorDepth: 24,
-      pixelDepth: 24
+      colorDepth: environment.colorDepth ?? 24,
+      pixelDepth: environment.colorDepth ?? 24
     },
     devicePixelRatio:
       environment.devicePixelRatio ?? (preset.mobile ? 2.625 : os === 'macos' ? 2 : 1),

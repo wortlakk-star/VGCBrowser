@@ -8,12 +8,9 @@ import { app } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'node:crypto'
 import type { Profile, Fingerprint } from '../shared/types'
-import { CHROME_BUILD, hardwareVariant } from '../shared/fingerprint'
+import { CHROME_BUILD, FP_VARIETY_VERSION, hardwareVariant, screenVariant } from '../shared/fingerprint'
 import { accountKey } from './session'
 import { cohereFingerprint, hostFingerprintEnvironment, hostGpuDetectionFailed, hostOs } from './host-fingerprint'
-
-/** Bump when the per-profile hardware derivation changes and every profile must be re-derived. */
-const FP_VARIETY_VERSION = 2
 import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
 import {
   cleanText,
@@ -97,17 +94,24 @@ function normalizeProfiles(profiles: Profile[]): boolean {
     // same-machine correlator). Give each profile its own deterministic trio (from its
     // id, within this host's family/limits) exactly once; afterwards the values are the
     // profile's identity and are kept (and user edits respected).
-    if (p.fpv !== FP_VARIETY_VERSION) {
+    // Monotonic: a profile stamped by a NEWER build (synced from another machine) is
+    // left alone — never re-derived, never stamped down.
+    const done = Number(p.fpv) || 0
+    if (done < FP_VARIETY_VERSION) {
       hostEnv ??= hostFingerprintEnvironment()
-      // If GPU enumeration failed (PowerShell/WMI hiccup) the family is unknown; do NOT
-      // bake a random-family GPU into every profile — leave fpv unset so the pass runs
-      // on a later load once the real family is known.
-      if (!hostGpuDetectionFailed()) {
-        const variant = hardwareVariant(host, hostEnv, p.id)
-        p.fingerprint = { ...(p.fingerprint as Fingerprint), ...variant }
-        p.fpv = FP_VARIETY_VERSION
-        changed = true
-      }
+      const current = p.fingerprint as Fingerprint
+      // v2: cores / RAM / GPU. Profiles already at v2 keep theirs (a user may have edited
+      // them since). If GPU enumeration failed (PowerShell/WMI hiccup) the family is
+      // unknown; do NOT bake a random-family GPU into every profile — leave the stamp so
+      // the pass runs on a later load once the real family is known.
+      const needsTrio = done < 2
+      if (needsTrio && hostGpuDetectionFailed()) continue
+      const trio = needsTrio ? hardwareVariant(host, hostEnv, p.id) : {}
+      // v3: the screen, independent of the GPU.
+      const screen = done < 3 ? { screen: { ...current.screen, ...screenVariant(host, hostEnv, p.id) } } : {}
+      p.fingerprint = { ...current, ...trio, ...screen }
+      p.fpv = FP_VARIETY_VERSION
+      changed = true
     }
     // Keep the claimed Chrome version aligned with the VGC Core engine. A profile that
     // still claims Chrome 149 while the engine's UA-CH advertises 151 is a version

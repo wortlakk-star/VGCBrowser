@@ -92,13 +92,13 @@ index 442f1d3308..3b7bb3f6b9 100644
 
  - (void)observeValueForKeyPath:(NSString*)keyPath
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index faf8c2e79b..b527aa8910 100644
+index faf8c2e..333ef32 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2854,6 +2854,28 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2854,6 +2854,29 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
    };
    command_line->CopySwitchesFrom(browser_command_line, kCommonSwitchNames);
-
+ 
 +  // VGC: forward antidetect fingerprint switches to every child process (the
 +  // renderer reads them — e.g. WebGL UNMASKED vendor/renderer is answered there).
 +  static const char* const kVgcSwitches[] = {
@@ -117,6 +117,7 @@ index faf8c2e79b..b527aa8910 100644
 +      "vgc-ua-bitness",
 +      "vgc-screen",
 +      "vgc-color-depth",
++      "vgc-avail-insets",
 +      "vgc-fonts",
 +  };
 +  command_line->CopySwitchesFrom(browser_command_line, kVgcSwitches);
@@ -647,13 +648,13 @@ index 75cd346131..58d02ecfab 100644
    probe::ApplyAcceptLanguageOverride(execution_context_,
                                       &accept_languages_override);
 diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
-index 69ffc2b05f..88f25d7763 100644
+index 69ffc2b..ad79595 100644
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
 @@ -28,7 +28,10 @@
-
+ 
  #include "third_party/blink/renderer/core/frame/screen.h"
-
+ 
 +#include "base/command_line.h"
  #include "base/numerics/safe_conversions.h"
 +#include "base/strings/string_number_conversions.h"
@@ -661,17 +662,26 @@ index 69ffc2b05f..88f25d7763 100644
  #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
  #include "third_party/blink/renderer/core/event_target_names.h"
  #include "third_party/blink/renderer/core/frame/local_dom_window.h"
-@@ -40,6 +43,47 @@
-
+@@ -40,6 +43,69 @@
+ 
  namespace blink {
-
+ 
 +namespace {
 +
-+// VGC Core: parse --vgc-screen=WIDTHxHEIGHT and --vgc-color-depth once. Absent => no-op.
++// VGC Core: parse --vgc-screen=WIDTHxHEIGHT, --vgc-color-depth and
++// --vgc-avail-insets=LEFT,TOP,RIGHT,BOTTOM once. Absent => no-op.
++// The insets are the HOST's real work-area insets in CSS px (its taskbar / menu bar /
++// dock), so the claimed screen's avail* rect keeps the shape a window on this machine
++// really has (a maximized window never exceeds availWidth/availHeight, and availTop is
++// the real menu-bar height on macOS). Without them the legacy 40 px bottom inset applies.
 +struct VgcScreenCfg {
 +  int width = 0;
 +  int height = 0;
 +  int depth = 0;
++  int inset_left = 0;
++  int inset_top = 0;
++  int inset_right = 0;
++  int inset_bottom = 40;  // legacy taskbar inset when --vgc-avail-insets is absent
 +  bool has_size = false;
 +  bool has_depth = false;
 +};
@@ -697,21 +707,34 @@ index 69ffc2b05f..88f25d7763 100644
 +      v.depth = d;
 +      v.has_depth = true;
 +    }
++    const std::string insets = cmd->GetSwitchValueASCII("vgc-avail-insets");
++    if (!insets.empty()) {
++      const auto parts = base::SplitString(insets, ",", base::TRIM_WHITESPACE,
++                                           base::SPLIT_WANT_ALL);
++      int l = 0, t = 0, r = 0, b = 0;
++      if (parts.size() == 4 && base::StringToInt(parts[0], &l) &&
++          base::StringToInt(parts[1], &t) && base::StringToInt(parts[2], &r) &&
++          base::StringToInt(parts[3], &b) && l >= 0 && t >= 0 && r >= 0 &&
++          b >= 0 && l + r < v.width && t + b < v.height) {
++        v.inset_left = l;
++        v.inset_top = t;
++        v.inset_right = r;
++        v.inset_bottom = b;
++      }
++    }
 +    return v;
 +  }();
 +  return cfg;
 +}
-+// Menubar/taskbar inset removed from the reported avail height (mirrors JS "height - 40").
-+constexpr int kVgcTaskbarInset = 40;
 +
 +}  // namespace
 +
  Screen::Screen(LocalDOMWindow* window, int64_t display_id)
      : ExecutionContextClient(window), display_id_(display_id) {}
-
-@@ -79,12 +123,16 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+ 
+@@ -79,12 +145,16 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
  }
-
+ 
  int Screen::height() const {
 +  if (VgcScreen().has_size)
 +    return VgcScreen().height;
@@ -719,52 +742,52 @@ index 69ffc2b05f..88f25d7763 100644
      return 0;
    return GetRect(/*available=*/false).height();
  }
-
+ 
  int Screen::width() const {
 +  if (VgcScreen().has_size)
 +    return VgcScreen().width;
    if (!DomWindow())
      return 0;
    return GetRect(/*available=*/false).width();
-@@ -97,6 +145,8 @@ unsigned Screen::colorDepth() const {
+@@ -97,6 +167,8 @@ unsigned Screen::colorDepth() const {
    // https://drafts.csswg.org/cssom-view/#dom-screen-colordepth
    unsigned unknown_color_depth = 24u;
-
+ 
 +  if (VgcScreen().has_depth)
 +    return static_cast<unsigned>(VgcScreen().depth);
    if (!DomWindow()) {
      return unknown_color_depth;
    }
-@@ -110,24 +160,32 @@ unsigned Screen::pixelDepth() const {
+@@ -110,24 +182,32 @@ unsigned Screen::pixelDepth() const {
  }
-
+ 
  int Screen::availLeft() const {
 +  if (VgcScreen().has_size)
-+    return 0;
++    return VgcScreen().inset_left;
    if (!DomWindow())
      return 0;
    return GetRect(/*available=*/true).x();
  }
-
+ 
  int Screen::availTop() const {
 +  if (VgcScreen().has_size)
-+    return 0;
++    return VgcScreen().inset_top;
    if (!DomWindow())
      return 0;
    return GetRect(/*available=*/true).y();
  }
-
+ 
  int Screen::availHeight() const {
 +  if (VgcScreen().has_size)
-+    return VgcScreen().height - kVgcTaskbarInset;
++    return VgcScreen().height - VgcScreen().inset_top - VgcScreen().inset_bottom;
    if (!DomWindow())
      return 0;
    return GetRect(/*available=*/true).height();
  }
-
+ 
  int Screen::availWidth() const {
 +  if (VgcScreen().has_size)
-+    return VgcScreen().width;
++    return VgcScreen().width - VgcScreen().inset_left - VgcScreen().inset_right;
    if (!DomWindow())
      return 0;
    return GetRect(/*available=*/true).width();

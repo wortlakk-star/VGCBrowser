@@ -21,7 +21,7 @@ import type {
   ProxyConfig,
   SavedProxy
 } from '../shared/types'
-import { generateFingerprint } from '../shared/fingerprint'
+import { generateFingerprint, screenPool } from '../shared/fingerprint'
 import { generateTotp, looksLikeTotpSecret } from './totp'
 
 const ACCOUNT_STATUSES = new Set(['live', 'die', 'banned', 'ready'])
@@ -438,6 +438,9 @@ export function registerIpc(): void {
   // visible) — the edit modal offers only models of that family, since any other family is
   // swapped at launch (adaptFingerprintToHost) and would silently differ from the UI.
   handle('host:gpuFamily', () => hostGpuFamily() ?? null)
+  // Screens a profile may claim on THIS machine (at least the real primary display, at
+  // its DPR) — the edit modal offers exactly these; anything else is swapped at launch.
+  handle('host:screenPool', () => screenPool(hostOs(), hostFingerprintEnvironment()))
 
   // Current 6-digit 2FA code for a stored base32 secret (empty if the secret is invalid).
   handle('totp:now', (_e, secret: string) =>

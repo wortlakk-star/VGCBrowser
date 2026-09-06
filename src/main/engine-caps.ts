@@ -15,6 +15,12 @@ import type { AppSettings } from '../shared/types'
  *  app disables WebGPU for them instead. */
 const WEBGPU_IDENTITY_MIN_WIN_BUILD = 158
 const WEBGPU_IDENTITY_MIN_MAC_VERSION = [0, 1, 101]
+/** First engine build whose screen spoof takes the host's real work-area insets
+ *  (--vgc-avail-insets) instead of a fixed 40 px taskbar. Older engines would report a
+ *  Windows-shaped work area on every host, so the app leaves their headful windows on
+ *  the real screen. */
+const AVAIL_INSETS_MIN_WIN_BUILD = 159
+const AVAIL_INSETS_MIN_MAC_VERSION = [0, 1, 101]
 
 function manifestUrl(enginePath: string): string {
   try {
@@ -64,13 +70,11 @@ function versionAtLeast(v: number[], min: number[]): boolean {
   return true
 }
 
-/**
- * Does this engine spoof navigator.gpu adapter info to match the claimed WebGL GPU?
- * A developer build pointed to by VGC_ENGINE_PATH is assumed current.
- */
-export function engineHasWebGpuIdentity(
+function engineAtLeast(
   enginePath: string,
-  settings: Pick<AppSettings, 'engineUrl' | 'engineUrlMac'>
+  settings: Pick<AppSettings, 'engineUrl' | 'engineUrlMac'>,
+  minWinBuild: number,
+  minMacVersion: number[]
 ): boolean {
   // A developer-built engine (dev run only) is assumed current; a packaged app ignores
   // the env var so nothing outside the release can flip the gate.
@@ -78,10 +82,26 @@ export function engineHasWebGpuIdentity(
     return true
   }
   if (process.platform === 'win32') {
-    return engineBuildNumber(enginePath, settings) >= WEBGPU_IDENTITY_MIN_WIN_BUILD
+    return engineBuildNumber(enginePath, settings) >= minWinBuild
   }
   if (process.platform === 'darwin') {
-    return versionAtLeast(macEngineVersion(enginePath, settings), WEBGPU_IDENTITY_MIN_MAC_VERSION)
+    return versionAtLeast(macEngineVersion(enginePath, settings), minMacVersion)
   }
   return false
+}
+
+/** Does this engine spoof navigator.gpu adapter info to match the claimed WebGL GPU? */
+export function engineHasWebGpuIdentity(
+  enginePath: string,
+  settings: Pick<AppSettings, 'engineUrl' | 'engineUrlMac'>
+): boolean {
+  return engineAtLeast(enginePath, settings, WEBGPU_IDENTITY_MIN_WIN_BUILD, WEBGPU_IDENTITY_MIN_MAC_VERSION)
+}
+
+/** Does this engine's --vgc-screen take the host's real work-area insets? */
+export function engineHasAvailInsets(
+  enginePath: string,
+  settings: Pick<AppSettings, 'engineUrl' | 'engineUrlMac'>
+): boolean {
+  return engineAtLeast(enginePath, settings, AVAIL_INSETS_MIN_WIN_BUILD, AVAIL_INSETS_MIN_MAC_VERSION)
 }

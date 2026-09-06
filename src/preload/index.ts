@@ -169,6 +169,9 @@ const api = {
   // Forced-update gate: is this build still allowed to run?
   /** GPU family of this machine ('NVIDIA' | 'AMD' | 'Intel' | 'Apple' | …) or null. */
   hostGpuFamily: (): Promise<string | null> => ipcRenderer.invoke('host:gpuFamily'),
+  /** Screens a profile may claim on this machine (CSS px), largest-display-aware. */
+  hostScreenPool: (): Promise<Array<{ width: number; height: number }>> =>
+    ipcRenderer.invoke('host:screenPool'),
 
   versionGate: (): Promise<{
     blocked: boolean
