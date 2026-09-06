@@ -55,7 +55,14 @@ fi
 if [ "$ADHOC" = 1 ]; then
   codesign --force --deep --sign - "$STAGE"
   codesign --verify --deep --strict --verbose=2 "$STAGE"
-  codesign -dv --verbose=4 "$STAGE" 2>&1 | grep -q 'Signature=adhoc'
+  # Capture BEFORE grepping: `codesign -dv | grep -q` races grep's early exit against
+  # codesign still writing — grep -q closes the pipe on its first match while codesign
+  # keeps producing output, so codesign dies of SIGPIPE (141) and, under pipefail, that
+  # 141 (not grep's 0) becomes the pipeline's exit status and kills the whole script even
+  # though the check itself matched. Capturing into a variable first lets codesign exit
+  # normally before grep ever runs.
+  SIGN_INFO="$(codesign -dv --verbose=4 "$STAGE" 2>&1)"
+  echo "$SIGN_INFO" | grep -q 'Signature=adhoc'
 else
   # Hardened runtime, signed INSIDE-OUT with Chromium's own per-helper entitlements: a
   # single --deep pass would give the Renderer/GPU helpers no entitlements, and under the
@@ -81,7 +88,9 @@ else
   sign "$FW"
   sign --entitlements "$ENT/app-entitlements.plist" "$STAGE"
   codesign --verify --deep --strict --verbose=2 "$STAGE"
-  codesign -dv --verbose=4 "$STAGE" 2>&1 | grep -q 'Authority=Developer ID Application:'
+  # Same SIGPIPE-under-pipefail hazard as the ad-hoc check above — capture first.
+  SIGN_INFO="$(codesign -dv --verbose=4 "$STAGE" 2>&1)"
+  echo "$SIGN_INFO" | grep -q 'Authority=Developer ID Application:'
 
   SUBMIT_ZIP="$WORK/notarize.zip"
   COPYFILE_DISABLE=1 ditto -c -k --keepParent "$STAGE" "$SUBMIT_ZIP"

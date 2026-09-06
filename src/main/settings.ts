@@ -11,8 +11,9 @@ const ENGINE_MANIFEST = Object.freeze({
   windowsUrl: 'https://vgcbrowser.com/dl/vgc-core-159.zip',
   // Pinned SHA-256 for runtime downloads on Windows (from release artifact vgc-core-159.zip).
   windowsSha256: '1ccb4569f06ee62308344f7d4f101e67993b42027074b3549bc8ab19bd294112',
-  macArm64Url: 'https://vgcbrowser.com/dl/vgc-core-mac-arm64-0.1.100.zip',
-  macArm64Sha256: 'dcf605201b8e168a6ba4df8b88f2339c1d7a6fd67528e617470e686e4cf476aa'
+  macArm64Url: 'https://vgcbrowser.com/dl/vgc-core-mac-arm64-0.1.101.zip',
+  // engine 0.1.101: vgc-webgpu-identity.patch (native WebGPU adapter identity, no real-GPU leak).
+  macArm64Sha256: '19d90923f393f5f922c6438ca68af713b1e2ea593909c2065360b65a79ef616b'
 })
 
 const CLOUD_MANIFEST = Object.freeze({

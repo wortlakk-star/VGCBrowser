@@ -1,9 +1,13 @@
-# Build engine VGC Core cho macOS (0.1.101) trên MacBook
+# Build engine VGC Core cho macOS trên MacBook
 
-Engine Mac hiện tại (0.1.100) chưa có bản vá giả WebGPU, nên trên Mac app phải TẮT
-WebGPU. Build lại engine với đủ ba bản vá (`engine-src/patches/`) và đóng gói thành
-`vgc-core-mac-arm64-0.1.101.zip`; app đã sẵn sàng nhận bản này (gate `>= 0.1.101` trong
-`src/main/engine-caps.ts`).
+**Trạng thái: engine 0.1.101 đã build, verify (18/18 `verify:engine` + WebGPU identity
+khớp WebGL qua `probe:gpu`), upload lên `vgcbrowser.com/dl`, và ghim vào
+`src/main/settings.ts` (2026-09-06).** Bản này có đủ ba bản vá (`engine-src/patches/`),
+gồm `vgc-webgpu-identity.patch` nên app không còn phải tắt WebGPU trên Mac (gate
+`>= 0.1.101` trong `src/main/engine-caps.ts`).
+
+Phần dưới đây vẫn giữ nguyên cho lần build engine TIẾP THEO (bump Chromium tag, thêm
+patch mới, …) — script tự đọc phiên bản engine mục tiêu, không cần sửa gì trong file này.
 
 Việc này chỉ làm được trên máy Mac (Chromium cho macOS phải build bằng Xcode). Máy chạy
 GitHub Actions không đủ đĩa, VPS Windows không build chéo được.
