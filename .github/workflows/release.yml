@@ -69,8 +69,22 @@ jobs:
             done
             test -f engine/chromium/chrome.exe || { echo "engine still missing after retries"; exit 1; }
           } 2>&1 | tee fetch-engine.log
+      - name: Show the fetch log in the job summary when the fetch failed
+        if: failure()
+        shell: bash
+        run: |
+          # The run page (public) renders this summary, which needs no network to the host
+          # — when the host refuses this runner, the SSH copy below cannot work either.
+          [ -f fetch-engine.log ] || exit 0
+          {
+            echo '## Engine fetch log'
+            echo '```'
+            head -c 60000 fetch-engine.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Keep the fetch log on vgcbrowser.com when the fetch failed
         if: failure()
+        continue-on-error: true
         shell: bash
         env:
           SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
@@ -80,7 +94,7 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           # Outside public_html on purpose: diagnostics, not a download.
-          scp -P 65002 -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new fetch-engine.log \
+          scp -P 65002 -i ~/.ssh/id_ed25519 -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new fetch-engine.log \
             u469659181@212.85.28.201:domains/vgcbrowser.com/ci-fetch-${{ github.run_id }}.log
       - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
       - name: Verify unsigned Windows installer
