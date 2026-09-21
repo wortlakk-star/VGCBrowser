@@ -14,6 +14,7 @@
 | Mở lần đầu trên máy mới | `bootstrapProfileStores` (profile-manager.ts) | Chạy engine ẩn ~0,6 s để tạo Cookies DB, Login Data, khoá os_crypt → cầu nối có chỗ để gộp. Không có bước này, lần mở đầu tiên trên máy mới sẽ chưa đăng nhập. |
 | Đóng engine êm | `stopProfile` / `requestEngineExit` | Windows: `taskkill /PID` (WM_CLOSE); macOS: SIGTERM; automation: CDP `Browser.close`. Dừng cưỡng bức làm mất cookie ghi trong ~30 s cuối (đã đo thực tế). |
 | Chống ghi đè | `cloudSessionState` + `allowCloudTag` | Không ghi đè bản cloud mới hơn bản mình đã đồng bộ — **trừ** khi bản mới đó chính là bàn giao muộn dành cho epoch của mình (máy đang chạy là máy thắng). |
+| Tự lưu định kỳ (từ 2.1.83) | `autosaveSession` (profile-manager.ts) | Profile **đang chạy** tự đẩy gói phiên lên cloud mỗi 5 phút (cookie/mật khẩu gộp thêm khi DB tạm đọc được; đi qua đúng đường chống ghi đè ở trên, im lặng khi lỗi). Máy ngủ / mất điện đột ngột chỉ mất tối đa ~5 phút cuối thay vì cả phiên. |
 | Thoát app / đổi tài khoản | `stopRunningAndSync` | Chờ upload đang dở, đóng êm, upload, **rồi mới** nhả khoá. Trần chờ 90 s. |
 | Engine mồ côi | `reapOrphanEngines` | App crash để lại engine chạy không có poll → lúc khởi động app đóng êm engine cũ (kiểm tra command line, không tin PID suông). |
 
@@ -52,8 +53,10 @@ xác nhận phần Keychain (`security find-generic-password … "Chromium Safe 
 
 - Cookie **phiên** (không có hạn) không bao giờ tồn tại qua một lần khởi động lại Chromium (đo trên
   Chrome 152, kể cả `--restore-last-session`), nên không thể đồng bộ; đa số web dùng cookie có hạn.
-- Khi máy A ngủ với profile đang mở, những gì làm trên A sau lần lưu cuối chỉ lên cloud khi A tỉnh lại.
-  Phần tab/localStorage của A khi đó sẽ **thua** máy đang chạy; cookie/mật khẩu thì được gộp.
+- Khi máy A ngủ với profile đang mở, những gì làm trên A sau lần **tự lưu** cuối (tối đa ~5 phút, từ
+  2.1.83; trước đó là từ lần đóng cuối) chỉ lên cloud khi A tỉnh lại. Phần tab/localStorage của A khi
+  đó sẽ **thua** máy đang chạy; cookie/mật khẩu thì được gộp. Cookie ghi trong ~5 phút cuối trước khi
+  A ngủ vẫn có thể thiếu (DB cookie thường bận trong lúc chạy — chỉ gộp được khi rảnh).
 - Nút "Đẩy lên (kèm phiên)" bị từ chối chừng nào máy khác còn giữ profile (kể cả máy đang ngủ) — mở rồi đóng
   profile ở bất kỳ máy nào sẽ giải phóng.
 - Chạy tự động (nuôi acc theo lịch, đổi mật khẩu hàng loạt) **không** đá máy đang dùng: gặp profile đang mở ở

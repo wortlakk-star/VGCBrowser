@@ -168,6 +168,10 @@ interface RunningProfile {
   /** Chain of in-flight `saving:` marker RPCs — the settle awaits it so a delayed marker can
    *  never land AFTER (and erase) the final tag. */
   savingDrain?: Promise<void>
+  /** Interval that autosaves the LIVE session to the cloud while the profile is running. */
+  autosavePoll?: ReturnType<typeof setInterval>
+  /** One autosave at a time per open (a slow upload must not stack the next tick behind it). */
+  autosaveBusy?: boolean
 }
 
 /** Default fingerprint validation target opened by "Kiểm tra fingerprint". */
@@ -178,6 +182,11 @@ const running = new Map<string, RunningProfile>()
 /** How often an open profile checks the cloud lock to see if another machine took it over.
  *  Also the holder's heartbeat cadence. Small payload, only while a profile is open. */
 const LOCK_HOLD_POLL_MS = 2500
+
+/** How often a RUNNING profile autosaves its live session to the cloud (see autosaveSession).
+ *  A machine that dies without a graceful close (lid closed, power cut) then loses at most
+ *  this window instead of everything since its last close. */
+const SESSION_AUTOSAVE_MS = 5 * 60_000
 
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -862,6 +871,68 @@ async function syncAndUnlockOnClose(id: string, entry: RunningProfile): Promise<
   if (isQuitting || accountTransitioning) return
   const res = await syncDataOnClose(id, entry)
   await settleLockAfterClose(id, entry, res)
+}
+
+/**
+ * Periodic autosave while the profile is RUNNING: push the current session zip (tabs / Local
+ * Storage / IndexedDB / Preferences) — and, when the credential DBs are momentarily readable,
+ * the cookie/password union — to the cloud. Addresses HUONG-DAN-DONG-BO-PHIEN.md §6: a machine
+ * that sleeps or loses power with a profile open used to keep everything since its last close
+ * hostage until it woke; now the cloud is at most SESSION_AUTOSAVE_MS behind.
+ * Safety, in the same order the close path earns it:
+ *   • withDataLock serializes against open/close/manual push of the same profile, and every
+ *     precondition is re-checked AFTER the lock is acquired (a close may have started while
+ *     this tick waited);
+ *   • the kick/close/quit/account-switch paths stay authoritative — the tick backs off the
+ *     moment any of them is in motion;
+ *   • uploadProfileData's anti-clobber still refuses a cloud session that advanced past ours;
+ *     CLOUD_ADVANCED here means this open is the stale one → stop autosaving this open and
+ *     leave the deliberate handling to the close flow (unchanged);
+ *   • credentials go up as a PLAIN union (cloud=null → re-fetch current set, snapshot=null →
+ *     no deletion propagation): a mid-run export can be partial or stale, and a partial set
+ *     must never delete rows other machines still rely on. Mid-run the DBs usually have a hot
+ *     WAL and uploadCredentials skips them honestly — the union then lands at close as before;
+ *   • quiet by design: failures are dbg-logged, never toasted — the close-time save remains
+ *     the one whose outcome the user is told about.
+ */
+async function autosaveSession(id: string): Promise<void> {
+  const entry = running.get(id)
+  if (!entry || entry.autosaveBusy) return
+  if (entry.kicking || entry.takenOver || entry.stopRequestedAt) return
+  if (isQuitting || accountTransitioning || accountTransitionInProgress()) return
+  const expectedUid = entry.accountUid
+  if (!expectedUid || !sameAccount(expectedUid)) return
+  entry.autosaveBusy = true
+  try {
+    await withDataLock(id, async () => {
+      if (running.get(id) !== entry || entry.kicking || entry.takenOver || entry.stopRequestedAt) return
+      if (isQuitting || accountTransitioning || !sameAccount(expectedUid)) return
+      const started = Date.now()
+      let tag: string | null = null
+      try {
+        tag = await uploadProfileData(id)
+      } catch (e) {
+        if (e instanceof SyncTagError) {
+          tag = e.tag // the zip IS in the cloud; memoryTags keeps this app session consistent
+        } else if ((e as { code?: string })?.code === 'CLOUD_ADVANCED') {
+          dbg(`[autosave ${id}] cloud advanced past this open → autosave off for this open`)
+          if (entry.autosavePoll) clearInterval(entry.autosavePoll)
+          entry.autosavePoll = undefined
+          return
+        } else {
+          dbg(`[autosave ${id}] zip skipped: ${errMsg(e)}`)
+        }
+      }
+      const creds = await uploadCredentials(id, expectedUid, null, null)
+      dbg(
+        `[autosave ${id}] done in ${Date.now() - started}ms tag=${tag ? tag.slice(0, 16) : '-'} ${credsSummary(creds)}`
+      )
+    })
+  } catch (err) {
+    dbg(`[autosave ${id}] error: ${errMsg(err)}`)
+  } finally {
+    entry.autosaveBusy = false
+  }
 }
 
 /**
@@ -1978,6 +2049,7 @@ async function launchProfileImpl(
   proc.on('exit', () => {
     if (entry.tabPoll) clearInterval(entry.tabPoll)
     if (entry.lockPoll) clearInterval(entry.lockPoll)
+    if (entry.autosavePoll) clearInterval(entry.autosavePoll)
     if (entry.forceTimer) clearTimeout(entry.forceTimer)
     clearEnginePid(id, proc.pid)
     entry.injector?.dispose()
@@ -1999,6 +2071,7 @@ async function launchProfileImpl(
     // forever against a dead CDP connection once the entry is removed from `running`.
     if (entry.tabPoll) clearInterval(entry.tabPoll)
     if (entry.lockPoll) clearInterval(entry.lockPoll)
+    if (entry.autosavePoll) clearInterval(entry.autosavePoll)
     if (entry.forceTimer) clearTimeout(entry.forceTimer)
     clearEnginePid(id, proc.pid)
     entry.injector?.dispose()
@@ -2022,6 +2095,13 @@ async function launchProfileImpl(
   // when the lock was actually claimed (fail-open opens skip it). Cleared in exit/error.
   if (lockClaimed) {
     entry.lockPoll = setInterval(() => void checkKicked(id), LOCK_HOLD_POLL_MS)
+  }
+
+  // Live session autosave (see autosaveSession): every open with a signed-in account, in every
+  // mode (native / CDP / automation / warm-up) — a scheduled warm-up that dies mid-run benefits
+  // just as much as a user window. Cleared in the exit/error handlers.
+  if (SESSION_AUTOSAVE_MS > 0 && entry.accountUid) {
+    entry.autosavePoll = setInterval(() => void autosaveSession(id), SESSION_AUTOSAVE_MS)
   }
 
   if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
