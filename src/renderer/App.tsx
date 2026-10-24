@@ -242,9 +242,8 @@ export default function App(): JSX.Element {
       void refresh()
       return { ok: false }
     }
-    // 'wrong' và 'sos' hiện chung một thông báo (không lộ mã SOS).
-    const rem = typeof res.remainingGlobal === 'number' ? ` Còn ${res.remainingGlobal} lần trước khi xoá tất cả.` : ''
-    return { ok: false, msg: 'Sai mã.' + rem }
+    // Sai mã (hoặc SOS): IM LẶNG — không hiện thông báo, không lộ số lần còn lại.
+    return { ok: false }
   }, [lockedGroups, refresh])
 
   useEffect(() => {

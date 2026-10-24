@@ -49,8 +49,7 @@ export function Sidebar({
     if (!groupCode) return
     const res = await onUnlockGroup(groupCode)
     setGroupCode('')
-    setGroupCodeMsg(res.ok ? '' : (res.msg ?? 'Sai mã.'))
-    if (res.ok) setGroupCodeMsg('')
+    setGroupCodeMsg(res.msg ?? '')
   }
   const submitGroup = (): void => {
     const n = newName.trim()
