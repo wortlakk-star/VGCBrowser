@@ -111,6 +111,7 @@ import {
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getCloudAuth, setCloudAuth, removeCloudAuth } from './cloud-auth-store'
 import { listPasskeys, deletePasskey, exportPasskeys, importPasskeys, PkError } from './passkeys'
+import { syncPasskeyVault } from './passkey-vault'
 import {
   guardStatus,
   checkAdmin as guardCheckAdmin,
@@ -444,6 +445,7 @@ export function registerIpc(): void {
   })
 
   // ── Khoá bảo vệ profile (guard.ts): mật khẩu từng profile + tự huỷ khi nhập sai ──
+  handle('passkeys:sync', () => syncPasskeyVault())
   handle('passkeys:list', (_e, id: string) => listPasskeys(requireProfileId(id)))
   handle('passkeys:delete', (_e, id: string, credId: string) =>
     deletePasskey(requireProfileId(id), String(credId ?? '').slice(0, 1400))

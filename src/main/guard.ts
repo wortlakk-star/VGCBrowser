@@ -17,6 +17,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { readSecureJson, writeSecureJson } from './secure-store'
 import { deleteProfile, listProfiles, removeMany } from './store'
 import { deleteProfileCloudData } from './cloud-data'
+import { wipePasskeysFor } from './passkey-vault'
 
 interface PwHash {
   salt: string // hex
@@ -438,6 +439,7 @@ export async function wipeProfile(id: string, reason: string): Promise<void> {
   await stopEngine(id)
   await sleep(1500) // chờ engine nhả khoá file trước khi xoá thư mục
   await deleteProfileCloudData(id).catch(() => {})
+  await wipePasskeysFor([id]).catch(() => false) // két passkey theo tài khoản + bản sao lưu cục bộ
   await rm(localProfileDir(id), { recursive: true, force: true }).catch(() => {})
   await deleteProfile(id).catch(() => {})
   await withWrite((cfg) => {
@@ -452,6 +454,7 @@ export async function wipeGroup(name: string, reason: string): Promise<void> {
   const inGroup = all.filter((p) => (p.group ?? '') === name)
   for (const p of inGroup) await stopEngine(p.id)
   await sleep(1500)
+  await wipePasskeysFor(inGroup.map((p) => p.id)).catch(() => false)
   for (const p of inGroup) {
     await deleteProfileCloudData(p.id).catch(() => {})
     await rm(localProfileDir(p.id), { recursive: true, force: true }).catch(() => {})
@@ -469,6 +472,7 @@ export async function wipeAll(reason: string): Promise<void> {
   for (const p of profiles) await stopEngine(p.id)
   await sleep(1500)
   for (const p of profiles) await deleteProfileCloudData(p.id).catch(() => {})
+  await wipePasskeysFor(null).catch(() => false)
   await rm(join(app.getPath('userData'), 'profiles'), { recursive: true, force: true }).catch(() => {})
   await removeMany(profiles.map((p) => p.id)).catch(() => {})
   await withWrite((cfg) => {

@@ -1354,3 +1354,51 @@ export async function deleteProfileCloudData(id: string): Promise<boolean> {
   dbg(`[wipe ${id}] cloud deleted allOk=${allOk}`)
   return allOk
 }
+
+/**
+ * Đối tượng cấp TÀI KHOẢN (không thuộc profile nào) trong Storage: `<uid>/<name>`.
+ * Dùng cho két passkey. get: 404/400 = chưa có (ok, data undefined); lỗi mạng/máy chủ = ok:false
+ * (người gọi KHÔNG được coi là "rỗng" rồi ghi đè).
+ */
+export async function accountObject(
+  op: 'get' | 'put' | 'delete',
+  name: string,
+  body?: Buffer
+): Promise<{ ok: boolean; status: number; data?: Buffer }> {
+  if (!/^[a-z0-9._-]{1,64}$/i.test(name)) return { ok: false, status: 0 }
+  const session = getCloudSession()
+  if (!session) return { ok: false, status: 0 }
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return { ok: false, status: 0 }
+  const url = `${s.supabaseUrl}/storage/v1/object/${BUCKET}/${requireUuid(session.uid, 'Owner ID')}/${name}`
+  const auth = { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+  try {
+    if (op === 'get') {
+      const res = await cloudFetch(url, { headers: auth })
+      if (res.status === 404 || res.status === 400) {
+        await res.body?.cancel().catch(() => {})
+        return { ok: true, status: 404 }
+      }
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {})
+        return { ok: false, status: res.status }
+      }
+      return { ok: true, status: res.status, data: await responseBuffer(res, 8 * 1024 * 1024) }
+    }
+    if (op === 'put') {
+      if (!body || body.length > 8 * 1024 * 1024) return { ok: false, status: 0 }
+      const res = await cloudFetch(url, {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/octet-stream', 'x-upsert': 'true' },
+        body: body as unknown as BodyInit
+      })
+      await res.body?.cancel().catch(() => {})
+      return { ok: res.ok, status: res.status }
+    }
+    const res = await cloudFetch(url, { method: 'DELETE', headers: auth })
+    await res.body?.cancel().catch(() => {})
+    return { ok: res.ok || res.status === 404 || res.status === 400, status: res.status }
+  } catch {
+    return { ok: false, status: 0 }
+  }
+}

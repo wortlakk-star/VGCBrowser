@@ -319,6 +319,8 @@ const api = {
     auth?: string
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setLimits', perProfile, global, auth),
+  passkeySyncNow: (): Promise<{ ok: boolean; error?: string; pulled?: number; removed?: number; pushed?: boolean; total?: number }> =>
+    ipcRenderer.invoke('passkeys:sync'),
   passkeyList: (id: string): Promise<PasskeyInfo[]> => ipcRenderer.invoke('passkeys:list', id),
   passkeyDelete: (id: string, credId: string): Promise<boolean> =>
     ipcRenderer.invoke('passkeys:delete', id, credId),

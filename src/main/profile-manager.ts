@@ -102,6 +102,7 @@ import { getMachineId } from './machine-id'
 import { isLocked as isProfileLocked, consumeUnlock as consumeUnlockTicket } from './guard'
 import { ensureLockExtension, releaseLockTokens } from './lock-ext'
 import { ensurePasskeyExtension } from './passkey-ext'
+import { syncPasskeyVault } from './passkey-vault'
 
 export interface LaunchProfileOptions {
   headless?: boolean
@@ -1669,6 +1670,9 @@ async function launchProfileImpl(
       dbg(
         `[open ${id}] downloaded=${got} bootstrapped=${bootstrapped ?? 'n/a'} credsMerged=${merged} stale=${openedStale}`
       )
+      // Két passkey theo tài khoản: kéo passkey còn thiếu về profile này TRƯỚC khi chạy (sau khi gói
+      // phiên đã giải nén — gói có thể cũ hơn két). Không chờ quá 6 giây, lỗi không chặn việc mở.
+      await Promise.race([syncPasskeyVault().catch(() => null), sleepMs(6000)])
       // Legacy CDP cookie seed — only used in CDP mode; native mode never reads it, so skip
       // the round-trip there.
       if (!skipCdp) syncedCookies = await downloadProfileCookies(id).catch(() => [])

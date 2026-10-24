@@ -97,6 +97,17 @@ export function SettingsModal({
   // Sao lưu / khôi phục TẤT CẢ passkey ra file .vgcpk
   const [pkAllPass, setPkAllPass] = useState('')
   const [pkAllMsg, setPkAllMsg] = useState('')
+  const syncPasskeysNow = async (): Promise<void> => {
+    setPkAllMsg('Đang quét két passkey…')
+    const r = await window.vgc.passkeySyncNow()
+    setPkAllMsg(
+      r.ok
+        ? `Đã đồng bộ ✓ — két có ${r.total ?? 0} passkey` +
+            (r.pulled ? `, kéo về ${r.pulled} passkey mới` : '') +
+            (r.pushed ? ', đã cập nhật lên cloud' : '')
+        : r.error || 'Không đồng bộ được.'
+    )
+  }
   const backupAllPasskeys = async (): Promise<void> => {
     setPkAllMsg('')
     const r = await window.vgc.passkeyExport(null, pkAllPass)
@@ -549,10 +560,15 @@ export function SettingsModal({
           <section className="card">
             <h3>Passkey — sao lưu</h3>
             <p className="hint" style={{ marginTop: 0 }}>
-              Passkey nằm riêng trong từng profile, mã hoá và đồng bộ cloud. Để <b>không bao giờ mất</b> (xoá
-              profile, cài lại máy, cloud lỗi), hãy sao lưu ra file <code>.vgcpk</code> bảo vệ bằng mật khẩu
-              riêng của bạn — file dùng được trên mọi máy. App cũng tự giữ 5 bản sao cũ gần nhất trên máy này.
+              <b>Tự động theo tài khoản:</b> passkey của mọi profile được cất trong một <b>két riêng trên cloud</b>
+              (mã hoá bằng khoá tài khoản). Đăng nhập tài khoản hoặc mở profile là app tự quét và kéo passkey về;
+              tạo/xoá passkey tự đẩy lên. Xoá profile hay cài lại máy vẫn lấy lại được. Ngoài ra app giữ 5 bản sao
+              cũ gần nhất trên máy này, và bạn có thể sao lưu ra file <code>.vgcpk</code> (mật khẩu riêng) để cất
+              ngoài cloud.
             </p>
+            <div className="row-inline" style={{ gap: 6, marginBottom: 8 }}>
+              <button className="btn" onClick={() => void syncPasskeysNow()}>Đồng bộ két ngay</button>
+            </div>
             <div className="row-inline" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               <input
                 type="password"

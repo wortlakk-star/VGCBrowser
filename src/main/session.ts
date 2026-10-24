@@ -91,6 +91,8 @@ export function commitValidatedCloudSession(s: CloudSession | null): void {
   // ...and report the sign-in (email + machine + country) to the admin panel so new
   // registrations show up there to be approved.
   void reportRegistration(getCloudEmail())
+  // Quét két passkey theo tài khoản và kéo passkey về các profile (passkey-vault.ts).
+  if (s) void import('./passkey-vault').then((m) => m.onCloudLogin()).catch(() => {})
 }
 
 export function getCloudSession(): CloudSession | null {

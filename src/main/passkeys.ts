@@ -38,9 +38,11 @@ export interface PkCred {
   created: string
   lastUsed?: string
 }
-interface PkFile {
+export interface PkFile {
   v: 1
   creds: PkCred[]
+  /** Bia mộ: credentialId đã xoá → thời điểm xoá. Để passkey đã xoá không sống lại khi đồng bộ két. */
+  tomb?: Record<string, string>
 }
 export interface PasskeyInfo {
   id: string
@@ -129,6 +131,7 @@ async function readStore(profileId: string, secret: string): Promise<PkFile> {
   try {
     const parsed = JSON.parse(plain.toString('utf8')) as PkFile
     if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.creds)) throw new Error('bad')
+    if (!parsed.tomb || typeof parsed.tomb !== 'object') parsed.tomb = {}
     return parsed
   } catch {
     throw new PkError('UnknownError', 'Kho passkey bị hỏng.')
@@ -277,6 +280,7 @@ export function pkCreate(profileId: string, req: PkCreateReq): Promise<PkCreateR
     store.creds = store.creds.filter((c) => !(c.rpId === rpId && c.userHandle === cred.userHandle))
     store.creds.push(cred)
     await writeStore(profileId, secret, store)
+    notifyChanged()
 
     return {
       id: cred.id,
@@ -382,7 +386,9 @@ export function deletePasskey(profileId: string, credId: string): Promise<boolea
     const before = store.creds.length
     store.creds = store.creds.filter((c) => c.id !== String(credId))
     if (store.creds.length === before) return false
+    store.tomb = { ...(store.tomb ?? {}), [String(credId)]: new Date().toISOString() }
     await writeStore(profileId, secret, store)
+    notifyChanged()
     return true
   })
 }
@@ -482,10 +488,108 @@ export function importPasskeys(
       )
       const incomingIds = new Set(incoming.map((c) => c.id))
       store.creds = store.creds.filter((c) => !incomingIds.has(c.id)).concat(incoming)
+      for (const cid of incomingIds) if (store.tomb) delete store.tomb[cid]
       await writeStore(id, secret, store)
       profiles++
       creds += incoming.length
     }
+    if (profiles > 0) notifyChanged()
     return { profiles, creds, skipped }
   })
+}
+
+// ── Móc cho két passkey theo tài khoản (passkey-vault.ts) ─────────────────────
+let changeListener: (() => void) | null = null
+/** passkey-vault đăng ký để được báo mỗi khi kho đổi cấu trúc (tạo/xoá/khôi phục) → đẩy lên cloud. */
+export function setPasskeyChangeListener(fn: (() => void) | null): void {
+  changeListener = fn
+}
+function notifyChanged(): void {
+  try {
+    changeListener?.()
+  } catch {
+    /* không để lỗi của két làm hỏng việc tạo/xoá passkey */
+  }
+}
+
+/** Id các profile đang có file kho passkey trên máy này. */
+export async function listLocalPasskeyProfileIds(): Promise<string[]> {
+  const root = join(app.getPath('userData'), 'profiles')
+  let names: string[] = []
+  try {
+    names = await readdir(root)
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  for (const n of names) {
+    if (!/^[0-9a-f-]{36}$/i.test(n)) continue
+    try {
+      await stat(join(root, n, 'Default', 'vgc-passkeys.enc'))
+      out.push(n)
+    } catch {
+      /* chưa có */
+    }
+  }
+  return out
+}
+
+/** Đọc kho một profile (rỗng nếu chưa có file). null nếu không đọc/giải mã được (KHÔNG ghi đè). */
+export function readProfileStore(profileId: string): Promise<PkFile | null> {
+  return serialize(async () => {
+    const secret = await getAccountSecret()
+    if (!secret) return null
+    try {
+      return await readStore(profileId, secret)
+    } catch {
+      return null
+    }
+  })
+}
+
+/**
+ * Hợp nhất passkey + bia mộ từ két vào kho cục bộ của profile. Chỉ GHI khi có thay đổi.
+ * Trả số passkey MỚI được thêm. Không bao giờ xoá passkey ngoài phạm vi bia mộ.
+ */
+export function mergeProfileStore(
+  profileId: string,
+  remoteCreds: PkCred[],
+  remoteTomb: Record<string, string>
+): Promise<{ added: number; removed: number }> {
+  return serialize(async () => {
+    const secret = await secretOrThrow()
+    const store = await readStore(profileId, secret)
+    const tomb = { ...(store.tomb ?? {}), ...remoteTomb }
+    const before = JSON.stringify([store.creds, store.tomb])
+    const byId = new Map<string, PkCred>()
+    for (const c of store.creds) byId.set(c.id, c)
+    let added = 0
+    for (const c of remoteCreds) {
+      if (!c || typeof c.id !== 'string' || typeof c.pkcs8 !== 'string' || typeof c.rpId !== 'string') continue
+      if (tomb[c.id]) continue
+      const mine = byId.get(c.id)
+      if (!mine) { byId.set(c.id, c); added++ }
+      else if ((c.lastUsed ?? '') > (mine.lastUsed ?? '')) byId.set(c.id, { ...mine, lastUsed: c.lastUsed })
+    }
+    let removed = 0
+    for (const id of [...byId.keys()]) if (tomb[id]) { byId.delete(id); removed++ }
+    store.creds = [...byId.values()]
+    store.tomb = tomb
+    if (JSON.stringify([store.creds, store.tomb]) !== before) await writeStore(profileId, secret, store)
+    return { added, removed }
+  })
+}
+
+/** Xoá các bản sao lưu cục bộ tự động của profile (ids) hoặc của tất cả (null) — dùng khi tự huỷ. */
+export async function purgePasskeyBackups(profileIds: string[] | null): Promise<void> {
+  try {
+    const dir = backupDir()
+    for (const name of await readdir(dir)) {
+      if (profileIds === null || profileIds.some((id) => name.startsWith(id + '-'))) {
+        await rm(join(dir, name), { force: true })
+      }
+    }
+  } catch {
+    /* chưa có thư mục sao lưu */
+  }
 }
