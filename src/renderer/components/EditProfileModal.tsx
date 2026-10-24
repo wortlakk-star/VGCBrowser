@@ -112,13 +112,11 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
   const [proxyResult, setProxyResult] = useState<ProxyCheckResult | null>(null)
   const [savedProxies, setSavedProxies] = useState<SavedProxy[]>([])
   const [allProfiles, setAllProfiles] = useState<Profile[]>([])
-  // Khoá bảo vệ profile (tự huỷ khi nhập sai)
+  // Khoá bảo vệ profile: BẬT/TẮT bằng mật khẩu chủ chung (đặt trong Cài đặt), không có
+  // mật khẩu riêng từng profile.
   const [isLocked, setIsLocked] = useState(false)
   const [hasMaster, setHasMaster] = useState(false)
-  const [lockPw, setLockPw] = useState('')
-  const [lockPw2, setLockPw2] = useState('')
   const [lockLimit, setLockLimit] = useState(3)
-  const [lockAuth, setLockAuth] = useState('')
   const [lockMsg, setLockMsg] = useState('')
   const [savingLock, setSavingLock] = useState(false)
 
@@ -132,24 +130,18 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
     }).catch(() => {})
   }, [profile.id])
 
-  const saveLock = async (remove: boolean): Promise<void> => {
+  const toggleLock = async (checked: boolean): Promise<void> => {
     setLockMsg('')
-    if (!remove) {
-      if (lockPw.length < 1) { setLockMsg('Nhập mật khẩu khoá.'); return }
-      if (lockPw !== lockPw2) { setLockMsg('Hai ô mật khẩu không khớp.'); return }
+    if (checked && !hasMaster) {
+      setLockMsg('Chưa đặt mật khẩu chủ — vào Cài đặt đặt mật khẩu bảo mật trước.')
+      return
     }
     setSavingLock(true)
     try {
-      const res = await window.vgc.guardSetProfilePassword(
-        profile.id,
-        remove ? '' : lockPw,
-        remove ? undefined : lockLimit,
-        hasMaster || isLocked ? lockAuth : undefined
-      )
-      if (!res.ok) { setLockMsg(res.error || 'Không lưu được khoá.'); return }
-      setLockPw(''); setLockPw2(''); setLockAuth('')
-      setIsLocked(!remove)
-      setLockMsg(remove ? 'Đã gỡ khoá profile này.' : 'Đã đặt khoá cho profile này ✓')
+      const res = await window.vgc.guardSetProfileLock(profile.id, checked, lockLimit)
+      if (!res.ok) { setLockMsg(res.error || 'Không lưu được.'); return }
+      setIsLocked(checked)
+      setLockMsg(checked ? 'Đã BẬT khoá (mở bằng mật khẩu chủ) ✓' : 'Đã TẮT khoá profile này.')
     } finally {
       setSavingLock(false)
     }
@@ -398,42 +390,32 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
             <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: '#e0534f' }}>
               🔒 Khoá bảo vệ {isLocked && <span style={{ color: '#e0534f' }}>· ĐANG KHOÁ</span>}
             </div>
+            <label className="checks">
+              <span>
+                <input
+                  type="checkbox"
+                  checked={isLocked}
+                  disabled={savingLock}
+                  onChange={(e) => void toggleLock(e.target.checked)}
+                />{' '}
+                Bật khoá bảo vệ cho profile này
+              </span>
+            </label>
             <p className="hint" style={{ marginTop: -2 }}>
-              Đặt mật khẩu cho riêng profile này. Khi mở phải nhập đúng. <b>Nhập sai {lockLimit} lần
-              → XOÁ VĨNH VIỄN riêng profile này</b> (cả dữ liệu cloud, không khôi phục được). Tổng số
-              lần sai trên mọi profile chạm mức chung → xoá TẤT CẢ. Chỉ lưu mã băm, không lưu mật khẩu thật.
+              Bật = khi mở profile này phải nhập <b>mật khẩu chủ</b> (đặt một lần trong Cài đặt, dùng
+              chung cho mọi profile — không cần đặt riêng). <b>Nhập sai {lockLimit} lần → XOÁ VĨNH VIỄN
+              riêng profile này</b> (cả dữ liệu cloud, không khôi phục được); tổng sai trên mọi profile
+              chạm mức chung → xoá TẤT CẢ.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <label>
-                {isLocked ? 'Mật khẩu mới (đổi)' : 'Mật khẩu khoá'}
-                <input type="password" value={lockPw} onChange={(e) => setLockPw(e.target.value)} autoComplete="new-password" />
-              </label>
-              <label>
-                Nhập lại mật khẩu
-                <input type="password" value={lockPw2} onChange={(e) => setLockPw2(e.target.value)} autoComplete="new-password" />
-              </label>
-              <label>
                 Sai bao nhiêu lần thì xoá profile này
-                <input type="number" min={1} max={20} value={lockLimit} onChange={(e) => setLockLimit(Math.max(1, Math.min(20, Number(e.target.value) || 3)))} />
+                <input type="number" min={1} max={20} value={lockLimit}
+                  onChange={(e) => setLockLimit(Math.max(1, Math.min(20, Number(e.target.value) || 3)))}
+                  onBlur={() => { if (isLocked) void window.vgc.guardSetProfileLock(profile.id, true, lockLimit) }} />
               </label>
-              {(hasMaster || isLocked) && (
-                <label>
-                  Mật khẩu chủ (hoặc mật khẩu cũ của profile) để xác nhận
-                  <input type="password" value={lockAuth} onChange={(e) => setLockAuth(e.target.value)} autoComplete="off" />
-                </label>
-              )}
             </div>
-            <div className="row-inline" style={{ gap: 8, marginTop: 4 }}>
-              <button type="button" disabled={savingLock} onClick={() => void saveLock(false)}>
-                {isLocked ? 'Đổi mật khẩu khoá' : 'Đặt khoá'}
-              </button>
-              {isLocked && (
-                <button type="button" disabled={savingLock} onClick={() => void saveLock(true)} style={{ color: '#e0534f' }}>
-                  Gỡ khoá
-                </button>
-              )}
-              {lockMsg && <span className="hint" style={{ margin: 0 }}>{lockMsg}</span>}
-            </div>
+            {lockMsg && <p className="hint" style={{ margin: '4px 0 0' }}>{lockMsg}</p>}
             </>
             )}
 

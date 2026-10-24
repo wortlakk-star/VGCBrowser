@@ -116,7 +116,7 @@ import {
   lockedIds as guardLockedIds,
   isLocked as guardIsLocked,
   unlock as guardUnlock,
-  setProfilePassword as guardSetProfilePassword,
+  setProfileLock as guardSetProfileLock,
   setMaster as guardSetMaster,
   setSos as guardSetSos,
   setLimits as guardSetLimits
@@ -446,12 +446,11 @@ export function registerIpc(): void {
   handle('guard:unlock', (_e, id: string, pw: string) =>
     guardUnlock(requireProfileId(id), String(pw ?? '').slice(0, 1024))
   )
-  handle('guard:setProfilePassword', (_e, id: string, pw: string, limit?: number, auth?: string) =>
-    guardSetProfilePassword(
+  handle('guard:setProfileLock', (_e, id: string, locked: boolean, limit?: number) =>
+    guardSetProfileLock(
       requireProfileId(id),
-      String(pw ?? '').slice(0, 1024),
-      typeof limit === 'number' ? limit : undefined,
-      auth === undefined ? undefined : String(auth).slice(0, 1024)
+      locked === true,
+      typeof limit === 'number' ? limit : undefined
     )
   )
   handle('guard:setMaster', (_e, pw: string, auth?: string) =>

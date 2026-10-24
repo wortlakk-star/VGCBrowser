@@ -23,7 +23,9 @@ interface PwHash {
   hash: string // hex (scrypt, 64 byte)
 }
 interface ProfileLock {
-  pw: PwHash
+  // Mô hình mới: KHÔNG có mật khẩu riêng — mở bằng MẬT KHẨU CHỦ chung. `pw` chỉ còn để
+  // tương thích dữ liệu cũ (các lock đặt trong lúc thử nghiệm); không tạo mới nữa.
+  pw?: PwHash
   limit: number // số lần sai riêng profile này trước khi xoá nó
   wrong: number // số lần sai liên tiếp hiện tại
 }
@@ -86,11 +88,12 @@ function normalize(s: Partial<GuardConfig> | null): GuardConfig {
   out.globalWrong = clampInt(s.globalWrong, 0, 1_000_000, 0)
   if (s.profiles && typeof s.profiles === 'object') {
     for (const [id, v] of Object.entries(s.profiles)) {
-      if (v && isHash((v as ProfileLock).pw)) {
+      if (v && typeof v === 'object') {
+        const lock = v as ProfileLock
         out.profiles[id] = {
-          pw: (v as ProfileLock).pw,
-          limit: clampInt((v as ProfileLock).limit, 1, 99, out.perProfileLimit),
-          wrong: clampInt((v as ProfileLock).wrong, 0, 99, 0)
+          ...(isHash(lock.pw) ? { pw: lock.pw } : {}),
+          limit: clampInt(lock.limit, 1, 99, out.perProfileLimit),
+          wrong: clampInt(lock.wrong, 0, 99, 0)
         }
       }
     }
@@ -175,12 +178,21 @@ export async function isLocked(id: string): Promise<boolean> {
 export async function lockedIds(): Promise<string[]> {
   return Object.keys((await load()).profiles)
 }
+// Phiên admin: sau khi nhập đúng mật khẩu bảo mật (checkAdmin), được phép BẬT/TẮT khoá
+// cho từng profile mà KHÔNG phải gõ lại mật khẩu trong khoảng thời gian này.
+let adminUntil = 0
+const ADMIN_TTL = 30 * 60_000
+function adminActive(): boolean {
+  return adminUntil > Date.now()
+}
+
 /** Kiểm tra "mật khẩu bảo mật" để HIỆN phần khoá bảo vệ (ẩn mặc định). Dùng mật khẩu chủ.
- *  Khi CHƯA đặt mật khẩu chủ → cho phép mở để thiết lập lần đầu. */
+ *  Khi CHƯA đặt mật khẩu chủ → cho phép mở để thiết lập lần đầu. Mở đúng → bật phiên admin. */
 export async function checkAdmin(pw: string): Promise<boolean> {
   const cfg = await load()
-  if (!cfg.master) return true
-  return verify(pw, cfg.master)
+  const ok = !cfg.master || verify(pw, cfg.master)
+  if (ok) adminUntil = Date.now() + ADMIN_TTL
+  return ok
 }
 
 export async function guardStatus(): Promise<{
@@ -212,31 +224,32 @@ export async function setMaster(newPw: string, auth?: string): Promise<{ ok: boo
 }
 export async function setSos(newPw: string, auth?: string): Promise<{ ok: boolean; error?: string }> {
   return withWrite((cfg) => {
-    if (!hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    if (!adminActive() && !hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
     cfg.sos = newPw ? makeHash(newPw) : null
     return { ok: true }
   })
 }
-/** Đặt/đổi/gỡ mật khẩu cho 1 profile. newPw rỗng = gỡ khoá. auth = mật khẩu chủ HOẶC
- *  mật khẩu hiện tại của chính profile đó. */
-export async function setProfilePassword(
+/** BẬT/TẮT khoá cho 1 profile. Dùng chung MẬT KHẨU CHỦ (đặt trong Cài đặt) — không có
+ *  mật khẩu riêng từng profile. Chỉ cần đang trong phiên admin (đã nhập đúng mật khẩu bảo mật).
+ *  locked=true → profile này phải nhập mật khẩu chủ mới mở; false → gỡ khoá. */
+export async function setProfileLock(
   id: string,
-  newPw: string,
-  limit: number | undefined,
-  auth?: string
+  locked: boolean,
+  limit?: number
 ): Promise<{ ok: boolean; error?: string }> {
+  if (!adminActive()) return { ok: false, error: 'Hãy mở khoá bảo mật trong Cài đặt trước.' }
   return withWrite((cfg) => {
-    const cur = cfg.profiles[id]
-    const allowed = hasAdmin(cfg, auth) || (cur ? verify(auth ?? '', cur.pw) : true)
-    if (!allowed) return { ok: false, error: 'Sai mật khẩu để đổi khoá profile này.' }
-    if (!newPw) {
+    if (locked && !cfg.master) {
+      return { ok: false, error: 'Chưa đặt mật khẩu chủ trong Cài đặt — hãy đặt trước khi khoá profile.' }
+    }
+    if (!locked) {
       delete cfg.profiles[id]
       return { ok: true }
     }
+    const cur = cfg.profiles[id]
     cfg.profiles[id] = {
-      pw: makeHash(newPw),
       limit: clampInt(limit, 1, 99, cfg.perProfileLimit),
-      wrong: 0
+      wrong: cur?.wrong ?? 0
     }
     return { ok: true }
   })
@@ -247,7 +260,7 @@ export async function setLimits(
   auth?: string
 ): Promise<{ ok: boolean; error?: string }> {
   return withWrite((cfg) => {
-    if (!hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    if (!adminActive() && !hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
     cfg.perProfileLimit = clampInt(perProfileLimit, 1, 99, cfg.perProfileLimit)
     cfg.globalLimit = clampInt(globalLimit, 1, 999, cfg.globalLimit)
     return { ok: true }
@@ -270,8 +283,8 @@ export async function unlock(id: string, pw: string): Promise<UnlockResult> {
       grantTicket(id)
       return { ok: true, action: 'master' as const }
     }
-    // Mật khẩu đúng của profile.
-    if (entry && verify(pw, entry.pw)) {
+    // Tương thích dữ liệu cũ: lock từng-profile có mật khẩu riêng (thử nghiệm trước đây).
+    if (entry && verify(pw, entry.pw ?? null)) {
       entry.wrong = 0
       cfg.globalWrong = 0
       grantTicket(id)

@@ -300,13 +300,12 @@ const api = {
   guardIsLocked: (id: string): Promise<boolean> => ipcRenderer.invoke('guard:isLocked', id),
   guardUnlock: (id: string, pw: string): Promise<UnlockResult> =>
     ipcRenderer.invoke('guard:unlock', id, pw),
-  guardSetProfilePassword: (
+  guardSetProfileLock: (
     id: string,
-    pw: string,
-    limit?: number,
-    auth?: string
+    locked: boolean,
+    limit?: number
   ): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke('guard:setProfilePassword', id, pw, limit, auth),
+    ipcRenderer.invoke('guard:setProfileLock', id, locked, limit),
   guardSetMaster: (pw: string, auth?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setMaster', pw, auth),
   guardSetSos: (pw: string, auth?: string): Promise<{ ok: boolean; error?: string }> =>
