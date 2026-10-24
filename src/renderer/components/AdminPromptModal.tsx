@@ -34,7 +34,7 @@ export function AdminPromptModal({ title, desc, onOk, onClose }: Props): JSX.Ele
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop flat" onClick={onClose}>
       <div className="modal" style={{ width: 400 }} onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
           <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
