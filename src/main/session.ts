@@ -93,6 +93,8 @@ export function commitValidatedCloudSession(s: CloudSession | null): void {
   void reportRegistration(getCloudEmail())
   // Quét két passkey theo tài khoản và kéo passkey về các profile (passkey-vault.ts).
   if (s) void import('./passkey-vault').then((m) => m.onCloudLogin()).catch(() => {})
+  // Cấu hình khoá theo tài khoản: bật đồng bộ nền (lần kéo đầu do cloud:setSession chờ — guard-sync.ts).
+  if (s) void import('./guard-sync').then((m) => m.onGuardLogin()).catch(() => {})
 }
 
 export function getCloudSession(): CloudSession | null {

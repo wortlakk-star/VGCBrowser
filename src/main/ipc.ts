@@ -112,6 +112,7 @@ import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getCloudAuth, setCloudAuth, removeCloudAuth } from './cloud-auth-store'
 import { listPasskeys, deletePasskey, exportPasskeys, importPasskeys, PkError } from './passkeys'
 import { syncPasskeyVault } from './passkey-vault'
+import { syncGuardConfig } from './guard-sync'
 import {
   guardStatus,
   checkAdmin as guardCheckAdmin,
@@ -669,9 +670,19 @@ export function registerIpc(): void {
     if (sess) await validateCloudSession(sess)
     if (revision !== cloudSessionRevision) return false
     const currentUid = getCloudSession()?.uid ?? null
+    // Kéo cấu hình khoá của tài khoản (profile/nhóm khoá, mật khẩu chủ…) TRƯỚC khi giao diện hiện danh sách
+    // — nếu không máy mới đăng nhập sẽ thấy hết rồi mới ẩn. Quá 8 giây thì cho qua (lỗi mạng không chặn đăng nhập).
+    const pullGuard = async (): Promise<void> => {
+      if (!sess) return
+      await Promise.race([
+        syncGuardConfig().catch(() => null),
+        new Promise((resolve) => setTimeout(resolve, 8000))
+      ])
+    }
     if (currentUid === nextUid && !accountTransitionInProgress()) {
       commitValidatedCloudSession(sess)
       clearAccountSecretCache()
+      await pullGuard()
       return true
     }
     return runAccountTransition(async () => {
@@ -680,6 +691,7 @@ export function registerIpc(): void {
       if (revision !== cloudSessionRevision) return false
       commitValidatedCloudSession(sess)
       clearAccountSecretCache()
+      await pullGuard()
       return true
     })
   })

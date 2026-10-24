@@ -12,12 +12,13 @@
 
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
-import { rm } from 'fs/promises'
+import { rename, rm } from 'fs/promises'
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { readSecureJson, writeSecureJson } from './secure-store'
 import { deleteProfile, listProfiles, removeMany } from './store'
 import { deleteProfileCloudData } from './cloud-data'
 import { wipePasskeysFor } from './passkey-vault'
+import { getCloudSession } from './session'
 
 interface PwHash {
   salt: string // hex
@@ -46,6 +47,9 @@ interface GuardConfig {
   relockMinutes: number
   profiles: Record<string, ProfileLock>
   groups: Record<string, GroupLock> // key = tên nhóm
+  /** Số phiên bản cấu hình (thời điểm sửa gần nhất, ms). Tăng mỗi khi cấu hình ĐỒNG BỘ thay đổi; dùng để
+   *  quyết định bên nào (máy này hay cloud) mới hơn — xem guard-sync.ts. Bộ đếm sai KHÔNG tính. */
+  rev: number
 }
 
 const DEFAULTS: GuardConfig = {
@@ -56,7 +60,8 @@ const DEFAULTS: GuardConfig = {
   globalWrong: 0,
   relockMinutes: 5,
   profiles: {},
-  groups: {}
+  groups: {},
+  rev: 0
 }
 
 export type UnlockAction = 'ok' | 'master' | 'wrong' | 'wiped-profile' | 'wiped-all' | 'sos'
@@ -67,27 +72,161 @@ export interface UnlockResult {
   remainingGlobal?: number
 }
 
-function guardFile(): string {
-  return join(app.getPath('userData'), 'profile-guard.enc')
+// Cấu hình khoá lưu THEO TÀI KHOẢN (mỗi tài khoản một file) để đăng nhập tài khoản khác trên cùng
+// máy không lẫn cấu hình, và để đồng bộ cloud theo tài khoản (guard-sync.ts).
+// Chưa đăng nhập = 'local' → file cũ `profile-guard.enc`.
+function currentUid(): string {
+  return getCloudSession()?.uid ?? 'local'
+}
+function fileFor(uid: string): string {
+  return join(app.getPath('userData'), uid === 'local' ? 'profile-guard.enc' : `profile-guard-${uid}.enc`)
 }
 
 let cache: GuardConfig | null = null
+let cacheUid = ''
 let loading: Promise<GuardConfig> | null = null
+let loadingUid = ''
 let mutate: Promise<unknown> = Promise.resolve()
 
+/** Đọc file của tài khoản. Tài khoản chưa có file riêng thì NHẬN file cũ dùng chung của máy (cấu hình
+ *  tạo trước khi có đồng bộ) nếu chưa tài khoản nào nhận; file cũ được đổi tên để không ai nhận lại. */
+async function readOrClaim(uid: string): Promise<Partial<GuardConfig> | null> {
+  const own = await readSecureJson<Partial<GuardConfig>>(fileFor(uid)).catch(() => null)
+  if (own || uid === 'local') return own
+  const legacy = fileFor('local')
+  const old = await readSecureJson<Partial<GuardConfig>>(legacy).catch(() => null)
+  if (!old) return null
+  old.rev = 0 // cấu hình một-máy chưa từng đồng bộ → để guard-sync GỘP với bản trên cloud thay vì ghi đè
+  await writeSecureJson(fileFor(uid), old)
+  await rename(legacy, `${legacy}.claimed-${uid}`).catch(() => {})
+  return old
+}
+
 async function load(): Promise<GuardConfig> {
-  if (cache) return cache
-  if (loading) return loading
+  const uid = currentUid()
+  if (cache && cacheUid === uid) return cache
+  if (loading && loadingUid === uid) return loading
+  loadingUid = uid
   loading = (async () => {
-    const stored = await readSecureJson<Partial<GuardConfig>>(guardFile()).catch(() => null)
-    cache = normalize(stored)
-    return cache
+    if (cache && cacheUid !== uid) {
+      // Đổi tài khoản: huỷ mọi vé mở khoá và phiên admin của tài khoản trước.
+      tickets.clear()
+      adminUntil = 0
+    }
+    const cfg = normalize(await readOrClaim(uid))
+    cache = cfg
+    cacheUid = uid
+    return cfg
   })()
   try {
     return await loading
   } finally {
     loading = null
   }
+}
+
+// ── Đồng bộ cloud (guard-sync.ts) ────────────────────────────────────────────
+export interface GuardSyncData {
+  v: 1
+  rev: number
+  master: PwHash | null
+  sos: PwHash | null
+  perProfileLimit: number
+  globalLimit: number
+  relockMinutes: number
+  profiles: Record<string, { limit: number; pw?: PwHash }>
+  groups: Record<string, { pw: PwHash; limit: number }>
+}
+const toSyncData = (cfg: GuardConfig): GuardSyncData => ({
+  v: 1,
+  rev: cfg.rev,
+  master: cfg.master,
+  sos: cfg.sos,
+  perProfileLimit: cfg.perProfileLimit,
+  globalLimit: cfg.globalLimit,
+  relockMinutes: cfg.relockMinutes,
+  profiles: Object.fromEntries(
+    Object.keys(cfg.profiles)
+      .sort()
+      .map((id) => [id, { limit: cfg.profiles[id].limit, ...(cfg.profiles[id].pw ? { pw: cfg.profiles[id].pw } : {}) }])
+  ),
+  groups: Object.fromEntries(
+    Object.keys(cfg.groups)
+      .sort()
+      .map((n) => [n, { pw: cfg.groups[n].pw, limit: cfg.groups[n].limit }])
+  )
+})
+/** Chữ ký phần cấu hình ĐỒNG BỘ (bỏ rev, bỏ bộ đếm sai) — đổi chữ ký = có thay đổi cần đẩy lên cloud. */
+const syncSignature = (cfg: GuardConfig): string => {
+  const d = toSyncData(cfg) as Partial<GuardSyncData>
+  delete d.rev
+  return JSON.stringify(d)
+}
+const hasAnyConfig = (cfg: GuardConfig): boolean =>
+  !!cfg.master || !!cfg.sos || Object.keys(cfg.profiles).length > 0 || Object.keys(cfg.groups).length > 0
+
+let changeListener: (() => void) | null = null
+/** guard-sync đăng ký để biết khi cấu hình đồng bộ vừa đổi (→ đẩy lên cloud). */
+export function setGuardChangeListener(fn: (() => void) | null): void {
+  changeListener = fn
+}
+function broadcastGuardChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send('guard:changed')
+    } catch {
+      /* cửa sổ đã đóng */
+    }
+  }
+}
+
+/** Ảnh chụp cấu hình đồng bộ hiện tại của tài khoản đang đăng nhập. */
+export async function guardSyncSnapshot(): Promise<{ data: GuardSyncData; hasConfig: boolean }> {
+  const cfg = await load()
+  return { data: toSyncData(cfg), hasConfig: hasAnyConfig(cfg) }
+}
+
+/** Cấu hình cũ chưa từng đồng bộ (rev = 0) mà đang có nội dung → gán rev để đẩy lên cloud. */
+export function guardEnsureRev(): Promise<number> {
+  return withWrite((cfg) => {
+    if (cfg.rev === 0 && hasAnyConfig(cfg)) cfg.rev = Date.now()
+    return cfg.rev
+  }, false)
+}
+
+/**
+ * Nhận cấu hình từ cloud (mới hơn bản trên máy). Giữ nguyên BỘ ĐẾM SAI của máy này. Nếu bản trên máy là
+ * cấu hình cũ chưa đồng bộ (union = true) thì GỘP thêm các khoá profile/nhóm của máy vào (khoá nhiều hơn
+ * thay vì mất khoá) và coi như vừa sửa để đẩy lại. Trả true nếu cấu hình thật sự thay đổi.
+ */
+export function applyRemoteGuard(remote: GuardSyncData, union: boolean): Promise<boolean> {
+  return withWrite((cfg) => {
+    const before = syncSignature(cfg)
+    const next = normalize({
+      master: remote.master,
+      sos: remote.sos,
+      perProfileLimit: remote.perProfileLimit,
+      globalLimit: remote.globalLimit,
+      relockMinutes: remote.relockMinutes,
+      profiles: Object.fromEntries(
+        Object.entries(remote.profiles ?? {}).map(([id, v]) => [id, { ...v, wrong: cfg.profiles[id]?.wrong ?? 0 }])
+      ),
+      groups: Object.fromEntries(
+        Object.entries(remote.groups ?? {}).map(([n, v]) => [n, { ...v, wrong: cfg.groups[n]?.wrong ?? 0 }])
+      ),
+      globalWrong: cfg.globalWrong,
+      rev: remote.rev
+    } as unknown as Partial<GuardConfig>)
+    if (union) {
+      for (const [id, v] of Object.entries(cfg.profiles)) if (!next.profiles[id]) next.profiles[id] = v
+      for (const [n, v] of Object.entries(cfg.groups)) if (!next.groups[n]) next.groups[n] = v
+    }
+    Object.assign(cfg, next)
+    const changed = syncSignature(cfg) !== before
+    if (union && changed) cfg.rev = Math.max(Date.now(), remote.rev + 1)
+    if (changed) broadcastGuardChanged()
+    return changed
+  }, false)
 }
 
 function normalize(s: Partial<GuardConfig> | null): GuardConfig {
@@ -99,6 +238,7 @@ function normalize(s: Partial<GuardConfig> | null): GuardConfig {
   out.globalLimit = clampInt(s.globalLimit, 1, 999, DEFAULTS.globalLimit)
   out.relockMinutes = clampInt(s.relockMinutes, 0, 1440, DEFAULTS.relockMinutes)
   out.globalWrong = clampInt(s.globalWrong, 0, 1_000_000, 0)
+  out.rev = clampInt(s.rev, 0, Number.MAX_SAFE_INTEGER, 0)
   if (s.profiles && typeof s.profiles === 'object') {
     for (const [id, v] of Object.entries(s.profiles)) {
       if (v && typeof v === 'object') {
@@ -139,12 +279,24 @@ function clampInt(v: unknown, lo: number, hi: number, dflt: number): number {
 }
 
 /** Serialize all writes so two unlock attempts can't both read-modify-write stale state. */
-function withWrite<T>(fn: (cfg: GuardConfig) => Promise<T> | T): Promise<T> {
+function withWrite<T>(fn: (cfg: GuardConfig) => Promise<T> | T, bump = true): Promise<T> {
   const run = mutate.then(async () => {
     const cfg = await load()
+    const uid = cacheUid
+    const before = syncSignature(cfg)
     const result = await fn(cfg)
-    await writeSecureJson(guardFile(), cfg)
+    // Phần cấu hình ĐỒNG BỘ đổi (không tính bộ đếm sai) → tăng rev và báo guard-sync đẩy lên cloud.
+    const changed = bump && syncSignature(cfg) !== before
+    if (changed) cfg.rev = Math.max(Date.now(), cfg.rev + 1)
+    await writeSecureJson(fileFor(uid), cfg)
     cache = cfg
+    if (changed) {
+      try {
+        changeListener?.()
+      } catch {
+        /* lỗi của đồng bộ không được làm hỏng thao tác khoá */
+      }
+    }
     return result
   })
   mutate = run.then(

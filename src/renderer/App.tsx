@@ -646,6 +646,17 @@ export default function App(): JSX.Element {
     try { setHasMaster((await window.vgc.guardStatus()).hasMaster) } catch { setHasMaster(false) }
   }, [])
   useEffect(() => { void refreshHasMaster() }, [refreshHasMaster])
+
+  // Cấu hình khoá vừa đổi do đồng bộ từ máy khác trong cùng tài khoản → làm mới ẩn/khoá ngay.
+  useEffect(() => {
+    const off = window.vgc.onGuardChanged(() => {
+      void refreshLockedIds()
+      void refreshLockedGroups()
+      void refreshHasMaster()
+    })
+    return off
+  }, [refreshLockedIds, refreshLockedGroups, refreshHasMaster])
+
   // Hộp hỏi mật khẩu bảo mật khi bấm Khoá/Mở khoá mà phiên admin chưa mở.
   const [adminPrompt, setAdminPrompt] = useState<{ id: string } | null>(null)
   const toggleProfileLock = useCallback(async (id: string, locked: boolean) => {

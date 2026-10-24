@@ -8,6 +8,7 @@ Tất cả chạy trên **bản cách ly** hoặc bản mô phỏng — KHÔNG �
 | `lock-ext-e2e.cjs` | Extension khoá cửa sổ: khoá → thu nhỏ + hộp mật khẩu, sai/đúng | `node lock-ext-e2e.cjs` (cần engine VGC) |
 | `passkey-e2e.mjs` | Extension passkey với máy chủ WebAuthn thật (SimpleWebAuthn) trong engine VGC | `npm i` trong thư mục này rồi `node build.mjs && node passkey-e2e.mjs` |
 | `vault-unit.cjs` | Sao lưu tự động/file `.vgcpk`, két passkey theo tài khoản (2 máy giả lập, RLS thật) | `node vault-unit.cjs` (dùng esbuild của repo) |
+| `guard-sync-unit.cjs` | Khoá đi theo tài khoản: 3 máy giả lập (tiến trình riêng) + cloud giả có RLS thật: đẩy/nhận, gỡ khoá, mất mạng không ghi đè, tách tài khoản, gộp cấu hình cũ | `node guard-sync-unit.cjs` (cần esbuild) |
 | `version-gate-live.cjs` | Cổng chặn bản cũ: chạy mã thật với `min-version.json` thật trên vgcbrowser.com (bản cũ bị chặn, bản mới/mất mạng thì mở) | `node version-gate-live.cjs` |
 
 ## Dựng bản VGC cách ly (cho `guard-e2e.cjs`)

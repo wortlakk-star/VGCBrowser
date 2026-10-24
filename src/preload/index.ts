@@ -333,6 +333,11 @@ const api = {
     passphrase: string
   ): Promise<{ ok: boolean; canceled?: boolean; error?: string; profiles?: number; creds?: number; skipped?: number }> =>
     ipcRenderer.invoke('passkeys:import', passphrase),
+  onGuardChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('guard:changed', listener)
+    return () => ipcRenderer.removeListener('guard:changed', listener)
+  },
   guardSetRelock: (minutes: number): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setRelock', minutes),
   guardLockedGroups: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedGroups'),

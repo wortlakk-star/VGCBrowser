@@ -7,3 +7,5 @@ bundle-vault.cjs
 entry-vault.ts
 bundle-gate.cjs
 entry-gate.ts
+bundle-gs.cjs
+entry-gs.ts
