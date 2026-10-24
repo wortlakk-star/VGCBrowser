@@ -633,6 +633,11 @@ export default function App(): JSX.Element {
   const stop = useCallback(async (id: string) => {
     await window.vgc.stopProfile(id)
   }, [])
+  const toggleProfileLock = useCallback(async (id: string, locked: boolean) => {
+    const res = await window.vgc.guardSetProfileLock(id, locked)
+    if (!res.ok) { window.alert(res.error || 'Không đổi được khoá.'); return }
+    await refreshLockedIds()
+  }, [refreshLockedIds])
   const check = useCallback(async (id: string) => {
     try {
       await window.vgc.checkFingerprint(id)
@@ -1203,6 +1208,7 @@ export default function App(): JSX.Element {
               onSetAccountStatus={setAccountStatus}
               lockedIds={lockedIds}
               guardAdmin={guardAdmin}
+              onToggleLock={toggleProfileLock}
             />
           )}
         </main>

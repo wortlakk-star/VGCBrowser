@@ -28,6 +28,8 @@ interface Props {
   /** Id các profile đang bật khoá bảo vệ — chỉ hiện dấu 🔒 khi đã mở khoá bảo mật. */
   lockedIds: Set<string>
   guardAdmin: boolean
+  /** Bật/tắt khoá cho một profile (menu "..."). */
+  onToggleLock: (id: string, locked: boolean) => void | Promise<void>
 }
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
@@ -159,7 +161,8 @@ export function ProfileTable({
   onOpenProxyPicker,
   onSetAccountStatus,
   lockedIds,
-  guardAdmin
+  guardAdmin,
+  onToggleLock
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
@@ -388,6 +391,17 @@ export function ProfileTable({
                             <Icon name="share" size={16} />
                             Chia sẻ
                           </button>
+                          {guardAdmin && (
+                            <button
+                              onClick={() => {
+                                void onToggleLock(p.id, !lockedIds.has(p.id))
+                                setMenuFor(null)
+                              }}
+                            >
+                              <span style={{ width: 16, textAlign: 'center' }}>{lockedIds.has(p.id) ? '🔓' : '🔒'}</span>
+                              {lockedIds.has(p.id) ? 'Mở khoá profile' : 'Khoá profile'}
+                            </button>
+                          )}
                           <div className="menu-sep" />
                           <label className="menu-group">
                             <span>Nhóm</span>
