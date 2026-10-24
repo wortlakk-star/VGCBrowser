@@ -15,6 +15,7 @@ import { EditProfileModal } from './components/EditProfileModal'
 import { CreateProfileModal } from './components/CreateProfileModal'
 import { ProxyPickerModal } from './components/ProxyPickerModal'
 import { SettingsModal } from './components/SettingsModal'
+import { UnlockModal } from './components/UnlockModal'
 import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { ShareModal } from './components/ShareModal'
@@ -48,6 +49,7 @@ export default function App(): JSX.Element {
   const [sharing, setSharing] = useState<Profile | null>(null)
   const [proxyPickFor, setProxyPickFor] = useState<Profile | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [unlockFor, setUnlockFor] = useState<{ id: string; name: string } | null>(null)
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
@@ -198,6 +200,16 @@ export default function App(): JSX.Element {
     const off = window.vgc.onStatus((s) => {
       setStatuses((prev) => ({ ...prev, [s.id]: s.status }))
       if (s.error) console.error('[profile]', s.id, s.error)
+    })
+    return off
+  }, [refresh])
+
+  // Khoá bảo vệ: khi một profile / tất cả bị tự huỷ (kể cả xoá nền do mật khẩu SOS),
+  // làm mới danh sách để UI phản ánh đúng.
+  useEffect(() => {
+    const off = window.vgc.onGuardWiped(() => {
+      setUnlockFor(null)
+      void refresh()
     })
     return off
   }, [refresh])
@@ -524,18 +536,41 @@ export default function App(): JSX.Element {
     [proxyPool, refresh]
   )
 
-  const run = useCallback(
+  const doLaunch = useCallback(
     async (id: string) => {
       try {
         await window.vgc.launchProfile(id)
       } catch (e) {
-        window.alert(e instanceof Error ? e.message : String(e))
+        const msg = e instanceof Error ? e.message : String(e)
+        // Backstop: profile đã khoá mà chưa mở khoá → hiện hộp nhập mật khẩu.
+        if (msg.includes('PROFILE_LOCKED')) {
+          const p = profiles.find((x) => x.id === id)
+          setUnlockFor({ id, name: p?.name ?? id })
+          return
+        }
+        window.alert(msg)
         return
       }
       // Don't block the browser opening — check the proxy in the background.
       void autoCheckProxies([id])
     },
-    [autoCheckProxies]
+    [autoCheckProxies, profiles]
+  )
+  const run = useCallback(
+    async (id: string) => {
+      // Profile có khoá bảo vệ → hỏi mật khẩu trước khi mở.
+      try {
+        if (await window.vgc.guardIsLocked(id)) {
+          const p = profiles.find((x) => x.id === id)
+          setUnlockFor({ id, name: p?.name ?? id })
+          return
+        }
+      } catch {
+        /* không đọc được trạng thái khoá → cứ thử mở, main vẫn chặn nếu khoá */
+      }
+      await doLaunch(id)
+    },
+    [doLaunch, profiles]
   )
   const loginClean = useCallback(async (id: string) => {
     try {
@@ -1167,6 +1202,15 @@ export default function App(): JSX.Element {
             setShowSettings(false)
             setShowCloud(true)
           }}
+        />
+      )}
+      {unlockFor && (
+        <UnlockModal
+          id={unlockFor.id}
+          name={unlockFor.name}
+          onUnlocked={(id) => void doLaunch(id)}
+          onClose={() => setUnlockFor(null)}
+          onWiped={() => void refresh()}
         />
       )}
       {showCloud && <CloudModal onClose={() => setShowCloud(false)} onSynced={refresh} />}

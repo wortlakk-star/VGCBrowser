@@ -82,6 +82,47 @@ export function SettingsModal({
   const [cloudEncryptionConfigured, setCloudEncryptionConfigured] = useState(false)
   const [cloudEncryptionMsg, setCloudEncryptionMsg] = useState('')
 
+  // Khoá bảo vệ profile (tự huỷ khi nhập sai)
+  const [gHasMaster, setGHasMaster] = useState(false)
+  const [gHasSos, setGHasSos] = useState(false)
+  const [gPerLimit, setGPerLimit] = useState(3)
+  const [gGlobalLimit, setGGlobalLimit] = useState(5)
+  const [gLockedCount, setGLockedCount] = useState(0)
+  const [gMasterNew, setGMasterNew] = useState('')
+  const [gSosNew, setGSosNew] = useState('')
+  const [gAuth, setGAuth] = useState('')
+  const [gMsg, setGMsg] = useState('')
+
+  const loadGuard = async (): Promise<void> => {
+    const s = await window.vgc.guardStatus()
+    setGHasMaster(s.hasMaster)
+    setGHasSos(s.hasSos)
+    setGPerLimit(s.perProfileLimit)
+    setGGlobalLimit(s.globalLimit)
+    setGLockedCount(s.lockedCount)
+  }
+  const saveMaster = async (remove: boolean): Promise<void> => {
+    setGMsg('')
+    const res = await window.vgc.guardSetMaster(remove ? '' : gMasterNew, gHasMaster ? gAuth : undefined)
+    if (!res.ok) { setGMsg(res.error || 'Không lưu được.'); return }
+    setGMasterNew(''); setGAuth(''); setGMsg(remove ? 'Đã gỡ mật khẩu chủ.' : 'Đã lưu mật khẩu chủ ✓')
+    await loadGuard()
+  }
+  const saveSos = async (remove: boolean): Promise<void> => {
+    setGMsg('')
+    const res = await window.vgc.guardSetSos(remove ? '' : gSosNew, gHasMaster ? gAuth : undefined)
+    if (!res.ok) { setGMsg(res.error || 'Không lưu được.'); return }
+    setGSosNew(''); setGAuth(''); setGMsg(remove ? 'Đã gỡ mật khẩu SOS.' : 'Đã lưu mật khẩu SOS ✓')
+    await loadGuard()
+  }
+  const saveGuardLimits = async (): Promise<void> => {
+    setGMsg('')
+    const res = await window.vgc.guardSetLimits(gPerLimit, gGlobalLimit, gHasMaster ? gAuth : undefined)
+    if (!res.ok) { setGMsg(res.error || 'Không lưu được.'); return }
+    setGAuth(''); setGMsg('Đã lưu giới hạn ✓')
+    await loadGuard()
+  }
+
   const saveIproyal = async (): Promise<void> => {
     await window.vgc.saveProviderCreds({
       iproyal: { username: ipUser.trim(), password: ipPass.trim(), apiToken: ipToken.trim() }
@@ -171,6 +212,7 @@ export function SettingsModal({
       }
     })
     void window.vgc.getVersion().then(setVersion)
+    void loadGuard().catch(() => {})
     void window.vgc.cloudEncryptionStatus().then((status) => {
       setCloudEncryptionConfigured(status.configured && status.unlocked)
     })
@@ -300,6 +342,58 @@ export function SettingsModal({
                 </span>
               </div>
             </div>
+          </section>
+
+          <section className="card">
+            <h3>🔒 Khoá bảo vệ profile (tự huỷ)</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Đặt mật khẩu riêng cho từng profile ở màn <b>Sửa profile</b>. Khi mở phải nhập đúng.
+              Sai <b>{gPerLimit}</b> lần → xoá vĩnh viễn riêng profile đó; tổng sai <b>{gGlobalLimit}</b> lần
+              (mọi profile) → xoá <b>TẤT CẢ</b>. Dữ liệu xoá gồm cả bản trên cloud, <b>không khôi phục được</b>.
+              {gLockedCount > 0 && <> Hiện có <b>{gLockedCount}</b> profile đang khoá.</>}
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+              <label>
+                Sai mấy lần thì xoá 1 profile
+                <input type="number" min={1} max={99} value={gPerLimit} style={inp}
+                  onChange={(e) => setGPerLimit(Math.max(1, Math.min(99, Number(e.target.value) || 3)))} />
+              </label>
+              <label>
+                Tổng sai mấy lần thì xoá TẤT CẢ
+                <input type="number" min={1} max={999} value={gGlobalLimit} style={inp}
+                  onChange={(e) => setGGlobalLimit(Math.max(1, Math.min(999, Number(e.target.value) || 5)))} />
+              </label>
+            </div>
+
+            <label style={{ display: 'block', marginBottom: 6 }}>
+              Mật khẩu chủ {gHasMaster ? '(đã đặt — mở được mọi profile, không kích hoạt xoá)' : '(chưa đặt)'}
+              <input type="password" style={inp} value={gMasterNew} placeholder={gHasMaster ? 'Nhập để ĐỔI' : 'Đặt mật khẩu chủ'}
+                autoComplete="new-password" onChange={(e) => setGMasterNew(e.target.value)} />
+            </label>
+            <label style={{ display: 'block', marginBottom: 6 }}>
+              Mật khẩu SOS {gHasSos ? '(đã đặt — gõ vào ô mở khoá sẽ XOÁ TẤT CẢ)' : '(chưa đặt)'}
+              <input type="password" style={inp} value={gSosNew} placeholder={gHasSos ? 'Nhập để ĐỔI' : 'Đặt mật khẩu SOS (khẩn cấp)'}
+                autoComplete="new-password" onChange={(e) => setGSosNew(e.target.value)} />
+            </label>
+            {gHasMaster && (
+              <label style={{ display: 'block', marginBottom: 6 }}>
+                Xác nhận bằng mật khẩu chủ hiện tại
+                <input type="password" style={inp} value={gAuth} autoComplete="off"
+                  onChange={(e) => setGAuth(e.target.value)} />
+              </label>
+            )}
+            <div className="row-inline" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn" disabled={!gMasterNew} onClick={() => void saveMaster(false)}>Lưu mật khẩu chủ</button>
+              {gHasMaster && <button className="btn" onClick={() => void saveMaster(true)}>Gỡ mật khẩu chủ</button>}
+              <button className="btn" disabled={!gSosNew} onClick={() => void saveSos(false)}>Lưu SOS</button>
+              {gHasSos && <button className="btn" onClick={() => void saveSos(true)}>Gỡ SOS</button>}
+              <button className="btn" onClick={() => void saveGuardLimits()}>Lưu giới hạn</button>
+            </div>
+            {gMsg && <p className="hint" style={{ marginBottom: 0 }}>{gMsg}</p>}
+            <p className="hint" style={{ marginBottom: 0, color: '#e0534f' }}>
+              ⚠️ Nếu đặt mật khẩu chủ mà quên, sẽ không gỡ/đổi được khoá nào nữa (đúng tinh thần tự huỷ).
+            </p>
           </section>
 
           <section className="card">

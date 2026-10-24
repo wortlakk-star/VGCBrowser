@@ -1290,3 +1290,67 @@ export async function downloadProfileCookiesDb(id: string): Promise<CloudRows<Sa
     return null
   }
 }
+
+/**
+ * Xoá VĨNH VIỄN toàn bộ dữ liệu cloud của một profile — dùng cho tính năng "tự huỷ"
+ * (guard.ts): xoá 4 object trong Storage (session zip, cookies, logins, cookie-db)
+ * và đánh dấu xoá (tombstone) hàng trong bảng profiles_cloud để mọi máy khác cũng
+ * xoá theo khi đồng bộ. Best-effort: không ném lỗi — bản xoá LOCAL mới là phần bảo đảm;
+ * nhưng cố gắng xoá hết object nhạy cảm (cookie/mật khẩu/phiên) trên cloud.
+ * Trả về true nếu mọi lệnh cloud đều thành công.
+ */
+export async function deleteProfileCloudData(id: string): Promise<boolean> {
+  const session = getCloudSession()
+  if (!session) return false
+  const s = await getSettings()
+  if (!s.supabaseUrl || !s.supabaseAnonKey) return false
+  const ownerUid = (await ownerForProfile(id)) ?? session.uid
+  const auth = { Authorization: `Bearer ${session.accessToken}`, apikey: s.supabaseAnonKey }
+  let allOk = true
+
+  // 1) Xoá từng object trong Storage (404/400 = đã không còn, coi như OK).
+  const objects = [
+    storagePath(ownerUid, id),
+    cookiesObjectPath(ownerUid, id),
+    passwordsObjectPath(ownerUid, id),
+    cookiesDbObjectPath(ownerUid, id)
+  ]
+  for (const path of objects) {
+    try {
+      const res = await cloudFetch(`${s.supabaseUrl}/storage/v1/object/${BUCKET}/${path}`, {
+        method: 'DELETE',
+        headers: auth
+      })
+      await res.body?.cancel().catch(() => {})
+      if (!res.ok && res.status !== 404 && res.status !== 400) allOk = false
+    } catch (err) {
+      allOk = false
+      dbg(`[wipe ${id}] xoá object ${path} lỗi: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // 2) Tombstone hàng trong profiles_cloud (PATCH deleted=true); nếu cột chưa có thì xoá cứng.
+  const rowFilter = `owner=eq.${encodeURIComponent(session.uid)}&profile_id=eq.${encodeURIComponent(id)}`
+  try {
+    const res = await cloudFetch(`${s.supabaseUrl}/rest/v1/profiles_cloud?${rowFilter}`, {
+      method: 'PATCH',
+      headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ deleted: true, updated_at: new Date().toISOString() })
+    })
+    await res.body?.cancel().catch(() => {})
+    if (!res.ok) {
+      const del = await cloudFetch(`${s.supabaseUrl}/rest/v1/profiles_cloud?${rowFilter}`, {
+        method: 'DELETE',
+        headers: { ...auth, Prefer: 'return=minimal' }
+      })
+      await del.body?.cancel().catch(() => {})
+      if (!del.ok) allOk = false
+    }
+  } catch (err) {
+    allOk = false
+    dbg(`[wipe ${id}] tombstone row lỗi: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  dbg(`[wipe ${id}] cloud deleted allOk=${allOk}`)
+  return allOk
+}

@@ -1,0 +1,341 @@
+// ── VGC Browser — Khoá bảo vệ profile ("tự huỷ khi nhập sai") ────────────────
+// Mỗi profile có thể đặt MẬT KHẨU riêng. Khi mở profile đã khoá phải nhập đúng.
+//   • Sai liên tiếp tới giới hạn RIÊNG (mặc định 3) → xoá VĨNH VIỄN riêng profile đó.
+//   • Tổng số lần sai (mọi profile) tới giới hạn CHUNG (mặc định 5) → xoá TẤT CẢ.
+//   • MẬT KHẨU CHỦ (admin): mở được mọi profile, không tính là sai, không kích hoạt xoá.
+//   • MẬT KHẨU SOS (admin): gõ vào ô bất kỳ → xoá sạch TẤT CẢ ngay (dùng khi bị ép mở);
+//     giao diện vẫn báo "sai mật khẩu" để người ép không biết.
+// Chỉ lưu MÃ BĂM (scrypt + salt), không lưu mật khẩu thật. Cấu hình + bộ đếm lưu MÃ HOÁ
+// (secure-store, khoá theo máy) để tắt/mở app không reset được bộ đếm.
+//
+// ⚠️ Logic nằm ở MAIN (không phải renderer) để không bị qua mặt bằng devtools.
+
+import { app, BrowserWindow } from 'electron'
+import { join } from 'path'
+import { rm } from 'fs/promises'
+import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
+import { readSecureJson, writeSecureJson } from './secure-store'
+import { deleteProfile, listProfiles, removeMany } from './store'
+import { deleteProfileCloudData } from './cloud-data'
+
+interface PwHash {
+  salt: string // hex
+  hash: string // hex (scrypt, 64 byte)
+}
+interface ProfileLock {
+  pw: PwHash
+  limit: number // số lần sai riêng profile này trước khi xoá nó
+  wrong: number // số lần sai liên tiếp hiện tại
+}
+interface GuardConfig {
+  master: PwHash | null
+  sos: PwHash | null
+  perProfileLimit: number
+  globalLimit: number
+  globalWrong: number
+  profiles: Record<string, ProfileLock>
+}
+
+const DEFAULTS: GuardConfig = {
+  master: null,
+  sos: null,
+  perProfileLimit: 3,
+  globalLimit: 5,
+  globalWrong: 0,
+  profiles: {}
+}
+
+export type UnlockAction = 'ok' | 'master' | 'wrong' | 'wiped-profile' | 'wiped-all' | 'sos'
+export interface UnlockResult {
+  ok: boolean
+  action: UnlockAction
+  remainingProfile?: number | null
+  remainingGlobal?: number
+}
+
+function guardFile(): string {
+  return join(app.getPath('userData'), 'profile-guard.enc')
+}
+
+let cache: GuardConfig | null = null
+let loading: Promise<GuardConfig> | null = null
+let mutate: Promise<unknown> = Promise.resolve()
+
+async function load(): Promise<GuardConfig> {
+  if (cache) return cache
+  if (loading) return loading
+  loading = (async () => {
+    const stored = await readSecureJson<Partial<GuardConfig>>(guardFile()).catch(() => null)
+    cache = normalize(stored)
+    return cache
+  })()
+  try {
+    return await loading
+  } finally {
+    loading = null
+  }
+}
+
+function normalize(s: Partial<GuardConfig> | null): GuardConfig {
+  const out: GuardConfig = { ...DEFAULTS, profiles: {} }
+  if (!s || typeof s !== 'object') return out
+  out.master = isHash(s.master) ? s.master! : null
+  out.sos = isHash(s.sos) ? s.sos! : null
+  out.perProfileLimit = clampInt(s.perProfileLimit, 1, 99, DEFAULTS.perProfileLimit)
+  out.globalLimit = clampInt(s.globalLimit, 1, 999, DEFAULTS.globalLimit)
+  out.globalWrong = clampInt(s.globalWrong, 0, 1_000_000, 0)
+  if (s.profiles && typeof s.profiles === 'object') {
+    for (const [id, v] of Object.entries(s.profiles)) {
+      if (v && isHash((v as ProfileLock).pw)) {
+        out.profiles[id] = {
+          pw: (v as ProfileLock).pw,
+          limit: clampInt((v as ProfileLock).limit, 1, 99, out.perProfileLimit),
+          wrong: clampInt((v as ProfileLock).wrong, 0, 99, 0)
+        }
+      }
+    }
+  }
+  return out
+}
+
+function isHash(h: unknown): h is PwHash {
+  return (
+    !!h &&
+    typeof h === 'object' &&
+    typeof (h as PwHash).salt === 'string' &&
+    typeof (h as PwHash).hash === 'string'
+  )
+}
+function clampInt(v: unknown, lo: number, hi: number, dflt: number): number {
+  const n = Math.floor(Number(v))
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt
+}
+
+/** Serialize all writes so two unlock attempts can't both read-modify-write stale state. */
+function withWrite<T>(fn: (cfg: GuardConfig) => Promise<T> | T): Promise<T> {
+  const run = mutate.then(async () => {
+    const cfg = await load()
+    const result = await fn(cfg)
+    await writeSecureJson(guardFile(), cfg)
+    cache = cfg
+    return result
+  })
+  mutate = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
+
+function makeHash(pw: string): PwHash {
+  const salt = randomBytes(16)
+  const hash = scryptSync(pw, salt, 64)
+  return { salt: salt.toString('hex'), hash: hash.toString('hex') }
+}
+function verify(pw: string, h: PwHash | null): boolean {
+  if (!h || !pw) return false
+  try {
+    const derived = scryptSync(pw, Buffer.from(h.salt, 'hex'), 64)
+    const stored = Buffer.from(h.hash, 'hex')
+    return stored.length === derived.length && timingSafeEqual(stored, derived)
+  } catch {
+    return false
+  }
+}
+
+/** Người gọi phải chứng minh quyền admin để đổi/gỡ khoá. Khi CHƯA đặt mật khẩu chủ thì
+ *  cho phép (thiết lập lần đầu). Đã đặt → bắt buộc đúng mật khẩu chủ. */
+function hasAdmin(cfg: GuardConfig, auth: string | undefined): boolean {
+  if (!cfg.master) return true
+  return verify(auth ?? '', cfg.master)
+}
+
+// ── Vé mở khoá tạm (one-shot) ────────────────────────────────────────────────
+// unlock() thành công → cấp vé; launchProfile() ở main tiêu vé. Renderer không thể
+// tự mở profile đã khoá mà không qua unlock().
+const tickets = new Map<string, number>()
+const TICKET_TTL = 2 * 60_000
+function grantTicket(id: string): void {
+  tickets.set(id, Date.now() + TICKET_TTL)
+}
+export function consumeUnlock(id: string): boolean {
+  const exp = tickets.get(id)
+  if (exp && exp > Date.now()) {
+    tickets.delete(id)
+    return true
+  }
+  tickets.delete(id)
+  return false
+}
+
+// ── API đọc trạng thái ───────────────────────────────────────────────────────
+export async function isLocked(id: string): Promise<boolean> {
+  return !!(await load()).profiles[id]
+}
+export async function lockedIds(): Promise<string[]> {
+  return Object.keys((await load()).profiles)
+}
+export async function guardStatus(): Promise<{
+  hasMaster: boolean
+  hasSos: boolean
+  perProfileLimit: number
+  globalLimit: number
+  globalWrong: number
+  lockedCount: number
+}> {
+  const cfg = await load()
+  return {
+    hasMaster: !!cfg.master,
+    hasSos: !!cfg.sos,
+    perProfileLimit: cfg.perProfileLimit,
+    globalLimit: cfg.globalLimit,
+    globalWrong: cfg.globalWrong,
+    lockedCount: Object.keys(cfg.profiles).length
+  }
+}
+
+// ── Đặt/gỡ mật khẩu ──────────────────────────────────────────────────────────
+export async function setMaster(newPw: string, auth?: string): Promise<{ ok: boolean; error?: string }> {
+  return withWrite((cfg) => {
+    if (!hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    cfg.master = newPw ? makeHash(newPw) : null
+    return { ok: true }
+  })
+}
+export async function setSos(newPw: string, auth?: string): Promise<{ ok: boolean; error?: string }> {
+  return withWrite((cfg) => {
+    if (!hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    cfg.sos = newPw ? makeHash(newPw) : null
+    return { ok: true }
+  })
+}
+/** Đặt/đổi/gỡ mật khẩu cho 1 profile. newPw rỗng = gỡ khoá. auth = mật khẩu chủ HOẶC
+ *  mật khẩu hiện tại của chính profile đó. */
+export async function setProfilePassword(
+  id: string,
+  newPw: string,
+  limit: number | undefined,
+  auth?: string
+): Promise<{ ok: boolean; error?: string }> {
+  return withWrite((cfg) => {
+    const cur = cfg.profiles[id]
+    const allowed = hasAdmin(cfg, auth) || (cur ? verify(auth ?? '', cur.pw) : true)
+    if (!allowed) return { ok: false, error: 'Sai mật khẩu để đổi khoá profile này.' }
+    if (!newPw) {
+      delete cfg.profiles[id]
+      return { ok: true }
+    }
+    cfg.profiles[id] = {
+      pw: makeHash(newPw),
+      limit: clampInt(limit, 1, 99, cfg.perProfileLimit),
+      wrong: 0
+    }
+    return { ok: true }
+  })
+}
+export async function setLimits(
+  perProfileLimit: number,
+  globalLimit: number,
+  auth?: string
+): Promise<{ ok: boolean; error?: string }> {
+  return withWrite((cfg) => {
+    if (!hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    cfg.perProfileLimit = clampInt(perProfileLimit, 1, 99, cfg.perProfileLimit)
+    cfg.globalLimit = clampInt(globalLimit, 1, 999, cfg.globalLimit)
+    return { ok: true }
+  })
+}
+
+// ── Mở khoá (chỗ đếm sai + quyết định xoá) ───────────────────────────────────
+export async function unlock(id: string, pw: string): Promise<UnlockResult> {
+  return withWrite((cfg) => {
+    const entry = cfg.profiles[id]
+    // SOS: xoá tất cả nhưng GIẢ VỜ báo sai (không để kẻ ép biết).
+    if (verify(pw, cfg.sos)) {
+      void wipeAll('sos')
+      return { ok: false, action: 'sos' as const }
+    }
+    // Mật khẩu chủ: mở, reset mọi bộ đếm.
+    if (verify(pw, cfg.master)) {
+      if (entry) entry.wrong = 0
+      cfg.globalWrong = 0
+      grantTicket(id)
+      return { ok: true, action: 'master' as const }
+    }
+    // Mật khẩu đúng của profile.
+    if (entry && verify(pw, entry.pw)) {
+      entry.wrong = 0
+      cfg.globalWrong = 0
+      grantTicket(id)
+      return { ok: true, action: 'ok' as const }
+    }
+    // SAI: tăng bộ đếm riêng + chung.
+    if (entry) entry.wrong += 1
+    cfg.globalWrong += 1
+    const perLimit = entry?.limit ?? cfg.perProfileLimit
+    if (cfg.globalWrong >= cfg.globalLimit) {
+      void wipeAll('global')
+      return { ok: false, action: 'wiped-all' as const }
+    }
+    if (entry && entry.wrong >= perLimit) {
+      const targetId = id
+      void wipeProfile(targetId, 'perprofile')
+      return { ok: false, action: 'wiped-profile' as const }
+    }
+    return {
+      ok: false,
+      action: 'wrong' as const,
+      remainingProfile: entry ? Math.max(0, perLimit - entry.wrong) : null,
+      remainingGlobal: Math.max(0, cfg.globalLimit - cfg.globalWrong)
+    }
+  })
+}
+
+// ── Xoá vĩnh viễn ─────────────────────────────────────────────────────────────
+function localProfileDir(id: string): string {
+  return join(app.getPath('userData'), 'profiles', id)
+}
+function broadcastWiped(payload: { scope: 'profile' | 'all'; id?: string; reason: string }): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send('guard:wiped', payload)
+    } catch {
+      /* cửa sổ đã đóng */
+    }
+  }
+}
+async function stopEngine(id: string): Promise<void> {
+  try {
+    const mod = await import('./profile-manager')
+    mod.stopProfile(id)
+  } catch {
+    /* profile-manager chưa sẵn sàng / không chạy */
+  }
+}
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+export async function wipeProfile(id: string, reason: string): Promise<void> {
+  await stopEngine(id)
+  await sleep(1500) // chờ engine nhả khoá file trước khi xoá thư mục
+  await deleteProfileCloudData(id).catch(() => {})
+  await rm(localProfileDir(id), { recursive: true, force: true }).catch(() => {})
+  await deleteProfile(id).catch(() => {})
+  await withWrite((cfg) => {
+    delete cfg.profiles[id]
+  })
+  broadcastWiped({ scope: 'profile', id, reason })
+}
+
+export async function wipeAll(reason: string): Promise<void> {
+  const profiles = await listProfiles().catch(() => [])
+  for (const p of profiles) await stopEngine(p.id)
+  await sleep(1500)
+  for (const p of profiles) await deleteProfileCloudData(p.id).catch(() => {})
+  await rm(join(app.getPath('userData'), 'profiles'), { recursive: true, force: true }).catch(() => {})
+  await removeMany(profiles.map((p) => p.id)).catch(() => {})
+  await withWrite((cfg) => {
+    cfg.profiles = {}
+    cfg.globalWrong = 0
+  })
+  broadcastWiped({ scope: 'all', reason })
+}

@@ -99,6 +99,7 @@ import {
   waitForHandoff
 } from './profile-lock'
 import { getMachineId } from './machine-id'
+import { isLocked as isProfileLocked, consumeUnlock as consumeUnlockTicket } from './guard'
 
 export interface LaunchProfileOptions {
   headless?: boolean
@@ -1379,6 +1380,11 @@ async function launchProfileImpl(
     throw new Error('Tài khoản đã thay đổi trong lúc mở profile.')
   }
   if (!profile) throw new Error(`Không tìm thấy profile: ${id}`)
+  // Khoá bảo vệ: profile đã đặt mật khẩu chỉ mở được sau khi unlock() cấp vé (guard.ts).
+  // Backstop ở MAIN — renderer bắt buộc phải qua bước nhập mật khẩu, không thể gọi thẳng.
+  if ((await isProfileLocked(id)) && !consumeUnlockTicket(id)) {
+    throw new Error('PROFILE_LOCKED')
+  }
   if (profile.os !== hostOs()) {
     throw new Error(
       `Profile ${profile.os} không tương thích host ${hostOs()}. Hãy tạo fingerprint cùng hệ điều hành máy.`

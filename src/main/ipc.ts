@@ -111,6 +111,16 @@ import {
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getCloudAuth, setCloudAuth, removeCloudAuth } from './cloud-auth-store'
 import {
+  guardStatus,
+  lockedIds as guardLockedIds,
+  isLocked as guardIsLocked,
+  unlock as guardUnlock,
+  setProfilePassword as guardSetProfilePassword,
+  setMaster as guardSetMaster,
+  setSos as guardSetSos,
+  setLimits as guardSetLimits
+} from './guard'
+import {
   getProviderCreds,
   saveProviderCreds,
   buildProviderProxy,
@@ -426,6 +436,35 @@ export function registerIpc(): void {
   handle('profiles:stop', (_e, id: string) => {
     stopProfile(requireProfileId(id))
   })
+
+  // ── Khoá bảo vệ profile (guard.ts): mật khẩu từng profile + tự huỷ khi nhập sai ──
+  handle('guard:status', () => guardStatus())
+  handle('guard:lockedIds', () => guardLockedIds())
+  handle('guard:isLocked', (_e, id: string) => guardIsLocked(requireProfileId(id)))
+  handle('guard:unlock', (_e, id: string, pw: string) =>
+    guardUnlock(requireProfileId(id), String(pw ?? '').slice(0, 1024))
+  )
+  handle('guard:setProfilePassword', (_e, id: string, pw: string, limit?: number, auth?: string) =>
+    guardSetProfilePassword(
+      requireProfileId(id),
+      String(pw ?? '').slice(0, 1024),
+      typeof limit === 'number' ? limit : undefined,
+      auth === undefined ? undefined : String(auth).slice(0, 1024)
+    )
+  )
+  handle('guard:setMaster', (_e, pw: string, auth?: string) =>
+    guardSetMaster(String(pw ?? '').slice(0, 1024), auth === undefined ? undefined : String(auth).slice(0, 1024))
+  )
+  handle('guard:setSos', (_e, pw: string, auth?: string) =>
+    guardSetSos(String(pw ?? '').slice(0, 1024), auth === undefined ? undefined : String(auth).slice(0, 1024))
+  )
+  handle('guard:setLimits', (_e, perProfile: number, global: number, auth?: string) =>
+    guardSetLimits(
+      Number(perProfile),
+      Number(global),
+      auth === undefined ? undefined : String(auth).slice(0, 1024)
+    )
+  )
 
   handle('profiles:checkFingerprint', (_e, id: string, url?: string) =>
     checkFingerprint(requireProfileId(id), url)

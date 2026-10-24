@@ -469,3 +469,20 @@ export interface WarmSchedule {
   minutes: number
   lastRun?: string // ISO
 }
+
+// ── Khoá bảo vệ profile (guard.ts) ───────────────────────────────────────────
+export interface GuardStatus {
+  hasMaster: boolean
+  hasSos: boolean
+  perProfileLimit: number
+  globalLimit: number
+  globalWrong: number
+  lockedCount: number
+}
+export type GuardUnlockAction = 'ok' | 'master' | 'wrong' | 'wiped-profile' | 'wiped-all' | 'sos'
+export interface UnlockResult {
+  ok: boolean
+  action: GuardUnlockAction
+  remainingProfile?: number | null
+  remainingGlobal?: number
+}

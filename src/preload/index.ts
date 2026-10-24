@@ -29,7 +29,9 @@ import type {
   ProxyProviderId,
   SavedProxy,
   UpdateStatus,
-  LicenseCheckResult
+  LicenseCheckResult,
+  GuardStatus,
+  UnlockResult
 } from '../shared/types'
 
 const api = {
@@ -289,6 +291,35 @@ const api = {
     const listener = (_e: unknown, state: DataSyncState): void => cb(state)
     ipcRenderer.on('profile:dataSync', listener)
     return () => ipcRenderer.removeListener('profile:dataSync', listener)
+  },
+
+  // ── Khoá bảo vệ profile (tự huỷ khi nhập sai) ──
+  guardStatus: (): Promise<GuardStatus> => ipcRenderer.invoke('guard:status'),
+  guardLockedIds: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedIds'),
+  guardIsLocked: (id: string): Promise<boolean> => ipcRenderer.invoke('guard:isLocked', id),
+  guardUnlock: (id: string, pw: string): Promise<UnlockResult> =>
+    ipcRenderer.invoke('guard:unlock', id, pw),
+  guardSetProfilePassword: (
+    id: string,
+    pw: string,
+    limit?: number,
+    auth?: string
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:setProfilePassword', id, pw, limit, auth),
+  guardSetMaster: (pw: string, auth?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:setMaster', pw, auth),
+  guardSetSos: (pw: string, auth?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:setSos', pw, auth),
+  guardSetLimits: (
+    perProfile: number,
+    global: number,
+    auth?: string
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:setLimits', perProfile, global, auth),
+  onGuardWiped: (cb: (p: { scope: 'profile' | 'all'; id?: string; reason: string }) => void): (() => void) => {
+    const listener = (_e: unknown, p: { scope: 'profile' | 'all'; id?: string; reason: string }): void => cb(p)
+    ipcRenderer.on('guard:wiped', listener)
+    return () => ipcRenderer.removeListener('guard:wiped', listener)
   }
 }
 
