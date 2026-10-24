@@ -478,6 +478,7 @@ export interface GuardStatus {
   globalLimit: number
   globalWrong: number
   lockedCount: number
+  relockMinutes: number
 }
 export type GuardUnlockAction = 'ok' | 'master' | 'wrong' | 'wiped-profile' | 'wiped-all' | 'sos'
 export interface UnlockResult {

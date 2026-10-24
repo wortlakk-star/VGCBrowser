@@ -93,6 +93,7 @@ export function SettingsModal({
   const [gPerLimit, setGPerLimit] = useState(3)
   const [gGlobalLimit, setGGlobalLimit] = useState(5)
   const [gLockedCount, setGLockedCount] = useState(0)
+  const [gRelock, setGRelock] = useState(5)
   const [gMasterNew, setGMasterNew] = useState('')
   const [gSosNew, setGSosNew] = useState('')
   const [gAuth, setGAuth] = useState('')
@@ -146,6 +147,7 @@ export function SettingsModal({
     setGPerLimit(s.perProfileLimit)
     setGGlobalLimit(s.globalLimit)
     setGLockedCount(s.lockedCount)
+    setGRelock(s.relockMinutes)
   }
   const saveMaster = async (remove: boolean): Promise<void> => {
     setGMsg('')
@@ -165,6 +167,8 @@ export function SettingsModal({
     setGMsg('')
     const res = await window.vgc.guardSetLimits(gPerLimit, gGlobalLimit, gHasMaster ? gAuth : undefined)
     if (!res.ok) { setGMsg(res.error || 'Không lưu được.'); return }
+    const rl = await window.vgc.guardSetRelock(gRelock)
+    if (!rl.ok) { setGMsg(rl.error || 'Không lưu được thời gian tự khoá.'); return }
     setGAuth(''); setGMsg('Đã lưu giới hạn ✓')
     await loadGuard()
   }
@@ -434,6 +438,15 @@ export function SettingsModal({
                 </label>
               </div>
 
+              <label style={{ display: 'block', marginBottom: 8 }}>
+                Tự khoá cửa sổ trình duyệt sau (phút không thao tác, 0 = tắt)
+                <input type="number" min={0} max={1440} value={gRelock} style={inp}
+                  onChange={(e) => setGRelock(Math.max(0, Math.min(1440, Number(e.target.value) || 0)))} />
+                <span className="hint" style={{ display: 'block', margin: '2px 0 0' }}>
+                  Profile khoá đang mở: hết thời gian này thì mọi cửa sổ của nó bị thu nhỏ và phải nhập
+                  mật khẩu chủ mới dùng lại được. Áp dụng cho profile mở từ lần sau.
+                </span>
+              </label>
               <label style={{ display: 'block', marginBottom: 6 }}>
                 Mật khẩu chủ {gHasMaster ? '(đã đặt — cũng là mật khẩu bảo mật để mở phần này)' : '(chưa đặt)'}
                 <input type="password" style={inp} value={gMasterNew} placeholder={gHasMaster ? 'Nhập để ĐỔI' : 'Đặt mật khẩu chủ'}

@@ -318,6 +318,8 @@ const api = {
     auth?: string
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setLimits', perProfile, global, auth),
+  guardSetRelock: (minutes: number): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:setRelock', minutes),
   guardLockedGroups: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedGroups'),
   guardSetGroupLock: (
     name: string,

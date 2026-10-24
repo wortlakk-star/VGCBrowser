@@ -41,6 +41,8 @@ interface GuardConfig {
   perProfileLimit: number
   globalLimit: number
   globalWrong: number
+  /** Số phút hệ thống không có thao tác thì cửa sổ trình duyệt của profile khoá tự khoá lại (0 = tắt). */
+  relockMinutes: number
   profiles: Record<string, ProfileLock>
   groups: Record<string, GroupLock> // key = tên nhóm
 }
@@ -51,6 +53,7 @@ const DEFAULTS: GuardConfig = {
   perProfileLimit: 3,
   globalLimit: 5,
   globalWrong: 0,
+  relockMinutes: 5,
   profiles: {},
   groups: {}
 }
@@ -93,6 +96,7 @@ function normalize(s: Partial<GuardConfig> | null): GuardConfig {
   out.sos = isHash(s.sos) ? s.sos! : null
   out.perProfileLimit = clampInt(s.perProfileLimit, 1, 99, DEFAULTS.perProfileLimit)
   out.globalLimit = clampInt(s.globalLimit, 1, 999, DEFAULTS.globalLimit)
+  out.relockMinutes = clampInt(s.relockMinutes, 0, 1440, DEFAULTS.relockMinutes)
   out.globalWrong = clampInt(s.globalWrong, 0, 1_000_000, 0)
   if (s.profiles && typeof s.profiles === 'object') {
     for (const [id, v] of Object.entries(s.profiles)) {
@@ -221,6 +225,7 @@ export async function guardStatus(): Promise<{
   globalLimit: number
   globalWrong: number
   lockedCount: number
+  relockMinutes: number
 }> {
   const cfg = await load()
   return {
@@ -229,7 +234,8 @@ export async function guardStatus(): Promise<{
     perProfileLimit: cfg.perProfileLimit,
     globalLimit: cfg.globalLimit,
     globalWrong: cfg.globalWrong,
-    lockedCount: Object.keys(cfg.profiles).length
+    lockedCount: Object.keys(cfg.profiles).length,
+    relockMinutes: cfg.relockMinutes
   }
 }
 
@@ -286,8 +292,20 @@ export async function setLimits(
   })
 }
 
+/** Số phút không thao tác thì cửa sổ trình duyệt của profile khoá tự khoá lại (0 = tắt). */
+export async function getRelockMinutes(): Promise<number> {
+  return (await load()).relockMinutes
+}
+export async function setRelockMinutes(minutes: number): Promise<{ ok: boolean; error?: string }> {
+  if (!adminActive()) return { ok: false, error: 'Hãy mở khoá bảo mật trong Cài đặt trước.' }
+  return withWrite((cfg) => {
+    cfg.relockMinutes = clampInt(minutes, 0, 1440, cfg.relockMinutes)
+    return { ok: true }
+  })
+}
+
 // ── Mở khoá (chỗ đếm sai + quyết định xoá) ───────────────────────────────────
-export async function unlock(id: string, pw: string): Promise<UnlockResult> {
+export async function unlock(id: string, pw: string, grant = true): Promise<UnlockResult> {
   return withWrite((cfg) => {
     const entry = cfg.profiles[id]
     // SOS: xoá tất cả nhưng GIẢ VỜ báo sai (không để kẻ ép biết).
@@ -299,14 +317,14 @@ export async function unlock(id: string, pw: string): Promise<UnlockResult> {
     if (verify(pw, cfg.master)) {
       if (entry) entry.wrong = 0
       cfg.globalWrong = 0
-      grantTicket(id)
+      if (grant) grantTicket(id)
       return { ok: true, action: 'master' as const }
     }
     // Tương thích dữ liệu cũ: lock từng-profile có mật khẩu riêng (thử nghiệm trước đây).
     if (entry && verify(pw, entry.pw ?? null)) {
       entry.wrong = 0
       cfg.globalWrong = 0
-      grantTicket(id)
+      if (grant) grantTicket(id)
       return { ok: true, action: 'ok' as const }
     }
     // SAI: tăng bộ đếm riêng + chung.

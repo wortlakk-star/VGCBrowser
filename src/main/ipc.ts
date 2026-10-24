@@ -120,6 +120,7 @@ import {
   setMaster as guardSetMaster,
   setSos as guardSetSos,
   setLimits as guardSetLimits,
+  setRelockMinutes as guardSetRelockMinutes,
   lockedGroupNames as guardLockedGroups,
   setGroupLock as guardSetGroupLock,
   unlockGroup as guardUnlockGroup
@@ -462,6 +463,7 @@ export function registerIpc(): void {
   handle('guard:setSos', (_e, pw: string, auth?: string) =>
     guardSetSos(String(pw ?? '').slice(0, 1024), auth === undefined ? undefined : String(auth).slice(0, 1024))
   )
+  handle('guard:setRelock', (_e, minutes: number) => guardSetRelockMinutes(Number(minutes)))
   handle('guard:lockedGroups', () => guardLockedGroups())
   handle('guard:setGroupLock', (_e, name: string, code: string, limit?: number) =>
     guardSetGroupLock(
