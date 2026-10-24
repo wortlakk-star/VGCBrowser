@@ -5,3 +5,5 @@ entry.ts
 stub-*.cjs
 bundle-vault.cjs
 entry-vault.ts
+bundle-gate.cjs
+entry-gate.ts
