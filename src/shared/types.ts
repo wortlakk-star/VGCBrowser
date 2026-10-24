@@ -486,3 +486,16 @@ export interface UnlockResult {
   remainingProfile?: number | null
   remainingGlobal?: number
 }
+
+export interface GroupUnlockResult {
+  ok: boolean
+  action: 'ok' | 'master' | 'wrong' | 'wiped-group' | 'wiped-all' | 'sos'
+  group?: string
+  remainingGlobal?: number
+}
+export interface GuardWipedEvent {
+  scope: 'profile' | 'all' | 'group'
+  id?: string
+  group?: string
+  reason: string
+}

@@ -31,7 +31,9 @@ import type {
   UpdateStatus,
   LicenseCheckResult,
   GuardStatus,
-  UnlockResult
+  UnlockResult,
+  GroupUnlockResult,
+  GuardWipedEvent
 } from '../shared/types'
 
 const api = {
@@ -316,8 +318,17 @@ const api = {
     auth?: string
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setLimits', perProfile, global, auth),
-  onGuardWiped: (cb: (p: { scope: 'profile' | 'all'; id?: string; reason: string }) => void): (() => void) => {
-    const listener = (_e: unknown, p: { scope: 'profile' | 'all'; id?: string; reason: string }): void => cb(p)
+  guardLockedGroups: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedGroups'),
+  guardSetGroupLock: (
+    name: string,
+    code: string,
+    limit?: number
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:setGroupLock', name, code, limit),
+  guardUnlockGroup: (code: string): Promise<GroupUnlockResult> =>
+    ipcRenderer.invoke('guard:unlockGroup', code),
+  onGuardWiped: (cb: (p: GuardWipedEvent) => void): (() => void) => {
+    const listener = (_e: unknown, p: GuardWipedEvent): void => cb(p)
     ipcRenderer.on('guard:wiped', listener)
     return () => ipcRenderer.removeListener('guard:wiped', listener)
   }

@@ -29,6 +29,12 @@ interface ProfileLock {
   limit: number // số lần sai riêng profile này trước khi xoá nó
   wrong: number // số lần sai liên tiếp hiện tại
 }
+/** Khoá theo NHÓM: nhóm có mã riêng; profile trong nhóm bị ẩn tới khi nhập đúng mã. */
+interface GroupLock {
+  pw: PwHash
+  limit: number // sai mấy lần thì xoá cả nhóm
+  wrong: number
+}
 interface GuardConfig {
   master: PwHash | null
   sos: PwHash | null
@@ -36,6 +42,7 @@ interface GuardConfig {
   globalLimit: number
   globalWrong: number
   profiles: Record<string, ProfileLock>
+  groups: Record<string, GroupLock> // key = tên nhóm
 }
 
 const DEFAULTS: GuardConfig = {
@@ -44,7 +51,8 @@ const DEFAULTS: GuardConfig = {
   perProfileLimit: 3,
   globalLimit: 5,
   globalWrong: 0,
-  profiles: {}
+  profiles: {},
+  groups: {}
 }
 
 export type UnlockAction = 'ok' | 'master' | 'wrong' | 'wiped-profile' | 'wiped-all' | 'sos'
@@ -79,7 +87,7 @@ async function load(): Promise<GuardConfig> {
 }
 
 function normalize(s: Partial<GuardConfig> | null): GuardConfig {
-  const out: GuardConfig = { ...DEFAULTS, profiles: {} }
+  const out: GuardConfig = { ...DEFAULTS, profiles: {}, groups: {} }
   if (!s || typeof s !== 'object') return out
   out.master = isHash(s.master) ? s.master! : null
   out.sos = isHash(s.sos) ? s.sos! : null
@@ -94,6 +102,17 @@ function normalize(s: Partial<GuardConfig> | null): GuardConfig {
           ...(isHash(lock.pw) ? { pw: lock.pw } : {}),
           limit: clampInt(lock.limit, 1, 99, out.perProfileLimit),
           wrong: clampInt(lock.wrong, 0, 99, 0)
+        }
+      }
+    }
+  }
+  if (s.groups && typeof s.groups === 'object') {
+    for (const [name, v] of Object.entries(s.groups)) {
+      if (v && isHash((v as GroupLock).pw)) {
+        out.groups[name] = {
+          pw: (v as GroupLock).pw,
+          limit: clampInt((v as GroupLock).limit, 1, 99, out.perProfileLimit),
+          wrong: clampInt((v as GroupLock).wrong, 0, 99, 0)
         }
       }
     }
@@ -312,11 +331,73 @@ export async function unlock(id: string, pw: string): Promise<UnlockResult> {
   })
 }
 
+// ── Khoá theo NHÓM ────────────────────────────────────────────────────────────
+export async function lockedGroupNames(): Promise<string[]> {
+  return Object.keys((await load()).groups)
+}
+export async function isGroupLocked(name: string): Promise<boolean> {
+  return !!(await load()).groups[name]
+}
+/** Đặt/đổi/gỡ mã khoá cho một nhóm. code rỗng = gỡ khoá nhóm. Cần đang trong phiên admin. */
+export async function setGroupLock(
+  name: string,
+  code: string,
+  limit?: number
+): Promise<{ ok: boolean; error?: string }> {
+  if (!adminActive()) return { ok: false, error: 'Hãy mở khoá bảo mật trong Cài đặt trước.' }
+  const g = String(name || '').trim()
+  if (!g) return { ok: false, error: 'Tên nhóm trống.' }
+  return withWrite((cfg) => {
+    if (!code) {
+      delete cfg.groups[g]
+      return { ok: true }
+    }
+    cfg.groups[g] = { pw: makeHash(code), limit: clampInt(limit, 1, 99, cfg.perProfileLimit), wrong: 0 }
+    return { ok: true }
+  })
+}
+
+export interface GroupUnlockResult {
+  ok: boolean
+  action: 'ok' | 'master' | 'wrong' | 'wiped-group' | 'wiped-all' | 'sos'
+  group?: string // tên nhóm vừa mở (ok) — hoặc '*' khi mật khẩu chủ mở tất cả
+  remainingGlobal?: number
+}
+/** Nhập một mã để mở nhóm ẩn. Mã khớp nhóm nào → mở nhóm đó. Mật khẩu chủ → mở TẤT CẢ nhóm.
+ *  SOS → xoá tất cả. Sai (không khớp) → tăng đếm chung; chạm mức chung → xoá tất cả. */
+export async function unlockGroup(code: string): Promise<GroupUnlockResult> {
+  return withWrite((cfg) => {
+    if (verify(code, cfg.sos)) {
+      void wipeAll('sos')
+      return { ok: false, action: 'sos' as const }
+    }
+    if (verify(code, cfg.master)) {
+      for (const g of Object.values(cfg.groups)) g.wrong = 0
+      cfg.globalWrong = 0
+      return { ok: true, action: 'master' as const, group: '*' }
+    }
+    for (const [name, g] of Object.entries(cfg.groups)) {
+      if (verify(code, g.pw)) {
+        g.wrong = 0
+        cfg.globalWrong = 0
+        return { ok: true, action: 'ok' as const, group: name }
+      }
+    }
+    // Sai: không khớp nhóm nào.
+    cfg.globalWrong += 1
+    if (cfg.globalWrong >= cfg.globalLimit) {
+      void wipeAll('global')
+      return { ok: false, action: 'wiped-all' as const }
+    }
+    return { ok: false, action: 'wrong' as const, remainingGlobal: Math.max(0, cfg.globalLimit - cfg.globalWrong) }
+  })
+}
+
 // ── Xoá vĩnh viễn ─────────────────────────────────────────────────────────────
 function localProfileDir(id: string): string {
   return join(app.getPath('userData'), 'profiles', id)
 }
-function broadcastWiped(payload: { scope: 'profile' | 'all'; id?: string; reason: string }): void {
+function broadcastWiped(payload: { scope: 'profile' | 'all' | 'group'; id?: string; group?: string; reason: string }): void {
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       win.webContents.send('guard:wiped', payload)
@@ -347,6 +428,24 @@ export async function wipeProfile(id: string, reason: string): Promise<void> {
   broadcastWiped({ scope: 'profile', id, reason })
 }
 
+/** Xoá vĩnh viễn toàn bộ profile thuộc một nhóm + gỡ khoá nhóm. */
+export async function wipeGroup(name: string, reason: string): Promise<void> {
+  const all = await listProfiles().catch(() => [])
+  const inGroup = all.filter((p) => (p.group ?? '') === name)
+  for (const p of inGroup) await stopEngine(p.id)
+  await sleep(1500)
+  for (const p of inGroup) {
+    await deleteProfileCloudData(p.id).catch(() => {})
+    await rm(localProfileDir(p.id), { recursive: true, force: true }).catch(() => {})
+  }
+  await removeMany(inGroup.map((p) => p.id)).catch(() => {})
+  await withWrite((cfg) => {
+    for (const p of inGroup) delete cfg.profiles[p.id]
+    delete cfg.groups[name]
+  })
+  broadcastWiped({ scope: 'group', group: name, reason })
+}
+
 export async function wipeAll(reason: string): Promise<void> {
   const profiles = await listProfiles().catch(() => [])
   for (const p of profiles) await stopEngine(p.id)
@@ -356,6 +455,7 @@ export async function wipeAll(reason: string): Promise<void> {
   await removeMany(profiles.map((p) => p.id)).catch(() => {})
   await withWrite((cfg) => {
     cfg.profiles = {}
+    cfg.groups = {}
     cfg.globalWrong = 0
   })
   broadcastWiped({ scope: 'all', reason })

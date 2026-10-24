@@ -99,6 +99,29 @@ export function SettingsModal({
   const [gMsg, setGMsg] = useState('')
   const [revealPw, setRevealPw] = useState('')
   const [revealMsg, setRevealMsg] = useState('')
+  const [groupNames, setGroupNames] = useState<string[]>([])
+  const [lockedGroupSet, setLockedGroupSet] = useState<Set<string>>(new Set())
+  const [groupCodeInput, setGroupCodeInput] = useState<Record<string, string>>({})
+  const [groupMsg, setGroupMsg] = useState('')
+
+  const loadGroups = async (): Promise<void> => {
+    try {
+      const profs = await window.vgc.listProfiles()
+      const names = Array.from(new Set(profs.map((p) => p.group).filter((g): g is string => !!g))).sort()
+      setGroupNames(names)
+      setLockedGroupSet(new Set(await window.vgc.guardLockedGroups()))
+    } catch { /* ignore */ }
+  }
+  const saveGroupLock = async (name: string, remove: boolean): Promise<void> => {
+    setGroupMsg('')
+    const code = remove ? '' : (groupCodeInput[name] ?? '')
+    if (!remove && code.length < 1) { setGroupMsg(`Nhập mã cho nhóm "${name}".`); return }
+    const res = await window.vgc.guardSetGroupLock(name, code, gPerLimit)
+    if (!res.ok) { setGroupMsg(res.error || 'Không lưu được.'); return }
+    setGroupCodeInput((prev) => ({ ...prev, [name]: '' }))
+    setGroupMsg(remove ? `Đã gỡ khoá nhóm "${name}".` : `Đã khoá nhóm "${name}" ✓`)
+    await loadGroups()
+  }
 
   const revealGuard = async (): Promise<void> => {
     setRevealMsg('')
@@ -107,6 +130,7 @@ export function SettingsModal({
       onSetGuardAdmin(true)
       setRevealPw('')
       await loadGuard()
+      await loadGroups()
     } else {
       setRevealMsg('Sai mật khẩu bảo mật.')
       setRevealPw('')
@@ -433,6 +457,42 @@ export function SettingsModal({
                 <button className="btn" onClick={() => void saveGuardLimits()}>Lưu giới hạn</button>
               </div>
               {gMsg && <p className="hint" style={{ marginBottom: 0 }}>{gMsg}</p>}
+
+              <div style={{ borderTop: '1px solid var(--border)', margin: '10px 0 6px', paddingTop: 8 }}>
+                <b>🗂 Khoá theo nhóm</b>
+                <p className="hint" style={{ marginTop: 2 }}>
+                  Khoá cả một nhóm bằng <b>mã riêng</b>. Nhóm bị khoá sẽ <b>ẩn hẳn</b> khỏi danh sách; gõ
+                  đúng mã (ở ô "🔒 Mã nhóm" cột trái) mới hiện. Nhập sai mã quá {gPerLimit} lần → xoá vĩnh viễn
+                  cả nhóm; tổng sai chạm {gGlobalLimit} → xoá TẤT CẢ. Mật khẩu chủ mở được mọi nhóm.
+                </p>
+                {groupNames.length === 0 ? (
+                  <p className="hint" style={{ margin: 0 }}>Chưa có nhóm nào. Tạo nhóm và gán profile vào nhóm trước.</p>
+                ) : (
+                  groupNames.map((name) => (
+                    <div key={name} className="row-inline" style={{ gap: 6, marginBottom: 4, alignItems: 'center' }}>
+                      <span style={{ minWidth: 110, fontWeight: 600 }}>
+                        {lockedGroupSet.has(name) ? '🔒 ' : ''}{name}
+                      </span>
+                      <input
+                        type="password"
+                        style={{ ...inp, maxWidth: 160 }}
+                        placeholder={lockedGroupSet.has(name) ? 'Mã mới (đổi)' : 'Đặt mã khoá'}
+                        autoComplete="new-password"
+                        value={groupCodeInput[name] ?? ''}
+                        onChange={(e) => setGroupCodeInput((prev) => ({ ...prev, [name]: e.target.value }))}
+                      />
+                      <button className="btn" onClick={() => void saveGroupLock(name, false)}>
+                        {lockedGroupSet.has(name) ? 'Đổi mã' : 'Khoá'}
+                      </button>
+                      {lockedGroupSet.has(name) && (
+                        <button className="btn" style={{ color: '#e0534f' }} onClick={() => void saveGroupLock(name, true)}>Gỡ</button>
+                      )}
+                    </div>
+                  ))
+                )}
+                {groupMsg && <p className="hint" style={{ margin: 0 }}>{groupMsg}</p>}
+              </div>
+
               <p className="hint" style={{ marginBottom: 0, color: '#e0534f' }}>
                 ⚠️ Nếu đặt mật khẩu chủ mà quên, sẽ không gỡ/đổi được khoá nào nữa, và không mở lại được phần
                 này (đúng tinh thần tự huỷ).

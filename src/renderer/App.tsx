@@ -63,6 +63,18 @@ export default function App(): JSX.Element {
     }
   }, [guardAdmin])
   useEffect(() => { void refreshLockedIds() }, [refreshLockedIds])
+  // Khoá theo NHÓM: tên các nhóm đang khoá (để ẩn) + nhóm đã mở trong phiên này.
+  const [lockedGroups, setLockedGroups] = useState<Set<string>>(new Set())
+  const [revealedGroups, setRevealedGroups] = useState<Set<string>>(new Set())
+  const refreshLockedGroups = useCallback(async () => {
+    try { setLockedGroups(new Set(await window.vgc.guardLockedGroups())) } catch { setLockedGroups(new Set()) }
+  }, [])
+  useEffect(() => { void refreshLockedGroups() }, [refreshLockedGroups])
+  // Nhóm bị ẩn = đang khoá, chưa mở trong phiên, và chưa bật chế độ admin bảo mật.
+  const hiddenGroups = useMemo(() => {
+    if (guardAdmin) return new Set<string>()
+    return new Set([...lockedGroups].filter((g) => !revealedGroups.has(g)))
+  }, [lockedGroups, revealedGroups, guardAdmin])
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
@@ -208,6 +220,23 @@ export default function App(): JSX.Element {
     setLoading(false)
   }, [])
 
+  const unlockGroupByCode = useCallback(async (code: string): Promise<{ ok: boolean; msg?: string }> => {
+    const res = await window.vgc.guardUnlockGroup(code)
+    if (res.ok) {
+      if (res.group === '*') setRevealedGroups(new Set(lockedGroups))
+      else if (res.group) setRevealedGroups((prev) => new Set(prev).add(res.group as string))
+      return { ok: true }
+    }
+    if (res.action === 'wiped-all') {
+      window.alert('Nhập sai quá số lần — TẤT CẢ profile đã bị xoá vĩnh viễn.')
+      void refresh()
+      return { ok: false }
+    }
+    // 'wrong' và 'sos' hiện chung một thông báo (không lộ mã SOS).
+    const rem = typeof res.remainingGlobal === 'number' ? ` Còn ${res.remainingGlobal} lần trước khi xoá tất cả.` : ''
+    return { ok: false, msg: 'Sai mã.' + rem }
+  }, [lockedGroups, refresh])
+
   useEffect(() => {
     void refresh()
     const off = window.vgc.onStatus((s) => {
@@ -224,9 +253,10 @@ export default function App(): JSX.Element {
       setUnlockFor(null)
       void refresh()
       void refreshLockedIds()
+      void refreshLockedGroups()
     })
     return off
-  }, [refresh, refreshLockedIds])
+  }, [refresh, refreshLockedIds, refreshLockedGroups])
 
   // ── Cloud auto-sync (GoLogin-style) ──────────────────────────────────────────
   // Set when an auto-pull just rewrote a local list, so the matching auto-push
@@ -636,12 +666,16 @@ export default function App(): JSX.Element {
     const m = new Map<string, number>()
     for (const g of groups) m.set(g, 0) // persisted groups show even when empty
     for (const p of profiles) if (p.group) m.set(p.group, (m.get(p.group) ?? 0) + 1)
-    return [...m.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name))
-  }, [profiles, groups])
+    return [...m.entries()]
+      .filter(([name]) => !hiddenGroups.has(name)) // nhóm khoá chưa mở → ẩn khỏi sidebar
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [profiles, groups, hiddenGroups])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return profiles.filter((p) => {
+      if (p.group && hiddenGroups.has(p.group)) return false // ẩn profile trong nhóm khoá chưa mở
       if (groupFilter === '#ungrouped' && p.group) return false
       if (groupFilter && groupFilter !== '#ungrouped' && p.group !== groupFilter) return false
       if (statusFilter && p.account?.status !== statusFilter) return false
@@ -653,7 +687,7 @@ export default function App(): JSX.Element {
         (p.group ?? '').toLowerCase().includes(q)
       )
     })
-  }, [profiles, query, groupFilter, statusFilter])
+  }, [profiles, query, groupFilter, statusFilter, hiddenGroups])
 
   // ── selection ──
   const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id))
@@ -902,6 +936,7 @@ export default function App(): JSX.Element {
         onSettings={() => setShowSettings(true)}
         onCreateGroup={createGroup}
         onDeleteGroup={deleteGroup}
+        onUnlockGroup={unlockGroupByCode}
       />
 
       <div className="main">

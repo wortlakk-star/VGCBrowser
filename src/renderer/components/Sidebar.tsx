@@ -19,6 +19,8 @@ interface Props {
   onSettings: () => void
   onCreateGroup: (name: string) => void
   onDeleteGroup: (name: string) => void
+  /** Nhập mã để mở một nhóm đang ẩn. Trả về ok + thông báo lỗi nếu sai. */
+  onUnlockGroup: (code: string) => Promise<{ ok: boolean; msg?: string }>
 }
 
 export function Sidebar({
@@ -36,10 +38,20 @@ export function Sidebar({
   onProxy,
   onSettings,
   onCreateGroup,
-  onDeleteGroup
+  onDeleteGroup,
+  onUnlockGroup
 }: Props): JSX.Element {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [groupCode, setGroupCode] = useState('')
+  const [groupCodeMsg, setGroupCodeMsg] = useState('')
+  const submitGroupCode = async (): Promise<void> => {
+    if (!groupCode) return
+    const res = await onUnlockGroup(groupCode)
+    setGroupCode('')
+    setGroupCodeMsg(res.ok ? '' : (res.msg ?? 'Sai mã.'))
+    if (res.ok) setGroupCodeMsg('')
+  }
   const submitGroup = (): void => {
     const n = newName.trim()
     if (n) onCreateGroup(n)
@@ -146,6 +158,22 @@ export function Sidebar({
             </div>
           ))}
         </div>
+
+        <div className="nav-divider" />
+        <div style={{ padding: '2px 8px 6px', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input
+            type="password"
+            value={groupCode}
+            placeholder="🔒 Mã nhóm"
+            autoComplete="off"
+            onChange={(e) => setGroupCode(e.target.value)}
+            onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') void submitGroupCode() }}
+            style={{ flex: 1, minWidth: 0, padding: '6px 8px', fontSize: 13, borderRadius: 7, border: '1px solid var(--border)', background: 'var(--panel-2)', color: 'var(--text)' }}
+            title="Nhập mã để mở một nhóm đang ẩn"
+          />
+          <button className="nav-del" title="Mở nhóm" onClick={() => void submitGroupCode()} style={{ padding: '6px 10px' }}>Mở</button>
+        </div>
+        {groupCodeMsg && <div className="nav-empty" style={{ color: '#e0534f', paddingTop: 0 }}>{groupCodeMsg}</div>}
 
         <div className="nav-divider" />
         <button className="nav-row" onClick={onProxy}>

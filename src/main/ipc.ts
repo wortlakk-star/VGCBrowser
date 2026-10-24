@@ -119,7 +119,10 @@ import {
   setProfileLock as guardSetProfileLock,
   setMaster as guardSetMaster,
   setSos as guardSetSos,
-  setLimits as guardSetLimits
+  setLimits as guardSetLimits,
+  lockedGroupNames as guardLockedGroups,
+  setGroupLock as guardSetGroupLock,
+  unlockGroup as guardUnlockGroup
 } from './guard'
 import {
   getProviderCreds,
@@ -459,6 +462,15 @@ export function registerIpc(): void {
   handle('guard:setSos', (_e, pw: string, auth?: string) =>
     guardSetSos(String(pw ?? '').slice(0, 1024), auth === undefined ? undefined : String(auth).slice(0, 1024))
   )
+  handle('guard:lockedGroups', () => guardLockedGroups())
+  handle('guard:setGroupLock', (_e, name: string, code: string, limit?: number) =>
+    guardSetGroupLock(
+      String(name ?? '').slice(0, 200),
+      String(code ?? '').slice(0, 1024),
+      typeof limit === 'number' ? limit : undefined
+    )
+  )
+  handle('guard:unlockGroup', (_e, code: string) => guardUnlockGroup(String(code ?? '').slice(0, 1024)))
   handle('guard:setLimits', (_e, perProfile: number, global: number, auth?: string) =>
     guardSetLimits(
       Number(perProfile),
