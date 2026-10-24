@@ -64,6 +64,14 @@ export default function App(): JSX.Element {
     }
   }, [guardAdmin])
   useEffect(() => { void refreshLockedIds() }, [refreshLockedIds])
+  // Thông báo nổi cho tính năng khoá: không chặn giao diện (thay window.alert), tự ẩn.
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; title: string; text: string } | null>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showNotice = useCallback((kind: 'ok' | 'err', title: string, text: string, ms = 4000) => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    setNotice({ kind, title, text })
+    noticeTimer.current = setTimeout(() => setNotice(null), ms)
+  }, [])
   // Khoá theo NHÓM: tên các nhóm đang khoá (để ẩn) + nhóm đã mở trong phiên này.
   const [lockedGroups, setLockedGroups] = useState<Set<string>>(new Set())
   const [revealedGroups, setRevealedGroups] = useState<Set<string>>(new Set())
@@ -230,7 +238,7 @@ export default function App(): JSX.Element {
       return { ok: true }
     }
     if (res.action === 'wiped-all') {
-      window.alert('Nhập sai quá số lần — TẤT CẢ profile đã bị xoá vĩnh viễn.')
+      showNotice('err', 'Đã xoá tất cả', 'Nhập sai quá số lần — TẤT CẢ profile đã bị xoá vĩnh viễn.', 9000)
       void refresh()
       return { ok: false }
     }
@@ -648,16 +656,17 @@ export default function App(): JSX.Element {
       return
     }
     const res = await window.vgc.guardSetProfileLock(id, locked)
-    if (!res.ok) { window.alert(res.error || 'Không đổi được khoá.'); return }
+    if (!res.ok) { showNotice('err', 'Không đổi được khoá', res.error || 'Thử lại.'); return }
+    showNotice('ok', locked ? 'Đã khoá profile' : 'Đã mở khoá profile', locked ? 'Mở profile này phải nhập mật khẩu chủ.' : 'Profile mở bình thường.')
     await refreshLockedIds()
-  }, [guardAdmin, refreshLockedIds])
+  }, [guardAdmin, refreshLockedIds, showNotice])
   const applyToggleAfterPrompt = useCallback(async (id: string) => {
     const nowLocked = await window.vgc.guardIsLocked(id)
     const res = await window.vgc.guardSetProfileLock(id, !nowLocked)
-    if (!res.ok) { window.alert(res.error || 'Không đổi được khoá.'); return }
-    window.alert(nowLocked ? 'Đã MỞ KHOÁ profile.' : 'Đã KHOÁ profile (mở phải nhập mật khẩu chủ).')
+    if (!res.ok) { showNotice('err', 'Không đổi được khoá', res.error || 'Thử lại.'); return }
+    showNotice('ok', nowLocked ? 'Đã mở khoá profile' : 'Đã khoá profile', nowLocked ? 'Profile mở bình thường.' : 'Mở profile này phải nhập mật khẩu chủ.')
     await refreshLockedIds()
-  }, [refreshLockedIds])
+  }, [refreshLockedIds, showNotice])
   const check = useCallback(async (id: string) => {
     try {
       await window.vgc.checkFingerprint(id)
@@ -736,17 +745,30 @@ export default function App(): JSX.Element {
   }, [filtered])
 
   // ── bulk + import/export ──
+  // Mở hàng loạt không hỏi mật khẩu từng profile: bỏ qua profile đang khoá và báo rõ,
+  // thay vì để chúng im lặng không mở.
+  const splitLocked = useCallback(async (ids: string[]): Promise<string[]> => {
+    let locked: string[] = []
+    try { locked = await window.vgc.guardLockedIds() } catch { /* không đọc được → cứ để main chặn */ }
+    const set = new Set(locked)
+    const skipped = ids.filter((id) => set.has(id)).length
+    if (skipped > 0) {
+      showNotice('err', 'Bỏ qua profile đang khoá', `${skipped} profile khoá không mở hàng loạt được — mở riêng từng cái và nhập mật khẩu.`, 6000)
+    }
+    return ids.filter((id) => !set.has(id))
+  }, [showNotice])
   const bulkRun = useCallback(async () => {
-    const ids = [...selected]
+    const ids = await splitLocked([...selected])
+    if (!ids.length) return
     await window.vgc.launchMany(ids)
     void autoCheckProxies(ids)
-  }, [selected, autoCheckProxies])
+  }, [selected, autoCheckProxies, splitLocked])
   const bulkStop = useCallback(async () => {
     await window.vgc.stopMany([...selected])
   }, [selected])
   // Open the selected profiles tiled into a grid on the primary screen.
   const bulkGrid = useCallback(async () => {
-    const ids = [...selected]
+    const ids = await splitLocked([...selected])
     if (!ids.length) return
     const sw = window.screen.availWidth || 1920
     const sh = window.screen.availHeight || 1040
@@ -763,7 +785,7 @@ export default function App(): JSX.Element {
     }))
     await window.vgc.launchGrid(items)
     void autoCheckProxies(ids)
-  }, [selected, autoCheckProxies])
+  }, [selected, autoCheckProxies, splitLocked])
   const runGmailLogin = useCallback(
     async (ids: string[]) => {
       if (!ids.length) return
@@ -1299,7 +1321,7 @@ export default function App(): JSX.Element {
           name={unlockFor.name}
           onUnlocked={(id) => void doLaunch(id)}
           onClose={() => setUnlockFor(null)}
-          onWiped={() => void refresh()}
+          onWiped={(msg) => { showNotice('err', 'Đã xoá dữ liệu', msg, 9000); void refresh(); void refreshLockedIds(); void refreshLockedGroups() }}
         />
       )}
       {showCloud && <CloudModal onClose={() => setShowCloud(false)} onSynced={refresh} />}
@@ -1339,6 +1361,22 @@ export default function App(): JSX.Element {
         </div>
       )}
 
+      {notice && (
+        <div
+          className={`toast ${notice.kind === 'err' ? 'error' : 'done'}`}
+          style={{ bottom: dataSync ? 96 : undefined }}
+          onClick={() => setNotice(null)}
+          title="Bấm để ẩn"
+        >
+          <span className="t-ic">
+            <Icon name={notice.kind === 'err' ? 'alert' : 'check'} size={16} strokeWidth={2.2} />
+          </span>
+          <div className="t-body">
+            <div className="t-title">{notice.title}</div>
+            {notice.text}
+          </div>
+        </div>
+      )}
       {dataSync && (
         <div
           className={`toast ${dataSync.phase} ${syncing ? 'progress-toast' : ''}`}

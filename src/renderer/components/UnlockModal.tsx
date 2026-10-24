@@ -7,8 +7,8 @@ interface Props {
   /** Mở khoá thành công → gọi để thực sự chạy profile. */
   onUnlocked: (id: string) => void
   onClose: () => void
-  /** Có profile/tất cả bị xoá → cho App làm mới danh sách. */
-  onWiped: () => void
+  /** Có profile/tất cả bị xoá → cho App làm mới danh sách và báo cho người dùng. */
+  onWiped: (message: string) => void
 }
 
 /** Hộp thoại nhập mật khẩu khi mở một profile đã đặt khoá bảo vệ. */
@@ -29,14 +29,12 @@ export function UnlockModal({ id, name, onUnlocked, onClose, onWiped }: Props): 
         return
       }
       if (res.action === 'wiped-profile') {
-        window.alert(`Đã nhập sai quá số lần cho phép.\n\nProfile "${name}" đã bị XOÁ VĨNH VIỄN (cả dữ liệu cloud), không khôi phục được.`)
-        onWiped()
+        onWiped(`Nhập sai quá số lần — profile "${name}" đã bị xoá vĩnh viễn (cả dữ liệu cloud).`)
         onClose()
         return
       }
       if (res.action === 'wiped-all') {
-        window.alert('Đã nhập sai quá số lần cho phép.\n\nTẤT CẢ profile đã bị XOÁ VĨNH VIỄN (cả dữ liệu cloud), không khôi phục được.')
-        onWiped()
+        onWiped('Nhập sai quá số lần — TẤT CẢ profile đã bị xoá vĩnh viễn (cả dữ liệu cloud).')
         onClose()
         return
       }
