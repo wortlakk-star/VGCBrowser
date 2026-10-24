@@ -16,6 +16,7 @@ import { CreateProfileModal } from './components/CreateProfileModal'
 import { ProxyPickerModal } from './components/ProxyPickerModal'
 import { SettingsModal } from './components/SettingsModal'
 import { UnlockModal } from './components/UnlockModal'
+import { AdminPromptModal } from './components/AdminPromptModal'
 import { CloudModal } from './components/CloudModal'
 import { ProxyManagerModal } from './components/ProxyManagerModal'
 import { ShareModal } from './components/ShareModal'
@@ -633,9 +634,28 @@ export default function App(): JSX.Element {
   const stop = useCallback(async (id: string) => {
     await window.vgc.stopProfile(id)
   }, [])
+  const [hasMaster, setHasMaster] = useState(false)
+  const refreshHasMaster = useCallback(async () => {
+    try { setHasMaster((await window.vgc.guardStatus()).hasMaster) } catch { setHasMaster(false) }
+  }, [])
+  useEffect(() => { void refreshHasMaster() }, [refreshHasMaster])
+  // Hộp hỏi mật khẩu bảo mật khi bấm Khoá/Mở khoá mà phiên admin chưa mở.
+  const [adminPrompt, setAdminPrompt] = useState<{ id: string } | null>(null)
   const toggleProfileLock = useCallback(async (id: string, locked: boolean) => {
+    if (!guardAdmin) {
+      // Chưa mở phiên → hỏi mật khẩu; sau đó đảo trạng thái hiện tại (không bật chế độ lộ 🔒).
+      setAdminPrompt({ id })
+      return
+    }
     const res = await window.vgc.guardSetProfileLock(id, locked)
     if (!res.ok) { window.alert(res.error || 'Không đổi được khoá.'); return }
+    await refreshLockedIds()
+  }, [guardAdmin, refreshLockedIds])
+  const applyToggleAfterPrompt = useCallback(async (id: string) => {
+    const nowLocked = await window.vgc.guardIsLocked(id)
+    const res = await window.vgc.guardSetProfileLock(id, !nowLocked)
+    if (!res.ok) { window.alert(res.error || 'Không đổi được khoá.'); return }
+    window.alert(nowLocked ? 'Đã MỞ KHOÁ profile.' : 'Đã KHOÁ profile (mở phải nhập mật khẩu chủ).')
     await refreshLockedIds()
   }, [refreshLockedIds])
   const check = useCallback(async (id: string) => {
@@ -1208,6 +1228,7 @@ export default function App(): JSX.Element {
               onSetAccountStatus={setAccountStatus}
               lockedIds={lockedIds}
               guardAdmin={guardAdmin}
+              hasMaster={hasMaster}
               onToggleLock={toggleProfileLock}
             />
           )}
@@ -1251,7 +1272,7 @@ export default function App(): JSX.Element {
       )}
       {showSettings && (
         <SettingsModal
-          onClose={() => { setShowSettings(false); void refreshLockedGroups(); void refreshLockedIds() }}
+          onClose={() => { setShowSettings(false); void refreshLockedGroups(); void refreshLockedIds(); void refreshHasMaster() }}
           theme={theme}
           onSetTheme={setTheme}
           accountEmail={accountEmail}
@@ -1262,6 +1283,14 @@ export default function App(): JSX.Element {
             setShowSettings(false)
             setShowCloud(true)
           }}
+        />
+      )}
+      {adminPrompt && (
+        <AdminPromptModal
+          title="🔒 Khoá / mở khoá profile"
+          desc="Nhập mật khẩu chủ để đổi trạng thái khoá của profile này."
+          onOk={() => void applyToggleAfterPrompt(adminPrompt.id)}
+          onClose={() => setAdminPrompt(null)}
         />
       )}
       {unlockFor && (

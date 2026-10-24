@@ -28,6 +28,8 @@ interface Props {
   /** Id các profile đang bật khoá bảo vệ — chỉ hiện dấu 🔒 khi đã mở khoá bảo mật. */
   lockedIds: Set<string>
   guardAdmin: boolean
+  /** Đã đặt mật khẩu chủ → luôn hiện nút khoá trong menu (bấm sẽ hỏi mật khẩu nếu chưa mở phiên). */
+  hasMaster: boolean
   /** Bật/tắt khoá cho một profile (menu "..."). */
   onToggleLock: (id: string, locked: boolean) => void | Promise<void>
 }
@@ -162,6 +164,7 @@ export function ProfileTable({
   onSetAccountStatus,
   lockedIds,
   guardAdmin,
+  hasMaster,
   onToggleLock
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
@@ -391,15 +394,19 @@ export function ProfileTable({
                             <Icon name="share" size={16} />
                             Chia sẻ
                           </button>
-                          {guardAdmin && (
+                          {(guardAdmin || hasMaster) && (
                             <button
                               onClick={() => {
                                 void onToggleLock(p.id, !lockedIds.has(p.id))
                                 setMenuFor(null)
                               }}
                             >
-                              <span style={{ width: 16, textAlign: 'center' }}>{lockedIds.has(p.id) ? '🔓' : '🔒'}</span>
-                              {lockedIds.has(p.id) ? 'Mở khoá profile' : 'Khoá profile'}
+                              <span style={{ width: 16, textAlign: 'center' }}>
+                                {guardAdmin && lockedIds.has(p.id) ? '🔓' : '🔒'}
+                              </span>
+                              {guardAdmin
+                                ? lockedIds.has(p.id) ? 'Mở khoá profile' : 'Khoá profile'
+                                : 'Khoá / mở khoá profile'}
                             </button>
                           )}
                           <div className="menu-sep" />
