@@ -101,7 +101,8 @@ export function SettingsModal({
   const [revealMsg, setRevealMsg] = useState('')
   const [groupNames, setGroupNames] = useState<string[]>([])
   const [lockedGroupSet, setLockedGroupSet] = useState<Set<string>>(new Set())
-  const [groupCodeInput, setGroupCodeInput] = useState<Record<string, string>>({})
+  const [gSelGroup, setGSelGroup] = useState('')
+  const [gGroupCode, setGGroupCode] = useState('')
   const [groupMsg, setGroupMsg] = useState('')
 
   const loadGroups = async (): Promise<void> => {
@@ -112,13 +113,14 @@ export function SettingsModal({
       setLockedGroupSet(new Set(await window.vgc.guardLockedGroups()))
     } catch { /* ignore */ }
   }
-  const saveGroupLock = async (name: string, remove: boolean): Promise<void> => {
+  const saveGroupLock = async (remove: boolean): Promise<void> => {
     setGroupMsg('')
-    const code = remove ? '' : (groupCodeInput[name] ?? '')
-    if (!remove && code.length < 1) { setGroupMsg(`Nhập mã cho nhóm "${name}".`); return }
-    const res = await window.vgc.guardSetGroupLock(name, code, gPerLimit)
+    const name = gSelGroup
+    if (!name) { setGroupMsg('Chọn nhóm trước.'); return }
+    if (!remove && gGroupCode.length < 1) { setGroupMsg('Nhập mã khoá cho nhóm.'); return }
+    const res = await window.vgc.guardSetGroupLock(name, remove ? '' : gGroupCode, gPerLimit)
     if (!res.ok) { setGroupMsg(res.error || 'Không lưu được.'); return }
-    setGroupCodeInput((prev) => ({ ...prev, [name]: '' }))
+    setGGroupCode('')
     setGroupMsg(remove ? `Đã gỡ khoá nhóm "${name}".` : `Đã khoá nhóm "${name}" ✓`)
     await loadGroups()
   }
@@ -468,27 +470,39 @@ export function SettingsModal({
                 {groupNames.length === 0 ? (
                   <p className="hint" style={{ margin: 0 }}>Chưa có nhóm nào. Tạo nhóm và gán profile vào nhóm trước.</p>
                 ) : (
-                  groupNames.map((name) => (
-                    <div key={name} className="row-inline" style={{ gap: 6, marginBottom: 4, alignItems: 'center' }}>
-                      <span style={{ minWidth: 110, fontWeight: 600 }}>
-                        {lockedGroupSet.has(name) ? '🔒 ' : ''}{name}
-                      </span>
-                      <input
-                        type="password"
-                        style={{ ...inp, maxWidth: 160 }}
-                        placeholder={lockedGroupSet.has(name) ? 'Mã mới (đổi)' : 'Đặt mã khoá'}
-                        autoComplete="new-password"
-                        value={groupCodeInput[name] ?? ''}
-                        onChange={(e) => setGroupCodeInput((prev) => ({ ...prev, [name]: e.target.value }))}
-                      />
-                      <button className="btn" onClick={() => void saveGroupLock(name, false)}>
-                        {lockedGroupSet.has(name) ? 'Đổi mã' : 'Khoá'}
-                      </button>
-                      {lockedGroupSet.has(name) && (
-                        <button className="btn" style={{ color: '#e0534f' }} onClick={() => void saveGroupLock(name, true)}>Gỡ</button>
-                      )}
-                    </div>
-                  ))
+                  <div className="row-inline" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <select
+                      style={{ ...inp, maxWidth: 180 }}
+                      value={gSelGroup}
+                      onChange={(e) => { setGSelGroup(e.target.value); setGGroupCode(''); setGroupMsg('') }}
+                    >
+                      <option value="">— Chọn nhóm —</option>
+                      {groupNames.map((n) => (
+                        <option key={n} value={n}>{lockedGroupSet.has(n) ? '🔒 ' : ''}{n}</option>
+                      ))}
+                    </select>
+                    {gSelGroup && (
+                      <>
+                        <input
+                          type="password"
+                          style={{ ...inp, maxWidth: 150 }}
+                          placeholder={lockedGroupSet.has(gSelGroup) ? 'Mã mới (đổi)' : 'Đặt mã khoá'}
+                          autoComplete="new-password"
+                          value={gGroupCode}
+                          onChange={(e) => setGGroupCode(e.target.value)}
+                        />
+                        <button className="btn" onClick={() => void saveGroupLock(false)}>
+                          {lockedGroupSet.has(gSelGroup) ? 'Đổi mã' : 'Khoá'}
+                        </button>
+                        {lockedGroupSet.has(gSelGroup) && (
+                          <button className="btn" style={{ color: '#e0534f' }} onClick={() => void saveGroupLock(true)}>Gỡ khoá</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {lockedGroupSet.size > 0 && (
+                  <p className="hint" style={{ margin: '4px 0 0' }}>Đang khoá: {[...lockedGroupSet].join(', ')}</p>
                 )}
                 {groupMsg && <p className="hint" style={{ margin: 0 }}>{groupMsg}</p>}
               </div>
