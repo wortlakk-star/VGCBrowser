@@ -12,6 +12,7 @@ import { randomBytes } from 'crypto'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getRelockMinutes, isLocked, unlock } from './guard'
+import { PkError, pkCreate, pkGet, pkHas } from './passkeys'
 
 // ── Máy chủ cục bộ ────────────────────────────────────────────────────────────
 const tokens = new Map<string, string>() // token -> profileId
@@ -30,12 +31,12 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = 4096): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
     total += (chunk as Buffer).length
-    if (total > 4096) throw new Error('too large')
+    if (total > limit) throw new Error('too large')
     chunks.push(chunk as Buffer)
   }
   try {
@@ -71,13 +72,56 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       if (r.action === 'sos') return send(res, 200, { ok: false, action: 'wrong' })
       return send(res, 200, r)
     }
+    if (req.method === 'POST' && url.pathname.startsWith('/pk/')) return await handlePasskey(url.pathname.slice(4), req, res)
     return send(res, 404, { error: 'not found' })
   } catch {
     return send(res, 400, { error: 'bad request' })
   }
 }
 
-function ensureServer(): Promise<number> {
+/** Passkey phần mềm (passkeys.ts): extension VGC Passkeys gọi /pk/create | /pk/get | /pk/has. */
+async function handlePasskey(op: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req, 64 * 1024)
+  const id = tokens.get(String(body.t ?? ''))
+  if (!id) return send(res, 403, { error: 'forbidden' })
+  const str = (v: unknown, max: number): string => String(v ?? '').slice(0, max)
+  const strList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.slice(0, 100).map((x) => str(x, 1400)) : []
+  const rpId = body.rpId ? str(body.rpId, 255) : undefined
+  try {
+    if (op === 'create') {
+      const user = (body.user ?? {}) as Record<string, unknown>
+      const data = await pkCreate(id, {
+        origin: str(body.origin, 2048),
+        rpId,
+        challenge: str(body.challenge, 1400),
+        user: { id: str(user.id, 200), name: str(user.name, 256), displayName: str(user.displayName, 256) },
+        excludeIds: strList(body.excludeIds),
+        algs: Array.isArray(body.algs) ? body.algs.slice(0, 20).map(Number) : undefined
+      })
+      return send(res, 200, { ok: true, data })
+    }
+    if (op === 'get') {
+      const data = await pkGet(id, {
+        origin: str(body.origin, 2048),
+        rpId,
+        challenge: str(body.challenge, 1400),
+        allowIds: strList(body.allowIds)
+      })
+      return send(res, 200, { ok: true, data })
+    }
+    if (op === 'has') {
+      const data = await pkHas(id, { origin: str(body.origin, 2048), rpId, allowIds: strList(body.allowIds) })
+      return send(res, 200, { ok: true, data })
+    }
+    return send(res, 404, { error: 'not found' })
+  } catch (e) {
+    if (e instanceof PkError) return send(res, 200, { ok: false, err: e.domName, msg: e.message })
+    return send(res, 200, { ok: false, err: 'UnknownError', msg: 'Lỗi kho passkey.' })
+  }
+}
+
+export function ensureServer(): Promise<number> {
   if (server && serverPort) return Promise.resolve(serverPort)
   if (starting) return starting
   starting = new Promise<number>((resolve, reject) => {
@@ -94,6 +138,14 @@ function ensureServer(): Promise<number> {
     })
   })
   return starting
+}
+
+/** Token của profile cho lần mở này (dùng chung cho extension khoá và extension passkey). */
+export function tokenFor(profileId: string): string {
+  for (const [t, id] of tokens) if (id === profileId) return t
+  const token = randomBytes(24).toString('hex')
+  tokens.set(token, profileId)
+  return token
 }
 
 /** Huỷ mọi token của profile (khi engine thoát) để extension cũ không còn hỏi được nữa. */
@@ -281,9 +333,7 @@ export async function ensureLockExtension(userDataDir: string, profileId: string
   try {
     if ((await getRelockMinutes()) <= 0) return null
     const port = await ensureServer()
-    releaseLockTokens(profileId)
-    const token = randomBytes(24).toString('hex')
-    tokens.set(token, profileId)
+    const token = tokenFor(profileId)
     const dir = join(userDataDir, 'vgc-lock-ext')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const write = (name: string, content: string): void =>

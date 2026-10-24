@@ -7,6 +7,7 @@ import type {
   Fingerprint,
   LoginCheckResult,
   OsType,
+  PasskeyInfo,
   Profile,
   ProxyCheckResult,
   ProxyType,
@@ -93,6 +94,19 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
   const [tags, setTags] = useState(profile.tags.join(', '))
   const [notes, setNotes] = useState(profile.notes)
   const [soloMode, setSoloMode] = useState(profile.soloMode === true)
+  const [passkeysOn, setPasskeysOn] = useState(profile.passkeys !== false)
+  const [passkeyList, setPasskeyList] = useState<PasskeyInfo[]>([])
+  const reloadPasskeys = (): void => {
+    void window.vgc.passkeyList(profile.id).then(setPasskeyList).catch(() => setPasskeyList([]))
+  }
+  useEffect(reloadPasskeys, [profile.id])
+  const removePasskey = async (credId: string, label: string): Promise<void> => {
+    if (!window.confirm(`Xoá passkey "${label}"?
+
+Nếu đây là cách đăng nhập duy nhất của tài khoản đó thì bạn sẽ không vào lại được bằng passkey này.`)) return
+    await window.vgc.passkeyDelete(profile.id, credId)
+    reloadPasskeys()
+  }
   const [loginCheck, setLoginCheck] = useState<LoginCheckResult | null>(null)
   const [loginCheckError, setLoginCheckError] = useState('')
   const [checkingLogin, setCheckingLogin] = useState(false)
@@ -290,7 +304,8 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
         extensions,
         fingerprint: fp,
         account: acct,
-        soloMode
+        soloMode,
+        passkeys: passkeysOn
       })
       onSaved()
       onClose()
@@ -384,6 +399,34 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
               profile sẽ không còn kiểm tra/khoá với máy khác, và mở ở máy này sẽ KHÔNG đóng phiên
               đang chạy ở máy khác nữa. Dữ liệu phiên (cookie/mật khẩu) vẫn đồng bộ cloud như cũ.
             </p>
+
+            <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: 'var(--accent, #4fd1a1)' }}>
+              Passkey
+            </div>
+            <label className="checks">
+              <span>
+                <input type="checkbox" checked={passkeysOn} onChange={(e) => setPasskeysOn(e.target.checked)} />{' '}
+                Bật passkey phần mềm cho profile này
+              </span>
+            </label>
+            <p className="hint" style={{ marginTop: -4 }}>
+              Trang đòi tạo/dùng passkey thì VGC tự tạo và lưu khoá ngay trong profile này (không cần Windows Hello,
+              điện thoại hay USB). Khoá được mã hoá và tự đồng bộ cloud theo profile. Áp dụng từ lần mở profile sau.
+            </p>
+            {passkeyList.length > 0 && (
+              <div style={{ display: 'grid', gap: 4, marginBottom: 6 }}>
+                {passkeyList.map((k) => (
+                  <div key={k.id} className="row-inline" style={{ gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${k.rpId} · ${k.userName}`}>
+                      🔑 <b>{k.rpId}</b> · {k.displayName || k.userName || '(không tên)'}
+                    </span>
+                    <button type="button" className="btn sm" style={{ color: '#e0534f' }} onClick={() => void removePasskey(k.id, `${k.rpId} · ${k.userName}`)}>
+                      Xoá
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {guardAdmin && (
             <>

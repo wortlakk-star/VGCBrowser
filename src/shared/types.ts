@@ -185,6 +185,9 @@ export interface Profile {
    *  is destroyed — a losing close just shows "couldn't save, cloud changed" instead of being lost.
    *  Default (false/undefined) keeps today's behaviour: lock ON, exclusivity enforced. */
   soloMode?: boolean
+  /** false = KHÔNG nạp extension passkey phần mềm cho profile này (mặc định bật). Passkey lưu
+   *  riêng trong profile (Default/vgc-passkeys.enc) nên đồng bộ cloud theo profile. */
+  passkeys?: boolean
   /** Result of the automatic proxy check run each time the profile is opened. */
   proxyCheck?: {
     status: 'ok' | 'error'
@@ -499,4 +502,13 @@ export interface GuardWipedEvent {
   id?: string
   group?: string
   reason: string
+}
+
+export interface PasskeyInfo {
+  id: string
+  rpId: string
+  userName: string
+  displayName: string
+  created: string
+  lastUsed?: string
 }

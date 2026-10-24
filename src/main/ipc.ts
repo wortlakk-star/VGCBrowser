@@ -110,6 +110,7 @@ import {
 } from './profile-share'
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getCloudAuth, setCloudAuth, removeCloudAuth } from './cloud-auth-store'
+import { listPasskeys, deletePasskey } from './passkeys'
 import {
   guardStatus,
   checkAdmin as guardCheckAdmin,
@@ -443,6 +444,10 @@ export function registerIpc(): void {
   })
 
   // ── Khoá bảo vệ profile (guard.ts): mật khẩu từng profile + tự huỷ khi nhập sai ──
+  handle('passkeys:list', (_e, id: string) => listPasskeys(requireProfileId(id)))
+  handle('passkeys:delete', (_e, id: string, credId: string) =>
+    deletePasskey(requireProfileId(id), String(credId ?? '').slice(0, 1400))
+  )
   handle('guard:status', () => guardStatus())
   handle('guard:checkAdmin', (_e, pw: string) => guardCheckAdmin(String(pw ?? '').slice(0, 1024)))
   handle('guard:lockedIds', () => guardLockedIds())

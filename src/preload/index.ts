@@ -31,6 +31,7 @@ import type {
   UpdateStatus,
   LicenseCheckResult,
   GuardStatus,
+  PasskeyInfo,
   UnlockResult,
   GroupUnlockResult,
   GuardWipedEvent
@@ -318,6 +319,9 @@ const api = {
     auth?: string
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setLimits', perProfile, global, auth),
+  passkeyList: (id: string): Promise<PasskeyInfo[]> => ipcRenderer.invoke('passkeys:list', id),
+  passkeyDelete: (id: string, credId: string): Promise<boolean> =>
+    ipcRenderer.invoke('passkeys:delete', id, credId),
   guardSetRelock: (minutes: number): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setRelock', minutes),
   guardLockedGroups: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedGroups'),

@@ -101,6 +101,7 @@ import {
 import { getMachineId } from './machine-id'
 import { isLocked as isProfileLocked, consumeUnlock as consumeUnlockTicket } from './guard'
 import { ensureLockExtension, releaseLockTokens } from './lock-ext'
+import { ensurePasskeyExtension } from './passkey-ext'
 
 export interface LaunchProfileOptions {
   headless?: boolean
@@ -1965,7 +1966,9 @@ async function launchProfileImpl(
   // Profile bật khoá → nạp thêm extension "VGC Lock": hết N phút không thao tác thì thu nhỏ
   // cửa sổ và đòi mật khẩu (lock-ext.ts). null khi tính năng tự khoá đang tắt.
   const lockExt = (await isProfileLocked(id)) ? await ensureLockExtension(userDataDir, id) : null
-  const extList = [guardExt, ...(lockExt ? [lockExt] : []), ...safeExtensions]
+  // Passkey phần mềm riêng từng profile (nạp tự động; tắt bằng profile.passkeys = false).
+  const passkeyExt = profile.passkeys === false ? null : await ensurePasskeyExtension(userDataDir, id)
+  const extList = [guardExt, ...(passkeyExt ? [passkeyExt] : []), ...(lockExt ? [lockExt] : []), ...safeExtensions]
   if (extList.length > 0) {
     const list = extList.join(',')
     args.push(`--load-extension=${list}`, `--disable-extensions-except=${list}`)
