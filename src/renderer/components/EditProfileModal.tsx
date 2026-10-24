@@ -20,6 +20,8 @@ interface Props {
   profile: Profile
   onClose: () => void
   onSaved: () => void
+  /** Chỉ hiện mục "Khoá bảo vệ" khi đã nhập đúng mật khẩu bảo mật (ở Cài đặt). */
+  guardAdmin: boolean
 }
 
 const TIMEZONES = [
@@ -68,7 +70,7 @@ const PROXY_TYPES: ProxyType[] = ['none', 'http', 'https', 'socks5']
 const CORES = [4, 6, 8, 12, 16]
 const MEMORY = [4, 8]
 
-export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Element {
+export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Props): JSX.Element {
   const [gpus, setGpus] = useState(ALL_GPUS)
   const [screens, setScreens] = useState(SCREENS_FALLBACK)
   useEffect(() => {
@@ -391,6 +393,8 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               đang chạy ở máy khác nữa. Dữ liệu phiên (cookie/mật khẩu) vẫn đồng bộ cloud như cũ.
             </p>
 
+            {guardAdmin && (
+            <>
             <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: '#e0534f' }}>
               🔒 Khoá bảo vệ {isLocked && <span style={{ color: '#e0534f' }}>· ĐANG KHOÁ</span>}
             </div>
@@ -430,6 +434,8 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props): JSX.Elem
               )}
               {lockMsg && <span className="hint" style={{ margin: 0 }}>{lockMsg}</span>}
             </div>
+            </>
+            )}
 
             <div className="field-title" style={{ marginTop: 6, fontWeight: 600, color: 'var(--accent, #4fd1a1)' }}>
               Tài khoản

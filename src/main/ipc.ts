@@ -112,6 +112,7 @@ import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getCloudAuth, setCloudAuth, removeCloudAuth } from './cloud-auth-store'
 import {
   guardStatus,
+  checkAdmin as guardCheckAdmin,
   lockedIds as guardLockedIds,
   isLocked as guardIsLocked,
   unlock as guardUnlock,
@@ -439,6 +440,7 @@ export function registerIpc(): void {
 
   // ── Khoá bảo vệ profile (guard.ts): mật khẩu từng profile + tự huỷ khi nhập sai ──
   handle('guard:status', () => guardStatus())
+  handle('guard:checkAdmin', (_e, pw: string) => guardCheckAdmin(String(pw ?? '').slice(0, 1024)))
   handle('guard:lockedIds', () => guardLockedIds())
   handle('guard:isLocked', (_e, id: string) => guardIsLocked(requireProfileId(id)))
   handle('guard:unlock', (_e, id: string, pw: string) =>

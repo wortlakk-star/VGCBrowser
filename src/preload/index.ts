@@ -295,6 +295,7 @@ const api = {
 
   // ── Khoá bảo vệ profile (tự huỷ khi nhập sai) ──
   guardStatus: (): Promise<GuardStatus> => ipcRenderer.invoke('guard:status'),
+  guardCheckAdmin: (pw: string): Promise<boolean> => ipcRenderer.invoke('guard:checkAdmin', pw),
   guardLockedIds: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedIds'),
   guardIsLocked: (id: string): Promise<boolean> => ipcRenderer.invoke('guard:isLocked', id),
   guardUnlock: (id: string, pw: string): Promise<UnlockResult> =>

@@ -50,6 +50,9 @@ export default function App(): JSX.Element {
   const [proxyPickFor, setProxyPickFor] = useState<Profile | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [unlockFor, setUnlockFor] = useState<{ id: string; name: string } | null>(null)
+  // Đã nhập đúng "mật khẩu bảo mật" trong phiên này → mới hiện phần Khoá bảo vệ
+  // (ở Cài đặt và ở Sửa profile). Mặc định ẨN. Reset khi khởi động lại app.
+  const [guardAdmin, setGuardAdmin] = useState(false)
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
@@ -1180,7 +1183,7 @@ export default function App(): JSX.Element {
         <WarmScheduleModal selectedIds={[...selected]} onClose={() => setShowWarmSchedule(false)} />
       )}
       {editing && (
-        <EditProfileModal profile={editing} onClose={() => setEditing(null)} onSaved={refresh} />
+        <EditProfileModal profile={editing} guardAdmin={guardAdmin} onClose={() => setEditing(null)} onSaved={refresh} />
       )}
       {showCreate && (
         <CreateProfileModal
@@ -1198,6 +1201,8 @@ export default function App(): JSX.Element {
           onSetTheme={setTheme}
           accountEmail={accountEmail}
           onSignOut={signOut}
+          guardAdmin={guardAdmin}
+          onSetGuardAdmin={setGuardAdmin}
           onOpenCloud={() => {
             setShowSettings(false)
             setShowCloud(true)

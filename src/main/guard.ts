@@ -175,6 +175,14 @@ export async function isLocked(id: string): Promise<boolean> {
 export async function lockedIds(): Promise<string[]> {
   return Object.keys((await load()).profiles)
 }
+/** Kiểm tra "mật khẩu bảo mật" để HIỆN phần khoá bảo vệ (ẩn mặc định). Dùng mật khẩu chủ.
+ *  Khi CHƯA đặt mật khẩu chủ → cho phép mở để thiết lập lần đầu. */
+export async function checkAdmin(pw: string): Promise<boolean> {
+  const cfg = await load()
+  if (!cfg.master) return true
+  return verify(pw, cfg.master)
+}
+
 export async function guardStatus(): Promise<{
   hasMaster: boolean
   hasSos: boolean
