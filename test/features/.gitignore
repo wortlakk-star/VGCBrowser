@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+bundle.cjs
+entry.ts
+stub-*.cjs
+bundle-vault.cjs
+entry-vault.ts

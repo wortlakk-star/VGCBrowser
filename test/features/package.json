@@ -1,0 +1,10 @@
+{
+  "name": "vgc-feature-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chỉ để chạy passkey-e2e.mjs (SimpleWebAuthn). Không liên quan package.json của app.",
+  "devDependencies": {
+    "@simplewebauthn/server": "^14.0.3",
+    "esbuild": "^0.25.0"
+  }
+}
