@@ -8,7 +8,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$SSH_HOST = '212.85.28.201'
+$SSH_HOST = '195.179.238.65'
 $SSH_PORT = '65002'
 $SSH_USER = 'u469659181'
 # vgcbrowser.com is a Hostinger addon domain -> served from these folders:

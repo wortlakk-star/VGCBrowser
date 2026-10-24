@@ -95,7 +95,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           # Outside public_html on purpose: diagnostics, not a download.
           scp -P 65002 -i ~/.ssh/id_ed25519 -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new fetch-engine.log \
-            u469659181@212.85.28.201:domains/vgcbrowser.com/ci-fetch-${{ github.run_id }}.log
+            u469659181@195.179.238.65:domains/vgcbrowser.com/ci-fetch-${{ github.run_id }}.log
       - run: npm run dist # electron-vite build && electron-builder --win (nsis one-file)
       - name: Verify unsigned Windows installer
         shell: pwsh

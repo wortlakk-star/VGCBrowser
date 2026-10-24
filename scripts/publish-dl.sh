@@ -13,7 +13,7 @@
 #        VGC_SITE_INDEX optional local landing page, uploaded last to <DEST>/../index.html
 set -euo pipefail
 
-HOST='u469659181@212.85.28.201'
+HOST='u469659181@195.179.238.65'
 PORT=65002
 KEY="${VGC_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 DEST="${VGC_DL_DEST:-domains/vgcbrowser.com/public_html/dl}"

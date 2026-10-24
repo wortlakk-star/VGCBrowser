@@ -11,7 +11,7 @@
 # Run AFTER `npm run dist:mac`.
 set -euo pipefail
 
-SSH_HOST=212.85.28.201
+SSH_HOST=195.179.238.65
 SSH_PORT=65002
 SSH_USER=u469659181
 REMOTE='domains/vgcbrowser.com/public_html/dl'   # vgcbrowser.com addon-domain webroot/dl
