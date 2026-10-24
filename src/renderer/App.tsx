@@ -70,11 +70,12 @@ export default function App(): JSX.Element {
     try { setLockedGroups(new Set(await window.vgc.guardLockedGroups())) } catch { setLockedGroups(new Set()) }
   }, [])
   useEffect(() => { void refreshLockedGroups() }, [refreshLockedGroups])
-  // Nhóm bị ẩn = đang khoá, chưa mở trong phiên, và chưa bật chế độ admin bảo mật.
+  // Nhóm bị ẩn = đang khoá và CHƯA mở bằng mã nhóm trong phiên này. Mật khẩu bảo mật
+  // (guardAdmin) chỉ mở phần QUẢN LÝ khoá, KHÔNG bỏ ẩn nhóm — nhóm khoá vẫn ẩn khỏi danh
+  // sách cho tới khi gõ đúng mã nhóm, nên profile thêm vào nhóm khoá vẫn bị ẩn ngay.
   const hiddenGroups = useMemo(() => {
-    if (guardAdmin) return new Set<string>()
     return new Set([...lockedGroups].filter((g) => !revealedGroups.has(g)))
-  }, [lockedGroups, revealedGroups, guardAdmin])
+  }, [lockedGroups, revealedGroups])
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
@@ -1244,7 +1245,7 @@ export default function App(): JSX.Element {
       )}
       {showSettings && (
         <SettingsModal
-          onClose={() => setShowSettings(false)}
+          onClose={() => { setShowSettings(false); void refreshLockedGroups(); void refreshLockedIds() }}
           theme={theme}
           onSetTheme={setTheme}
           accountEmail={accountEmail}
