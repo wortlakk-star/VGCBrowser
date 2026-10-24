@@ -322,6 +322,15 @@ const api = {
   passkeyList: (id: string): Promise<PasskeyInfo[]> => ipcRenderer.invoke('passkeys:list', id),
   passkeyDelete: (id: string, credId: string): Promise<boolean> =>
     ipcRenderer.invoke('passkeys:delete', id, credId),
+  passkeyExport: (
+    ids: string[] | null,
+    passphrase: string
+  ): Promise<{ ok: boolean; canceled?: boolean; error?: string; profiles?: number; creds?: number; filePath?: string }> =>
+    ipcRenderer.invoke('passkeys:export', ids, passphrase),
+  passkeyImport: (
+    passphrase: string
+  ): Promise<{ ok: boolean; canceled?: boolean; error?: string; profiles?: number; creds?: number; skipped?: number }> =>
+    ipcRenderer.invoke('passkeys:import', passphrase),
   guardSetRelock: (minutes: number): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('guard:setRelock', minutes),
   guardLockedGroups: (): Promise<string[]> => ipcRenderer.invoke('guard:lockedGroups'),

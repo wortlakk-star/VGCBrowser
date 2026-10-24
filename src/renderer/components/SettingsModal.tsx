@@ -94,6 +94,25 @@ export function SettingsModal({
   const [gGlobalLimit, setGGlobalLimit] = useState(5)
   const [gLockedCount, setGLockedCount] = useState(0)
   const [gRelock, setGRelock] = useState(5)
+  // Sao lưu / khôi phục TẤT CẢ passkey ra file .vgcpk
+  const [pkAllPass, setPkAllPass] = useState('')
+  const [pkAllMsg, setPkAllMsg] = useState('')
+  const backupAllPasskeys = async (): Promise<void> => {
+    setPkAllMsg('')
+    const r = await window.vgc.passkeyExport(null, pkAllPass)
+    if (r.canceled) return
+    setPkAllMsg(r.ok ? `Đã sao lưu ${r.creds} passkey của ${r.profiles} profile ✓` : r.error || 'Không sao lưu được.')
+  }
+  const restoreAllPasskeys = async (): Promise<void> => {
+    setPkAllMsg('')
+    const r = await window.vgc.passkeyImport(pkAllPass)
+    if (r.canceled) return
+    setPkAllMsg(
+      r.ok
+        ? `Đã khôi phục ${r.creds} passkey cho ${r.profiles} profile ✓${r.skipped ? ` (bỏ qua ${r.skipped} passkey của profile không còn)` : ''}`
+        : r.error || 'Không khôi phục được.'
+    )
+  }
   const [gMasterNew, setGMasterNew] = useState('')
   const [gSosNew, setGSosNew] = useState('')
   const [gAuth, setGAuth] = useState('')
@@ -526,6 +545,35 @@ export function SettingsModal({
               </p>
             </section>
           )}
+
+          <section className="card">
+            <h3>Passkey — sao lưu</h3>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Passkey nằm riêng trong từng profile, mã hoá và đồng bộ cloud. Để <b>không bao giờ mất</b> (xoá
+              profile, cài lại máy, cloud lỗi), hãy sao lưu ra file <code>.vgcpk</code> bảo vệ bằng mật khẩu
+              riêng của bạn — file dùng được trên mọi máy. App cũng tự giữ 5 bản sao cũ gần nhất trên máy này.
+            </p>
+            <div className="row-inline" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                type="password"
+                style={{ ...inp, maxWidth: 250 }}
+                value={pkAllPass}
+                placeholder="Mật khẩu file sao lưu (từ 8 ký tự)"
+                autoComplete="new-password"
+                onChange={(e) => setPkAllPass(e.target.value)}
+              />
+              <button className="btn" disabled={pkAllPass.length < 8} onClick={() => void backupAllPasskeys()}>
+                Sao lưu tất cả
+              </button>
+              <button className="btn" disabled={pkAllPass.length < 8} onClick={() => void restoreAllPasskeys()}>
+                Khôi phục từ file
+              </button>
+            </div>
+            {pkAllMsg && <p className="hint" style={{ margin: '6px 0 0' }}>{pkAllMsg}</p>}
+            <p className="hint" style={{ margin: '6px 0 0', color: '#e0534f' }}>
+              ⚠️ Quên mật khẩu file sao lưu thì không mở lại được file. Cất file ở nơi an toàn (ổ D, USB).
+            </p>
+          </section>
 
           <section className="card">
             <h3>Giao diện</h3>

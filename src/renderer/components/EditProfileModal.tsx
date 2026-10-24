@@ -96,6 +96,23 @@ export function EditProfileModal({ profile, onClose, onSaved, guardAdmin }: Prop
   const [soloMode, setSoloMode] = useState(profile.soloMode === true)
   const [passkeysOn, setPasskeysOn] = useState(profile.passkeys !== false)
   const [passkeyList, setPasskeyList] = useState<PasskeyInfo[]>([])
+  const [pkPass, setPkPass] = useState('')
+  const [pkMsg, setPkMsg] = useState('')
+  const backupPasskeys = async (): Promise<void> => {
+    setPkMsg('')
+    const r = await window.vgc.passkeyExport([profile.id], pkPass)
+    if (r.canceled) return
+    setPkMsg(r.ok ? `Đã sao lưu ${r.creds} passkey ra file ✓` : r.error || 'Không sao lưu được.')
+  }
+  const restorePasskeys = async (): Promise<void> => {
+    setPkMsg('')
+    const r = await window.vgc.passkeyImport(pkPass)
+    if (r.canceled) return
+    if (r.ok) {
+      setPkMsg(`Đã khôi phục ${r.creds} passkey ✓${r.skipped ? ` (bỏ qua ${r.skipped} passkey của profile không còn)` : ''}`)
+      reloadPasskeys()
+    } else setPkMsg(r.error || 'Không khôi phục được.')
+  }
   const reloadPasskeys = (): void => {
     void window.vgc.passkeyList(profile.id).then(setPasskeyList).catch(() => setPasskeyList([]))
   }
@@ -413,6 +430,23 @@ Nếu đây là cách đăng nhập duy nhất của tài khoản đó thì bạ
               Trang đòi tạo/dùng passkey thì VGC tự tạo và lưu khoá ngay trong profile này (không cần Windows Hello,
               điện thoại hay USB). Khoá được mã hoá và tự đồng bộ cloud theo profile. Áp dụng từ lần mở profile sau.
             </p>
+            <div className="row-inline" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+              <input
+                type="password"
+                value={pkPass}
+                onChange={(e) => setPkPass(e.target.value)}
+                placeholder="Mật khẩu file sao lưu (từ 8 ký tự)"
+                autoComplete="new-password"
+                style={{ maxWidth: 250 }}
+              />
+              <button type="button" className="btn sm" disabled={pkPass.length < 8} onClick={() => void backupPasskeys()}>
+                Sao lưu ra file
+              </button>
+              <button type="button" className="btn sm" disabled={pkPass.length < 8} onClick={() => void restorePasskeys()}>
+                Khôi phục từ file
+              </button>
+            </div>
+            {pkMsg && <p className="hint" style={{ margin: '0 0 6px' }}>{pkMsg}</p>}
             {passkeyList.length > 0 && (
               <div style={{ display: 'grid', gap: 4, marginBottom: 6 }}>
                 {passkeyList.map((k) => (

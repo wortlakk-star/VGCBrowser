@@ -11,8 +11,19 @@
 
 import { app } from 'electron'
 import { join } from 'path'
-import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign } from 'crypto'
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomBytes,
+  scrypt,
+  sign
+} from 'crypto'
+import { promisify } from 'util'
 import { decryptBytes, encryptBytes, getAccountSecret, isEncryptedBytes } from './account-secret'
 import { requireProfileId } from './validation'
 
@@ -124,9 +135,31 @@ async function readStore(profileId: string, secret: string): Promise<PkFile> {
   }
 }
 
+// ── Bản sao lưu cục bộ tự động ───────────────────────────────────────────────
+// Mỗi lần ghi kho, bản CŨ được chép sang `<userData>/passkey-backups/` (NGOÀI thư mục profile, nên
+// không bị cloud ghi đè hay xoá theo profile) và giữ 5 bản gần nhất. Cùng khoá mã hoá tài khoản.
+const BACKUP_KEEP = 5
+function backupDir(): string {
+  return join(app.getPath('userData'), 'passkey-backups')
+}
+async function backupExisting(profileId: string): Promise<void> {
+  try {
+    const file = storeFile(profileId)
+    await stat(file)
+    const dir = backupDir()
+    await mkdir(dir, { recursive: true, mode: 0o700 })
+    await copyFile(file, join(dir, `${profileId}-${Date.now()}.enc`))
+    const mine = (await readdir(dir)).filter((n) => n.startsWith(profileId + '-') && n.endsWith('.enc')).sort()
+    for (const old of mine.slice(0, Math.max(0, mine.length - BACKUP_KEEP))) await rm(join(dir, old), { force: true })
+  } catch {
+    /* chưa có file cũ hoặc không sao lưu được — không chặn việc ghi */
+  }
+}
+
 async function writeStore(profileId: string, secret: string, data: PkFile): Promise<void> {
   const file = storeFile(profileId)
   await mkdir(join(file, '..'), { recursive: true, mode: 0o700 })
+  await backupExisting(profileId)
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
     await writeFile(tmp, encryptBytes(secret, context(profileId), Buffer.from(JSON.stringify(data), 'utf8')), {
@@ -357,4 +390,102 @@ export function deletePasskey(profileId: string, credId: string): Promise<boolea
 /** Dùng cho test: public key dạng KeyObject từ SPKI đã lưu. */
 export function spkiToPublicKey(spkiB64: string): ReturnType<typeof createPublicKey> {
   return createPublicKey({ key: Buffer.from(spkiB64, 'base64'), format: 'der', type: 'spki' })
+}
+
+// ── Sao lưu / khôi phục ra FILE (mật khẩu riêng của người dùng) ───────────────
+// File .vgcpk dùng được trên MỌI máy và không phụ thuộc cloud hay khoá mã hoá tài khoản:
+// scrypt(mật khẩu) + AES-256-GCM. Đây là phao cứu sinh khi mất profile / cloud / khoá cloud.
+const BUNDLE_MAGIC = Buffer.from('VGCPK1\0\0', 'latin1')
+const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>
+const KDF = { N: 2 ** 15, r: 8, p: 1, maxmem: 128 * 1024 * 1024 }
+
+interface PkBundle {
+  v: 1
+  created: string
+  profiles: Record<string, PkCred[]>
+}
+const checkPassphrase = (pw: string): void => {
+  if (typeof pw !== 'string' || pw.length < 8) throw new PkError('NotAllowedError', 'Mật khẩu sao lưu phải từ 8 ký tự.')
+}
+
+/** Gói passkey của các profile (null = tất cả trong allIds) thành file mã hoá bằng mật khẩu. */
+export function exportPasskeys(
+  profileIds: string[] | null,
+  passphrase: string,
+  allIds: string[]
+): Promise<{ data: Buffer; profiles: number; creds: number }> {
+  return serialize(async () => {
+    checkPassphrase(passphrase)
+    const secret = await secretOrThrow()
+    const ids = profileIds ?? allIds
+    const bundle: PkBundle = { v: 1, created: new Date().toISOString(), profiles: {} }
+    let creds = 0
+    for (const id of ids) {
+      const store = await readStore(id, secret)
+      if (store.creds.length) {
+        bundle.profiles[id] = store.creds
+        creds += store.creds.length
+      }
+    }
+    if (creds === 0) throw new PkError('NotAllowedError', 'Chưa có passkey nào để sao lưu.')
+    const salt = randomBytes(16)
+    const iv = randomBytes(12)
+    const key = await scryptAsync(passphrase, salt, 32, KDF)
+    const cipher = createCipheriv('aes-256-gcm', key, iv)
+    const enc = Buffer.concat([cipher.update(JSON.stringify(bundle), 'utf8'), cipher.final()])
+    return {
+      data: Buffer.concat([BUNDLE_MAGIC, salt, iv, cipher.getAuthTag(), enc]),
+      profiles: Object.keys(bundle.profiles).length,
+      creds
+    }
+  })
+}
+
+/** Khôi phục từ file sao lưu: gộp vào kho của các profile ĐANG CÓ (profile không còn thì bỏ qua). */
+export function importPasskeys(
+  data: Buffer,
+  passphrase: string,
+  validIds: Set<string>
+): Promise<{ profiles: number; creds: number; skipped: number }> {
+  return serialize(async () => {
+    checkPassphrase(passphrase)
+    if (data.length < BUNDLE_MAGIC.length + 44 || !data.subarray(0, BUNDLE_MAGIC.length).equals(BUNDLE_MAGIC)) {
+      throw new PkError('NotAllowedError', 'File không phải bản sao lưu passkey của VGC.')
+    }
+    const salt = data.subarray(8, 24)
+    const iv = data.subarray(24, 36)
+    const tag = data.subarray(36, 52)
+    const key = await scryptAsync(passphrase, salt, 32, KDF)
+    let bundle: PkBundle
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', key, iv)
+      decipher.setAuthTag(tag)
+      bundle = JSON.parse(Buffer.concat([decipher.update(data.subarray(52)), decipher.final()]).toString('utf8')) as PkBundle
+    } catch {
+      throw new PkError('NotAllowedError', 'Sai mật khẩu sao lưu hoặc file bị hỏng.')
+    }
+    if (!bundle || bundle.v !== 1 || typeof bundle.profiles !== 'object') {
+      throw new PkError('NotAllowedError', 'File sao lưu không hợp lệ.')
+    }
+    const secret = await secretOrThrow()
+    let profiles = 0
+    let creds = 0
+    let skipped = 0
+    for (const [id, list] of Object.entries(bundle.profiles)) {
+      if (!validIds.has(id) || !Array.isArray(list)) {
+        skipped += Array.isArray(list) ? list.length : 0
+        continue
+      }
+      const store = await readStore(id, secret)
+      const incoming = list.filter(
+        (c) => c && typeof c.id === 'string' && typeof c.pkcs8 === 'string' && typeof c.rpId === 'string'
+      )
+      const incomingIds = new Set(incoming.map((c) => c.id))
+      store.creds = store.creds.filter((c) => !incomingIds.has(c.id)).concat(incoming)
+      await writeStore(id, secret, store)
+      profiles++
+      creds += incoming.length
+    }
+    return { profiles, creds, skipped }
+  })
 }

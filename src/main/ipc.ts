@@ -110,7 +110,7 @@ import {
 } from './profile-share'
 import { listGroups, createGroup, deleteGroup } from './group-store'
 import { getCloudAuth, setCloudAuth, removeCloudAuth } from './cloud-auth-store'
-import { listPasskeys, deletePasskey } from './passkeys'
+import { listPasskeys, deletePasskey, exportPasskeys, importPasskeys, PkError } from './passkeys'
 import {
   guardStatus,
   checkAdmin as guardCheckAdmin,
@@ -448,6 +448,46 @@ export function registerIpc(): void {
   handle('passkeys:delete', (_e, id: string, credId: string) =>
     deletePasskey(requireProfileId(id), String(credId ?? '').slice(0, 1400))
   )
+  // Sao lưu / khôi phục passkey ra file .vgcpk (mật khẩu riêng của người dùng).
+  handle('passkeys:export', async (_e, ids: string[] | null, passphrase: string) => {
+    try {
+      const all = (await listProfiles()).map((p) => p.id)
+      const selected = Array.isArray(ids) && ids.length ? requireProfileIds(ids, 10_000) : null
+      const r = await exportPasskeys(selected, String(passphrase ?? '').slice(0, 1024), all)
+      const win = focusedWindow()
+      const opts = {
+        title: 'Sao lưu passkey',
+        defaultPath: `vgc-passkeys-${new Date().toISOString().slice(0, 10)}.vgcpk`,
+        filters: [{ name: 'VGC passkey backup', extensions: ['vgcpk'] }]
+      }
+      const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+      if (res.canceled || !res.filePath) return { ok: false, canceled: true }
+      await fs.writeFile(res.filePath, r.data, { mode: 0o600 })
+      return { ok: true, profiles: r.profiles, creds: r.creds, filePath: res.filePath }
+    } catch (e) {
+      return { ok: false, error: e instanceof PkError ? e.message : 'Không sao lưu được passkey.' }
+    }
+  })
+  handle('passkeys:import', async (_e, passphrase: string) => {
+    try {
+      const win = focusedWindow()
+      const opts = {
+        title: 'Khôi phục passkey',
+        filters: [{ name: 'VGC passkey backup', extensions: ['vgcpk'] }],
+        properties: ['openFile' as const]
+      }
+      const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+      if (res.canceled || res.filePaths.length === 0) return { ok: false, canceled: true }
+      const st = await fs.lstat(res.filePaths[0])
+      if (!st.isFile() || st.size > 16 * 1024 * 1024) return { ok: false, error: 'File không an toàn hoặc quá lớn.' }
+      const data = await fs.readFile(res.filePaths[0])
+      const valid = new Set((await listProfiles()).map((p) => p.id))
+      const r = await importPasskeys(data, String(passphrase ?? '').slice(0, 1024), valid)
+      return { ok: true, ...r }
+    } catch (e) {
+      return { ok: false, error: e instanceof PkError ? e.message : 'Không khôi phục được passkey.' }
+    }
+  })
   handle('guard:status', () => guardStatus())
   handle('guard:checkAdmin', (_e, pw: string) => guardCheckAdmin(String(pw ?? '').slice(0, 1024)))
   handle('guard:lockedIds', () => guardLockedIds())
