@@ -53,6 +53,16 @@ export default function App(): JSX.Element {
   // Đã nhập đúng "mật khẩu bảo mật" trong phiên này → mới hiện phần Khoá bảo vệ
   // (ở Cài đặt và ở Sửa profile). Mặc định ẨN. Reset khi khởi động lại app.
   const [guardAdmin, setGuardAdmin] = useState(false)
+  const [lockedIds, setLockedIds] = useState<Set<string>>(new Set())
+  const refreshLockedIds = useCallback(async () => {
+    if (!guardAdmin) { setLockedIds(new Set()); return }
+    try {
+      setLockedIds(new Set(await window.vgc.guardLockedIds()))
+    } catch {
+      setLockedIds(new Set())
+    }
+  }, [guardAdmin])
+  useEffect(() => { void refreshLockedIds() }, [refreshLockedIds])
   const [showCloud, setShowCloud] = useState(false)
   const [showProxyMgr, setShowProxyMgr] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
@@ -213,9 +223,10 @@ export default function App(): JSX.Element {
     const off = window.vgc.onGuardWiped(() => {
       setUnlockFor(null)
       void refresh()
+      void refreshLockedIds()
     })
     return off
-  }, [refresh])
+  }, [refresh, refreshLockedIds])
 
   // ── Cloud auto-sync (GoLogin-style) ──────────────────────────────────────────
   // Set when an auto-pull just rewrote a local list, so the matching auto-push
@@ -1154,6 +1165,8 @@ export default function App(): JSX.Element {
               onMoveGroup={moveGroup}
               onOpenProxyPicker={setProxyPickFor}
               onSetAccountStatus={setAccountStatus}
+              lockedIds={lockedIds}
+              guardAdmin={guardAdmin}
             />
           )}
         </main>
@@ -1183,7 +1196,7 @@ export default function App(): JSX.Element {
         <WarmScheduleModal selectedIds={[...selected]} onClose={() => setShowWarmSchedule(false)} />
       )}
       {editing && (
-        <EditProfileModal profile={editing} guardAdmin={guardAdmin} onClose={() => setEditing(null)} onSaved={refresh} />
+        <EditProfileModal profile={editing} guardAdmin={guardAdmin} onClose={() => { setEditing(null); void refreshLockedIds() }} onSaved={() => { void refresh(); void refreshLockedIds() }} />
       )}
       {showCreate && (
         <CreateProfileModal

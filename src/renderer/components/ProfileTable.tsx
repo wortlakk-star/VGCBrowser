@@ -25,6 +25,9 @@ interface Props {
   onOpenProxyPicker: (profile: Profile) => void
   /** Set the account health status ('' = clear). */
   onSetAccountStatus: (id: string, status: AccountStatus | '') => void
+  /** Id các profile đang bật khoá bảo vệ — chỉ hiện dấu 🔒 khi đã mở khoá bảo mật. */
+  lockedIds: Set<string>
+  guardAdmin: boolean
 }
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
@@ -154,7 +157,9 @@ export function ProfileTable({
   onDelete,
   onMoveGroup,
   onOpenProxyPicker,
-  onSetAccountStatus
+  onSetAccountStatus,
+  lockedIds,
+  guardAdmin
 }: Props): JSX.Element {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
@@ -243,6 +248,9 @@ export function ProfileTable({
                     </div>
                     <div className="ptext">
                       <div className="pname">
+                        {guardAdmin && lockedIds.has(p.id) && (
+                          <span title="Profile này đang bật khoá bảo vệ (tự huỷ khi nhập sai)" style={{ marginRight: 4 }}>🔒</span>
+                        )}
                         <span title={p.name}>{p.name}</span>
                         {p.account?.status && ACCT_STATUS[p.account.status] && (
                           <span
