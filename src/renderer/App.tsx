@@ -1287,7 +1287,7 @@ export default function App(): JSX.Element {
       )}
       {adminPrompt && (
         <AdminPromptModal
-          title="🔒 Khoá / mở khoá profile"
+          title="Khoá / mở khoá profile"
           desc="Nhập mật khẩu chủ để đổi trạng thái khoá của profile này."
           onOk={() => void applyToggleAfterPrompt(adminPrompt.id)}
           onClose={() => setAdminPrompt(null)}

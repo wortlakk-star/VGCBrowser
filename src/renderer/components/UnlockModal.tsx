@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Icon } from './Icon'
 
 interface Props {
   id: string
@@ -56,28 +57,37 @@ export function UnlockModal({ id, name, onUnlocked, onClose, onWiped }: Props): 
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>🔒 Mở khoá profile</h3>
-        <p className="hint" style={{ marginTop: -4 }}>
-          Profile <b>{name}</b> đang được bảo vệ. Nhập mật khẩu để mở.
-        </p>
-        <input
-          type="password"
-          autoFocus
-          value={pw}
-          onChange={(e) => setPw(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit() }}
-          placeholder="Mật khẩu"
-          autoComplete="off"
-          style={{ width: '100%' }}
-        />
-        {msg && <p className="hint" style={{ color: '#e0534f', marginBottom: 0 }}>{msg}</p>}
-        <div className="row-inline" style={{ gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
-          <button type="button" onClick={onClose}>Huỷ</button>
-          <button type="button" className="primary" disabled={busy || !pw} onClick={() => void submit()}>
-            Mở khoá
+      <div className="modal" style={{ width: 400 }} onClick={(e) => e.stopPropagation()}>
+        <header className="modal-head">
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="shield" size={18} style={{ color: 'var(--accent-2)' }} />
+            Mở khoá profile
+          </h2>
+          <button className="btn" onClick={onClose}>
+            <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
+        </header>
+        <div className="modal-body">
+          <p className="hint" style={{ margin: 0 }}>
+            Profile <b>{name}</b> đang được bảo vệ. Nhập mật khẩu để mở.
+          </p>
+          <input
+            type="password"
+            autoFocus
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit() }}
+            placeholder="Mật khẩu"
+            autoComplete="off"
+          />
+          {msg && <p className="hint" style={{ margin: 0, color: '#e0534f', fontWeight: 600 }}>{msg}</p>}
         </div>
+        <footer className="modal-foot">
+          <button className="btn" onClick={onClose}>Huỷ</button>
+          <button className="btn primary" disabled={busy || !pw} onClick={() => void submit()}>
+            {busy ? 'Đang kiểm tra…' : 'Mở khoá'}
+          </button>
+        </footer>
       </div>
     </div>
   )
