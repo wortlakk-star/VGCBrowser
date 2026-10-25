@@ -122,25 +122,28 @@ const MAIN_JS = String.raw`(function () {
   }
 
   var TRANSPORTS = ['internal', 'hybrid'];
-  function buildAttestation(d) {
+  function buildAttestation(d, attach) {
+    var cross = attach === 'cross-platform';
+    var trs = cross ? ['usb'] : TRANSPORTS;
+    var ext = { credProps: { rk: true } };
     var resp = Object.create(window.AuthenticatorAttestationResponse ? window.AuthenticatorAttestationResponse.prototype : Object.prototype);
     hide(resp, {
       clientDataJSON: fromB64u(d.clientDataJSON),
       attestationObject: fromB64u(d.attestationObject),
-      getTransports: function getTransports() { return TRANSPORTS.slice(); },
+      getTransports: function getTransports() { return trs.slice(); },
       getAuthenticatorData: function getAuthenticatorData() { return fromB64u(d.authData); },
       getPublicKey: function getPublicKey() { return fromB64u(d.publicKey); },
       getPublicKeyAlgorithm: function getPublicKeyAlgorithm() { return -7; }
     });
     var c = Object.create(PKC.prototype);
     hide(c, {
-      id: d.id, rawId: fromB64u(d.id), type: 'public-key', authenticatorAttachment: 'platform', response: resp,
-      getClientExtensionResults: function getClientExtensionResults() { return {}; },
+      id: d.id, rawId: fromB64u(d.id), type: 'public-key', authenticatorAttachment: cross ? 'cross-platform' : 'platform', response: resp,
+      getClientExtensionResults: function getClientExtensionResults() { return { credProps: { rk: true } }; },
       toJSON: function toJSON() {
         return {
-          id: d.id, rawId: d.id, type: 'public-key', authenticatorAttachment: 'platform', clientExtensionResults: {},
+          id: d.id, rawId: d.id, type: 'public-key', authenticatorAttachment: cross ? 'cross-platform' : 'platform', clientExtensionResults: ext,
           response: {
-            clientDataJSON: d.clientDataJSON, attestationObject: d.attestationObject, transports: TRANSPORTS.slice(),
+            clientDataJSON: d.clientDataJSON, attestationObject: d.attestationObject, transports: trs.slice(),
             publicKeyAlgorithm: -7, publicKey: d.publicKey, authenticatorData: d.authData
           }
         };
@@ -202,7 +205,7 @@ const MAIN_JS = String.raw`(function () {
       algs: (pk.pubKeyCredParams || []).map(function (p) { return p.alg; })
     }).then(function (r) {
       if (!r.ok) throw fail(r);
-      return buildAttestation(r.data);
+      return buildAttestation(r.data, pk.authenticatorSelection && pk.authenticatorSelection.authenticatorAttachment);
     });
   }, 'create', 0);
 
