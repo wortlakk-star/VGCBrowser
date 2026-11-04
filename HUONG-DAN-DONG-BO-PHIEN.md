@@ -12,6 +12,7 @@
 | Gói phiên (zip) | `src/main/cloud-data.ts` | Local Storage / IndexedDB / Preferences / tab → Supabase Storage, mã hoá bằng khoá tài khoản. **Không** chứa Cookies / Login Data / Local State (khoá os_crypt riêng từng máy). |
 | Cầu nối cookie + mật khẩu | `src/main/password-bridge.ts` | Khi đóng: giải mã bằng khoá máy này → **hợp nhất** với bản cloud (cookie bạn đã xoá/đăng xuất trong phiên này thì không bị "sống lại"; nếu profile vừa chạy ở máy khác thì tải lại bản cloud mới nhất trước khi gộp) → upload. Khi mở: tải về → gộp vào DB cục bộ, mã hoá lại bằng khoá máy này. Không bao giờ ghi đè cả bộ bằng bản thiếu. |
 | Mở lần đầu trên máy mới | `bootstrapProfileStores` (profile-manager.ts) | Chạy engine ẩn ~0,6 s để tạo Cookies DB, Login Data, khoá os_crypt → cầu nối có chỗ để gộp. Không có bước này, lần mở đầu tiên trên máy mới sẽ chưa đăng nhập. |
+| Bố cục kho cookie trên macOS (từ 2.1.88) | `MAC_ENGINE_LAYOUT_ARGS` + `ensureNetworkDataLayout` (profile-manager.ts) | VGC Core bản Mac mặc định ghi cookie ở `Default/Cookies`, còn cầu nối (và mọi profile tạo trên Windows) dùng `Default/Network/Cookies` → lần đầu mở trên Mac báo "chưa khởi tạo được kho phiên", nhập 0 cookie, đóng cũng không xuất. Nay mọi lần chạy engine trên Mac đều kèm `--enable-features=TriggerNetworkDataMigration` (engine tự dời sang `Network/` như Windows, giữ nguyên cookie), và trước khi chạy app tự dời file cũ nếu còn — vì khi file đánh dấu `NetworkDataMigrated` đã về theo zip từ Windows, engine sẽ **xoá** chứ không dời `Default/Cookies`. |
 | Đóng engine êm | `stopProfile` / `requestEngineExit` | Windows: `taskkill /PID` (WM_CLOSE); macOS: SIGTERM; automation: CDP `Browser.close`. Dừng cưỡng bức làm mất cookie ghi trong ~30 s cuối (đã đo thực tế). |
 | Chống ghi đè | `cloudSessionState` + `allowCloudTag` | Không ghi đè bản cloud mới hơn bản mình đã đồng bộ — **trừ** khi bản mới đó chính là bàn giao muộn dành cho epoch của mình (máy đang chạy là máy thắng). |
 | Tự lưu định kỳ (từ 2.1.83) | `autosaveSession` (profile-manager.ts) | Profile **đang chạy** tự đẩy gói phiên lên cloud mỗi 5 phút (cookie/mật khẩu gộp thêm khi DB tạm đọc được; đi qua đúng đường chống ghi đè ở trên, im lặng khi lỗi). Máy ngủ / mất điện đột ngột chỉ mất tối đa ~5 phút cuối thay vì cả phiên. |
@@ -48,6 +49,8 @@ xác nhận phần Keychain (`security find-generic-password … "Chromium Safe 
 `vgc-sess.log` trong thư mục userData của app (Windows: `%APPDATA%\vgc-browser`, macOS:
 `~/Library/Application Support/vgc-browser`). Mọi bước khoá (`[lock …]`), đồng bộ (`[sync …]`), cookie
 (`[creds …]`, `[vgc-pw …]`), đóng (`[close …]`), thoát (`[quit …]`) đều có dòng riêng kèm lý do khi bỏ qua.
+Trên macOS thêm `[netlayout …]`: đã dời file cookie cũ vào `Default/Network/` hay chưa (`moved=[…]`).
+Dấu hiệu lỗi cũ: `[bootstrap …] ready=false` rồi `[creds …] imported 0/N cookies`.
 
 ## 6. Giới hạn đã biết
 

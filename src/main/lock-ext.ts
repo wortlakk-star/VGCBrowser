@@ -8,9 +8,10 @@
 // Extension nằm NGOÀI Default/ (cloud chỉ nén Default/) và được ghi lại mỗi lần mở.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
-import { randomBytes } from 'crypto'
-import { mkdirSync, writeFileSync } from 'fs'
+import { createHash, randomBytes } from 'crypto'
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { dbg } from './dbg'
 import { getRelockMinutes, isLocked, unlock } from './guard'
 import { PkError, pkCreate, pkGet, pkHas } from './passkeys'
 
@@ -83,11 +84,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 async function handlePasskey(op: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req, 64 * 1024)
   const id = tokens.get(String(body.t ?? ''))
-  if (!id) return send(res, 403, { error: 'forbidden' })
+  if (!id) {
+    dbg(`[pk ?] ${op} bi tu choi: token khong hop le`)
+    return send(res, 403, { error: 'forbidden' })
+  }
   const str = (v: unknown, max: number): string => String(v ?? '').slice(0, max)
+  if (op === 'log') {
+    dbg(`[pkjs ${id}] ${str(body.origin, 120)} ${str(body.m, 300)}`)
+    return send(res, 200, { ok: true })
+  }
   const strList = (v: unknown): string[] =>
     Array.isArray(v) ? v.slice(0, 100).map((x) => str(x, 1400)) : []
   const rpId = body.rpId ? str(body.rpId, 255) : undefined
+  const tag = `[pk ${id}] ${op} origin=${str(body.origin, 200)} rpId=${rpId ?? '-'}`
   try {
     if (op === 'create') {
       const user = (body.user ?? {}) as Record<string, unknown>
@@ -99,6 +108,7 @@ async function handlePasskey(op: string, req: IncomingMessage, res: ServerRespon
         excludeIds: strList(body.excludeIds),
         algs: Array.isArray(body.algs) ? body.algs.slice(0, 20).map(Number) : undefined
       })
+      dbg(`${tag} OK`)
       return send(res, 200, { ok: true, data })
     }
     if (op === 'get') {
@@ -108,6 +118,7 @@ async function handlePasskey(op: string, req: IncomingMessage, res: ServerRespon
         challenge: str(body.challenge, 1400),
         allowIds: strList(body.allowIds)
       })
+      dbg(`${tag} OK allow=${strList(body.allowIds).length}`)
       return send(res, 200, { ok: true, data })
     }
     if (op === 'has') {
@@ -116,7 +127,11 @@ async function handlePasskey(op: string, req: IncomingMessage, res: ServerRespon
     }
     return send(res, 404, { error: 'not found' })
   } catch (e) {
-    if (e instanceof PkError) return send(res, 200, { ok: false, err: e.domName, msg: e.message })
+    if (e instanceof PkError) {
+      dbg(`${tag} FAIL ${e.domName}: ${e.message}`)
+      return send(res, 200, { ok: false, err: e.domName, msg: e.message })
+    }
+    dbg(`${tag} FAIL unexpected: ${(e as Error)?.message ?? e}`)
     return send(res, 200, { ok: false, err: 'UnknownError', msg: 'Lỗi kho passkey.' })
   }
 }
@@ -154,7 +169,33 @@ export function releaseLockTokens(profileId: string): void {
 }
 
 // ── Mã nguồn extension ───────────────────────────────────────────────────────
-const MANIFEST = JSON.stringify({
+/**
+ * Thư mục extension theo mã nguồn service worker.
+ * Engine (Chromium) lưu service worker của extension trong `Default/Service Worker` của profile
+ * (đi theo gói phiên lên cloud) và KHÔNG nạp lại file mới trên đĩa — kể cả khi đổi số phiên bản
+ * manifest. Bản cũ nhúng cổng + token của lần mở trước (config.js) nên sau khi app khởi động lại,
+ * passkey / mở khoá báo "Không kết nối được VGC Browser".
+ * Cách sửa: (1) service worker đọc config.json từ đĩa ở MỖI lần gọi, nên cổng đổi không cần mã mới;
+ * (2) thư mục mang dấu băm của mã service worker → mã đổi thì ID extension đổi, Chrome cài như mới.
+ * Thư mục cũ (kể cả tên không có dấu băm của bản trước) được dọn đi.
+ */
+export function prepareExtDir(userDataDir: string, base: string, swCode: string): string {
+  const name = `${base}-${createHash('sha256').update(swCode).digest('hex').slice(0, 10)}`
+  try {
+    for (const entry of readdirSync(userDataDir)) {
+      if (entry !== name && (entry === base || entry.startsWith(`${base}-`))) {
+        rmSync(join(userDataDir, entry), { recursive: true, force: true })
+      }
+    }
+  } catch {
+    /* dọn không được thì thôi, không chặn việc mở profile */
+  }
+  const dir = join(userDataDir, name)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  return dir
+}
+
+const manifest = (): string => JSON.stringify({
   manifest_version: 3,
   name: 'VGC Lock',
   version: '1.0',
@@ -163,8 +204,10 @@ const MANIFEST = JSON.stringify({
   background: { service_worker: 'background.js' }
 })
 
-const BACKGROUND_JS = String.raw`importScripts('config.js');
-var BASE = 'http://127.0.0.1:' + VGC.port;
+const BACKGROUND_JS = String.raw`// Cổng + token đổi mỗi lần app mở profile → đọc config.json từ đĩa ở mỗi lần gọi (xem prepareExtDir).
+function cfg() {
+  return fetch(chrome.runtime.getURL('config.json'), { cache: 'no-store' }).then(function (r) { return r.json(); });
+}
 var ss = chrome.storage.session;
 
 async function st() { return await ss.get(['locked', 'prev', 'lockWin']); }
@@ -242,9 +285,10 @@ chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
   if (!msg || msg.type !== 'unlock') return;
   (async function () {
     try {
-      var r = await fetch(BASE + '/unlock', {
+      var c = await cfg();
+      var r = await fetch('http://127.0.0.1:' + c.port + '/unlock', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ t: VGC.token, pw: String(msg.pw || '') })
+        body: JSON.stringify({ t: c.token, pw: String(msg.pw || '') })
       });
       var j = await r.json();
       if (j && j.ok) await unlockNow();
@@ -259,7 +303,8 @@ chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
 async function arm() {
   var m = 0;
   try {
-    var r = await fetch(BASE + '/cfg?t=' + VGC.token);
+    var c = await cfg();
+    var r = await fetch('http://127.0.0.1:' + c.port + '/cfg?t=' + c.token);
     var j = await r.json();
     m = Number(j.idleMin) || 0;
   } catch (e) { return; }
@@ -334,12 +379,11 @@ export async function ensureLockExtension(userDataDir: string, profileId: string
     if ((await getRelockMinutes()) <= 0) return null
     const port = await ensureServer()
     const token = tokenFor(profileId)
-    const dir = join(userDataDir, 'vgc-lock-ext')
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const dir = prepareExtDir(userDataDir, 'vgc-lock-ext', BACKGROUND_JS)
     const write = (name: string, content: string): void =>
       writeFileSync(join(dir, name), content, { encoding: 'utf8', mode: 0o600 })
-    write('manifest.json', MANIFEST)
-    write('config.js', `var VGC = ${JSON.stringify({ port, token })};\n`)
+    write('manifest.json', manifest())
+    write('config.json', JSON.stringify({ port, token }))
     write('background.js', BACKGROUND_JS)
     write('lock.html', LOCK_HTML)
     write('lock.js', LOCK_JS)

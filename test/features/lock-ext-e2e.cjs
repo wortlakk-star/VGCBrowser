@@ -40,7 +40,7 @@ const cdp = (wsUrl) => new Promise((resolve, reject) => {
   await new Promise((r) => srv.listen(0, '127.0.0.1', r)); const port = srv.address().port
   const extDir = path.join(os.tmpdir(), 'vgc-lock-e2e-ext'); fs.rmSync(extDir, { recursive: true, force: true }); fs.mkdirSync(extDir, { recursive: true })
   fs.writeFileSync(path.join(extDir, 'manifest.json'), MANIFEST)
-  fs.writeFileSync(path.join(extDir, 'config.js'), 'var VGC = ' + JSON.stringify({ port, token: 'tok' }) + ';\n')
+  fs.writeFileSync(path.join(extDir, 'config.json'), JSON.stringify({ port, token: 'tok' }))
   fs.writeFileSync(path.join(extDir, 'background.js'), BG)
   fs.writeFileSync(path.join(extDir, 'lock.html'), HTML)
   fs.writeFileSync(path.join(extDir, 'lock.js'), JS)
@@ -56,8 +56,8 @@ const cdp = (wsUrl) => new Promise((resolve, reject) => {
         const l = await (await fetch('http://127.0.0.1:' + dbg + '/json/list')).json()
         for (const t of l.filter((x) => x.type === 'service_worker' && /background\.js$/.test(x.url))) {
           const c = await cdp(t.webSocketDebuggerUrl)
-          const r = await c.ev('typeof VGC')
-          if (r.result && r.result.value === 'object') { sw = t; break }
+          const r = await c.ev('typeof cfg')
+          if (r.result && r.result.value === 'function') { sw = t; break }
         }
       } catch (e) {}
     }

@@ -7,9 +7,9 @@
 // Extension được ghi vào thư mục profile (ngoài Default/) mỗi lần mở. Tắt cho từng profile bằng
 // Profile.passkeys = false (Sửa profile).
 
-import { mkdirSync, writeFileSync } from 'fs'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
-import { ensureServer, tokenFor } from './lock-ext'
+import { ensureServer, prepareExtDir, tokenFor } from './lock-ext'
 
 const MATCHES = ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*']
 
@@ -25,14 +25,19 @@ const MANIFEST = JSON.stringify({
   ]
 })
 
-const BACKGROUND_JS = String.raw`importScripts('config.js');
-var OPS = { create: 1, get: 1, has: 1 };
+const BACKGROUND_JS = String.raw`// Cổng + token đổi mỗi lần app mở profile. Chrome có thể giữ service worker cũ trong bộ nhớ đệm,
+// nên KHÔNG nhúng cổng vào script: đọc lại config.json từ đĩa ở mỗi lần gọi (xem prepareExtDir).
+function loadCfg() {
+  return fetch(chrome.runtime.getURL('config.json'), { cache: 'no-store' }).then(function (r) { return r.json(); });
+}
+var OPS = { create: 1, get: 1, has: 1, log: 1 };
 chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
   if (!msg || msg.type !== 'pk' || !OPS[msg.op]) return;
   (async function () {
     try {
-      var body = Object.assign({}, msg.data || {}, { t: VGC.token, origin: String(msg.origin || '') });
-      var r = await fetch('http://127.0.0.1:' + VGC.port + '/pk/' + msg.op, {
+      var c = await loadCfg();
+      var body = Object.assign({}, msg.data || {}, { t: c.token, origin: String(msg.origin || '') });
+      var r = await fetch('http://127.0.0.1:' + c.port + '/pk/' + msg.op, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
       });
       sendResponse(await r.json());
@@ -103,6 +108,9 @@ const MAIN_JS = String.raw`(function () {
       pending[id] = resolve;
       window.dispatchEvent(new CustomEvent('__vgcpk_req', { detail: JSON.stringify({ id: id, op: op, data: data }) }));
     });
+  }
+  function plog(m) {
+    try { call('log', { m: String(m).slice(0, 300) }); } catch (_) {}
   }
   function fail(r) {
     return new DOMException(r.msg || 'Không thực hiện được.', r.err || 'NotAllowedError');
@@ -197,6 +205,7 @@ const MAIN_JS = String.raw`(function () {
     if (!pk) return origCreate.apply(this, arguments);
     if (options.signal && options.signal.aborted) return Promise.reject(abortError());
     var user = pk.user || {};
+    plog('create start rp=' + (pk.rp && pk.rp.id) + ' frame=' + (window === window.top ? 'top' : 'sub'));
     return call('create', {
       rpId: pk.rp && pk.rp.id,
       challenge: toB64u(pk.challenge),
@@ -204,7 +213,7 @@ const MAIN_JS = String.raw`(function () {
       excludeIds: (pk.excludeCredentials || []).map(function (c) { return toB64u(c.id); }),
       algs: (pk.pubKeyCredParams || []).map(function (p) { return p.alg; })
     }).then(function (r) {
-      if (!r.ok) throw fail(r);
+      if (!r.ok) { plog('create FAIL ' + r.err + ' ' + (r.msg || '')); throw fail(r); }
       return buildAttestation(r.data, pk.authenticatorSelection && pk.authenticatorSelection.authenticatorAttachment);
     });
   }, 'create', 0);
@@ -216,9 +225,10 @@ const MAIN_JS = String.raw`(function () {
     if (signal && signal.aborted) return Promise.reject(abortError());
     var allowIds = (pk.allowCredentials || []).map(function (c) { return toB64u(c.id); });
     var base = { rpId: pk.rpId, challenge: toB64u(pk.challenge), allowIds: allowIds };
+    plog('get start rp=' + pk.rpId + ' allow=' + allowIds.length + ' med=' + (options.mediation || '-') + ' uv=' + (pk.userVerification || '-') + ' frame=' + (window === window.top ? 'top' : 'sub'));
     function doGet() {
       return call('get', base).then(function (r) {
-        if (!r.ok) throw fail(r);
+        if (!r.ok) { plog('get FAIL ' + r.err + ' ' + (r.msg || '')); throw fail(r); }
         return buildAssertion(r.data);
       });
     }
@@ -261,12 +271,11 @@ export async function ensurePasskeyExtension(userDataDir: string, profileId: str
   try {
     const port = await ensureServer()
     const token = tokenFor(profileId)
-    const dir = join(userDataDir, 'vgc-passkey-ext')
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const dir = prepareExtDir(userDataDir, 'vgc-passkey-ext', BACKGROUND_JS)
     const write = (name: string, content: string): void =>
       writeFileSync(join(dir, name), content, { encoding: 'utf8', mode: 0o600 })
     write('manifest.json', MANIFEST)
-    write('config.js', `var VGC = ${JSON.stringify({ port, token })};\n`)
+    write('config.json', JSON.stringify({ port, token }))
     write('background.js', BACKGROUND_JS)
     write('isolated.js', ISOLATED_JS)
     write('main.js', MAIN_JS)

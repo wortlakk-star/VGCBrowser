@@ -92,6 +92,9 @@ async function main(): Promise<void> {
     '--disable-sync',
     '--disable-extensions',
     '--proxy-server=http://127.0.0.1:9',
+    // macOS: like MAC_ENGINE_LAYOUT_ARGS in profile-manager.ts — without it the Mac engine
+    // keeps cookies in `Default/Cookies`, not `Default/Network/Cookies` (read below).
+    ...(process.platform === 'darwin' ? ['--enable-features=TriggerNetworkDataMigration'] : []),
     '--window-size=640,480',
     '--remote-debugging-pipe',
     'about:blank'

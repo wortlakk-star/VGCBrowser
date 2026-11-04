@@ -75,6 +75,9 @@ function bootstrapArgs(userDataDir: string): string[] {
     '--disable-sync',
     '--disable-extensions',
     '--proxy-server=http://127.0.0.1:9',
+    // macOS: VGC Core keeps the feature off → cookies would land in `Default/Cookies`, not
+    // `Default/Network/Cookies` (MAC_ENGINE_LAYOUT_ARGS in profile-manager.ts).
+    ...(process.platform === 'darwin' ? ['--enable-features=TriggerNetworkDataMigration'] : []),
     '--remote-debugging-pipe',
     'about:blank'
   ]

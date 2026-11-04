@@ -1251,6 +1251,70 @@ class SupersededError extends Error {
 }
 
 /**
+ * ── macOS network-data layout ───────────────────────────────────────────────────────────
+ * Chromium keeps cookies in `Default/Network/Cookies` (the "new" layout) ONLY where its
+ * `TriggerNetworkDataMigration` feature is on — default on Windows, OFF in the macOS build of
+ * VGC Core. So a profile first created on a Mac kept `Default/Cookies`, while the credential
+ * bridge (and every Windows-made profile) reads/writes `Default/Network/Cookies`. Result on a
+ * new Mac: the first-open bootstrap counted as failed (store not found), the cloud cookies
+ * were never merged, the profile came up logged out — and on close nothing was exported either.
+ *
+ * Fix, two layers (both measured on VGC Core 151 / macOS):
+ *   1. `MAC_ENGINE_LAYOUT_ARGS` — every engine run gets `--enable-features=
+ *      TriggerNetworkDataMigration`, so the engine itself creates / migrates into
+ *      `Default/Network/` exactly like on Windows (a live `Default/Cookies` is MOVED, row
+ *      intact, and the `NetworkDataMigrated` checkpoint is written).
+ *   2. `ensureNetworkDataLayout` — before the engine starts, move any leftover old-layout files
+ *      across ourselves. Needed because a checkpoint can ARRIVE with a synced zip (made on
+ *      Windows) while this Mac still holds a live `Default/Cookies`: with the checkpoint
+ *      present the engine does NOT migrate, it DELETES the leftovers. Runs with the engine
+ *      stopped (before spawn / under the profile's data lock). Idempotent, best-effort.
+ */
+const MAC_ENGINE_LAYOUT_ARGS: readonly string[] =
+  process.platform === 'darwin' ? ['--enable-features=TriggerNetworkDataMigration'] : []
+const NETWORK_DATA_ENTRIES = [
+  'Cookies',
+  'Cookies-journal',
+  'Network Persistent State',
+  'Reporting and NEL',
+  'Reporting and NEL-journal',
+  'SCT Auditing Pending Reports',
+  'TransportSecurity',
+  'Trust Tokens',
+  'Trust Tokens-journal',
+  'Device Bound Sessions',
+  'Device Bound Sessions-journal'
+]
+async function ensureNetworkDataLayout(id: string, userDataDir: string): Promise<void> {
+  if (process.platform !== 'darwin') return
+  const def = join(userDataDir, 'Default')
+  const netDir = join(def, 'Network')
+  const marker = join(netDir, 'NetworkDataMigrated')
+  const hadMarker = existsSync(marker)
+  // Which copy is LIVE when a file exists in both places? The engine only ever used
+  // `Default/Network/` after the checkpoint existed — so with the checkpoint the Network copy
+  // is live (the old one is a stale leftover the engine would delete anyway); without it the
+  // engine was still writing `Default/<name>`, so that copy wins and replaces the other.
+  const leftovers = NETWORK_DATA_ENTRIES.filter(
+    (name) => existsSync(join(def, name)) && (!hadMarker || !existsSync(join(netDir, name)))
+  )
+  if (hadMarker && !leftovers.length) return // already in the new layout
+  try {
+    await fs.mkdir(netDir, { recursive: true })
+    for (const name of leftovers) {
+      await fs.rm(join(netDir, name), { recursive: true, force: true })
+      await fs.rename(join(def, name), join(netDir, name))
+    }
+    if (!hadMarker) await fs.writeFile(marker, '')
+    dbg(
+      `[netlayout ${id}] ${hadMarker ? 'checkpoint present' : 'checkpoint written'}, moved=[${leftovers.join(', ')}]`
+    )
+  } catch (err) {
+    dbg(`[netlayout ${id}] failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/**
  * FIRST OPEN OF A PROFILE ON THIS MACHINE — create the per-machine credential stores so the
  * cloud cookies + saved logins can be merged in BEFORE the real launch.
  *
@@ -1290,9 +1354,13 @@ async function bootstrapProfileStores(
     '--disable-sync',
     '--disable-extensions',
     '--proxy-server=http://127.0.0.1:9',
+    ...MAC_ENGINE_LAYOUT_ARGS,
     '--remote-debugging-pipe',
     'about:blank'
   ]
+  // macOS: the throwaway run must create `Default/Network/Cookies` (where the bridge merges),
+  // not `Default/Cookies` — otherwise the bootstrap counts as failed and nothing is merged.
+  await ensureNetworkDataLayout(id, userDataDir)
   let proc: ChildProcess
   try {
     proc = await spawnAndWait(enginePath, args, true, engineChildEnv())
@@ -1616,6 +1684,9 @@ async function launchProfileImpl(
       // profile that already has data here.
       let bootstrapped: boolean | undefined
       await withDataLock(id, async () => {
+        // macOS profile made here before this fix still keeps `Default/Cookies` — move it into
+        // the layout the bridge reads so it counts as READY (never bootstrap over live data).
+        await ensureNetworkDataLayout(id, userDataDir)
         if (credentialStoresReady(userDataDir)) return
         if (!cloudCreds!.cookies.length && !cloudCreds!.logins.length) return // nothing to merge yet
         broadcastData({
@@ -1794,6 +1865,8 @@ async function launchProfileImpl(
     // machine with no WebGPU-capable GPU shows — so nothing real leaks. (Measured: with only
     // --disable-features=WebGPU the adapter still resolved; WebGPUService is required.)
     ...(engineHasWebGpuIdentity(enginePath, settings) ? [] : ['--disable-features=WebGPU,WebGPUService']),
+    // macOS: cookies in `Default/Network/` like Windows (see MAC_ENGINE_LAYOUT_ARGS).
+    ...MAC_ENGINE_LAYOUT_ARGS,
     // No "Chrome didn't shut down correctly — restore pages?" bubble (we manage tabs).
     '--hide-crash-restore-bubble',
     `--lang=${fp.language}`,
@@ -2027,6 +2100,11 @@ async function launchProfileImpl(
   if (!sameAccount(launchAccountUid) || accountTransitioning || accountTransitionInProgress()) {
     throw new Error('Tài khoản đã thay đổi trong lúc chuẩn bị engine.')
   }
+
+  // macOS: engine must read/write cookies where the bridge exports them on close
+  // (`Default/Network/Cookies`); moves a pre-fix `Default/Cookies` across first (engine is
+  // not running for this profile here — `running` was checked above).
+  await ensureNetworkDataLayout(id, userDataDir)
 
   let proc: ChildProcess
   try {
