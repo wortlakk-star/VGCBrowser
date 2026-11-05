@@ -2,7 +2,7 @@
 // These types are used across main, preload and renderer. Keep them runtime-agnostic
 // (no Node or DOM imports) so every layer can share them safely.
 
-/** Verdict of the internal-access check (admin list on vgcbrowser.com/quanly). */
+/** Verdict of the internal-access check (admin list on trang quản trị nhân viên). */
 export interface LicenseStatus {
   approved: boolean
   /** Signed-in email the verdict is about ('' when signed out). */

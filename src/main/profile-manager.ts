@@ -1502,7 +1502,7 @@ async function launchProfileImpl(
     )
   }
 
-  // ── Access gate: only emails the admin approved (vgcbrowser.com/quanly) may open a
+  // ── Access gate: only emails the admin approved (trang quản trị nhân viên) may open a
   // profile. Re-checked here so a revoke takes effect on the next open. Network blip →
   // falls back to the last-known cached decision (see license.ts), so it never locks out
   // an already-approved user; a never-approved / signed-out email stays blocked.

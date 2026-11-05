@@ -40,7 +40,7 @@ import type {
 } from '../shared/types'
 
 const api = {
-  // ── Internal-access gate: only emails on the admin list (vgcbrowser.com/quanly) may use
+  // ── Internal-access gate: only emails on the admin list (trang quản trị nhân viên) may use
   // the app. Main checks the email of the session IT validated; the renderer cannot pick one.
   licenseCheck: (): Promise<LicenseCheckResult> => ipcRenderer.invoke('license:check'),
   /** Sign-up pre-check: is this email already on the internal list? */

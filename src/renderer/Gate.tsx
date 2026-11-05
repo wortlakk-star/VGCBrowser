@@ -36,7 +36,7 @@ const FOCUS_RECHECK_MIN_MS = 60 * 1000
 
 /**
  * Auth gate: the app REQUIRES a logged-in account AND that account's email must be on
- * the internal list the admin manages at vgcbrowser.com/quanly. Until the user signs
+ * the internal list the admin manages at trang quản trị nhân viên. Until the user signs
  * in we show <AuthScreen/>; a signed-in but unapproved email gets <AccessDenied/>;
  * only an approved email reaches the full app. This component also owns the single
  * source of truth for the cloud session and pushes it to main (for profile-data

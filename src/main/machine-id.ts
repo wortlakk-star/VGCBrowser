@@ -1,5 +1,5 @@
 // ── VGC Browser — stable per-machine ID ──────────────────────────────────────
-// A random UUID generated once and persisted in userData, so the admin panel (/quanly)
+// A random UUID generated once and persisted in userData, so the admin panel (trang quản trị)
 // can see WHICH machine an account signs in from — and how many machines share one
 // license. Deliberately NOT hardware-derived: a hardware fingerprint is brittle across
 // OS reinstalls and reads as spyware; a stable random id that survives app restarts is

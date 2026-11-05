@@ -905,11 +905,13 @@ export function registerIpc(): void {
   })
   // Chuyển dữ liệu sang máy chủ công ty (src/main/migrate.ts). Chạy trong account-operation để
   // không đua với đăng xuất/đổi tài khoản.
-  handle('migrate:prepare', () => runAccountOperation(() => migrationPrepare()))
-  handle('migrate:start', (_e, password: string, full?: boolean) =>
-    runAccountOperation(() => migrationStart(String(password ?? '').slice(0, 512), full === true))
-  )
-  handle('migrate:status', (_e, job: string) => migrationStatus(String(job ?? '')))
+  if (__VGC_TARGET__ !== 'xeon') {
+    handle('migrate:prepare', () => runAccountOperation(() => migrationPrepare()))
+    handle('migrate:start', (_e, password: string, full?: boolean) =>
+      runAccountOperation(() => migrationStart(String(password ?? '').slice(0, 512), full === true))
+    )
+    handle('migrate:status', (_e, job: string) => migrationStatus(String(job ?? '')))
+  }
 
   handle('settings:save', async (_e, patch: Partial<AppSettings>) => {
     const s = await saveSettings(patch)
@@ -923,7 +925,7 @@ export function registerIpc(): void {
     return s
   })
 
-  // ── Internal-access gate (admin list at vgcbrowser.com/quanly) ──
+  // ── Internal-access gate (admin list at trang quản trị nhân viên) ──
   // The email comes from the session main validated, never from the renderer. When the
   // server POSITIVELY revokes a signed-in user, running profiles are closed (with their
   // session synced to the cloud) so the kick is real, not just a screen swap.

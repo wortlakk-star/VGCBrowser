@@ -52,7 +52,7 @@ const RECHECK_NOTE: Record<Kind, string> = {
 
 /**
  * Shown after a successful sign-in when the email is NOT on the internal list
- * (vgcbrowser.com/quanly), or when a signed-in user was revoked while working. The
+ * (trang quản trị nhân viên), or when a signed-in user was revoked while working. The
  * session stays alive so "Kiểm tra lại" can pass the moment the admin approves the
  * email; "Đăng xuất" returns to the sign-in screen. While main is still closing the
  * profiles that were open at the moment of a revoke, a progress line asks the user not

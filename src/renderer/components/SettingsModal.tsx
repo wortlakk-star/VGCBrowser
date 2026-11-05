@@ -364,14 +364,14 @@ export function SettingsModal({
                 Đăng xuất
               </button>
             </div>
-            {canMigrate && (
+            {__VGC_TARGET__ !== 'xeon' && canMigrate && (
               <div className="proxy-check">
                 <button className="btn primary" onClick={() => setShowMigrate(true)}>
                   Chuyển dữ liệu sang máy chủ công ty
                 </button>
               </div>
             )}
-            {showMigrate && <MigrateModal email={accountEmail || ''} onClose={() => setShowMigrate(false)} />}
+            {__VGC_TARGET__ !== 'xeon' && showMigrate && <MigrateModal email={accountEmail || ''} onClose={() => setShowMigrate(false)} />}
           </section>
 
           <section className="card">

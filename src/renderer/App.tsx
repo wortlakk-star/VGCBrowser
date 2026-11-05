@@ -1022,7 +1022,7 @@ export default function App(): JSX.Element {
           </button>
         </div>
       )}
-      {buildInfo.migration && !migratedAt && accountEmail && !migrateOpen && (
+      {__VGC_TARGET__ !== 'xeon' && buildInfo.migration && !migratedAt && accountEmail && !migrateOpen && (
         <div className="update-banner">
           <Icon name="cloud" size={18} style={{ color: 'var(--green)' }} />
           <span>Công ty chuyển dữ liệu VGC sang máy chủ riêng. Bấm để chuyển profile và passkey của bạn (khoảng 1 phút).</span>
@@ -1031,7 +1031,7 @@ export default function App(): JSX.Element {
           </button>
         </div>
       )}
-      {migrateOpen && (
+      {__VGC_TARGET__ !== 'xeon' && migrateOpen && (
         <MigrateModal
           email={accountEmail}
           onClose={() => {

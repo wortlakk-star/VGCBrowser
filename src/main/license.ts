@@ -1,6 +1,6 @@
 // ── VGC Browser — internal-access gate (admin approval list) ─────────────────
 // VGC Browser is an INTERNAL tool: only emails the administrator added on
-// vgcbrowser.com/quanly may use it. The app asks check.php whether the signed-in
+// trang quản trị nhân viên may use it. The app asks check.php whether the signed-in
 // email is on that list and caches a positive answer for 24 h so a network blip never
 // locks out an approved colleague. It is consulted at sign-in (Gate.tsx), every few
 // minutes while the app is open, and again on every profile launch (profile-manager).
