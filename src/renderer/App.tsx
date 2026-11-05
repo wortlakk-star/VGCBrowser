@@ -352,7 +352,7 @@ export default function App(): JSX.Element {
         const parts: string[] = []
         if (nProfiles > 0) parts.push(`${nProfiles} profile`)
         if (nProxies > 0) parts.push(`${nProxies} proxy`)
-        setDataSync({ id: '*', phase: 'download', message: `✓ Đã tải ${parts.join(' + ')} từ cloud` })
+        setDataSync({ id: '*', phase: 'download', message: `✓ Đã tải ${parts.join(' + ')} từ máy chủ` })
         setTimeout(() => setDataSync(null), 2500)
       }
       if (px.status === 'rejected') console.warn('[auto-pull:proxies]', px.reason)
@@ -362,7 +362,7 @@ export default function App(): JSX.Element {
           id: '*',
           phase: 'error',
           message:
-            'Lỗi tải profile từ cloud: ' +
+            'Lỗi tải profile từ máy chủ: ' +
             (pr.reason instanceof Error ? pr.reason.message : String(pr.reason))
         })
         setTimeout(() => setDataSync(null), 4000)
@@ -955,7 +955,7 @@ export default function App(): JSX.Element {
   const syncNow = useCallback(async () => {
     if (refreshing) return
     setRefreshing(true)
-    setDataSync({ id: '*', phase: 'download', message: '↻ Đang làm mới từ cloud…' })
+    setDataSync({ id: '*', phase: 'download', message: '↻ Đang làm mới từ máy chủ…' })
     try {
       const [pr, px] = await Promise.allSettled([pullCloudProfileList(), pullCloudProxies()])
       const nP = pr.status === 'fulfilled' && pr.value > 0 ? pr.value : 0
@@ -1006,7 +1006,7 @@ export default function App(): JSX.Element {
         <div className="update-banner" style={{ background: '#5a1d1d' }}>
           <Icon name="info" size={18} />
           <span>
-            <b>BẢN THỬ</b> — máy chủ dữ liệu: <b>{buildInfo.target === 'xeon' ? 'máy chủ công ty' : buildInfo.target === 'fake' ? 'cloud giả (thử)' : 'cloud'}</b>.
+            <b>BẢN THỬ</b> — máy chủ dữ liệu: <b>{buildInfo.target === 'xeon' ? 'máy chủ công ty' : buildInfo.target === 'fake' ? 'máy chủ giả (thử)' : 'cloud'}</b>.
             Dữ liệu tách riêng, không đụng bản VGC thật trên máy.
           </span>
         </div>
@@ -1015,7 +1015,7 @@ export default function App(): JSX.Element {
         <div className="update-banner" style={{ background: '#3a2a10' }}>
           <Icon name="info" size={18} style={{ color: '#f5c26b' }} />
           <span>
-            Chưa mở khoá mã hoá — nhập <b>passphrase mã hoá cloud</b> (Cài đặt → Mã hoá cloud) để tải profile và passkey của bạn về máy này.
+            Chưa mở khoá mã hoá — nhập <b>passphrase mã hoá dữ liệu</b> (Cài đặt → Mã hoá dữ liệu) để tải profile và passkey của bạn về máy này.
           </span>
           <button className="btn primary" onClick={() => setShowSettings(true)}>
             Nhập passphrase
@@ -1200,7 +1200,7 @@ export default function App(): JSX.Element {
             className="btn"
             onClick={syncNow}
             disabled={refreshing}
-            title="Kéo dữ liệu mới nhất từ cloud (đồng bộ giữa 2 máy)"
+            title="Kéo dữ liệu mới nhất từ máy chủ (đồng bộ giữa 2 máy)"
           >
             <Icon name="refresh" size={16} className={refreshing ? 'spin' : ''} />
             {refreshing ? 'Đang làm mới…' : 'Làm mới'}
@@ -1281,7 +1281,7 @@ export default function App(): JSX.Element {
                   }}
                 >
                   <Icon name="cloud" size={16} />
-                  Đồng bộ cloud
+                  Đồng bộ máy chủ
                 </button>
               </>
             )}
@@ -1556,15 +1556,15 @@ export default function App(): JSX.Element {
                 : dataSync.phase === 'warn'
                   ? 'Lưu ý'
                   : dataSync.phase === 'done'
-                    ? 'Đã đồng bộ cloud'
-                    : 'Đang đồng bộ cloud'}
+                    ? 'Đã đồng bộ máy chủ'
+                    : 'Đang đồng bộ máy chủ'}
             </div>
             <div>
               {dataSync.message ??
                 (dataSync.phase === 'download'
                   ? 'Đang tải dữ liệu profile…'
                   : dataSync.phase === 'upload'
-                    ? 'Đang lưu phiên lên cloud…'
+                    ? 'Đang lưu phiên lên máy chủ…'
                     : dataSync.phase === 'done'
                       ? 'Phiên đã được đồng bộ.'
                       : 'Đang đồng bộ…')}

@@ -29,12 +29,12 @@ export function UnlockModal({ id, name, onUnlocked, onClose, onWiped }: Props): 
         return
       }
       if (res.action === 'wiped-profile') {
-        onWiped(`Nhập sai quá số lần — profile "${name}" đã bị xoá vĩnh viễn (cả dữ liệu cloud).`)
+        onWiped(`Nhập sai quá số lần — profile "${name}" đã bị xoá vĩnh viễn (cả dữ liệu máy chủ).`)
         onClose()
         return
       }
       if (res.action === 'wiped-all') {
-        onWiped('Nhập sai quá số lần — TẤT CẢ profile đã bị xoá vĩnh viễn (cả dữ liệu cloud).')
+        onWiped('Nhập sai quá số lần — TẤT CẢ profile đã bị xoá vĩnh viễn (cả dữ liệu máy chủ).')
         onClose()
         return
       }

@@ -84,11 +84,11 @@ async function push(secret: string, uid: string, data: GuardSyncData): Promise<b
 
 async function doSync(): Promise<GuardSyncResult> {
   const session = getCloudSession()
-  if (!session) return { ok: false, error: 'Chưa đăng nhập cloud.' }
+  if (!session) return { ok: false, error: 'Chưa đăng nhập máy chủ.' }
   const secret = await getAccountSecret()
-  if (!secret) return { ok: false, error: 'Chưa mở khoá mã hoá cloud.' }
+  if (!secret) return { ok: false, error: 'Chưa mở khoá mã hoá dữ liệu.' }
   const remote = await fetchRemote(secret, session.uid)
-  if (!remote) return { ok: false, error: 'Không đọc được cấu hình khoá trên cloud (mạng hoặc khoá mã hoá).' }
+  if (!remote) return { ok: false, error: 'Không đọc được cấu hình khoá trên máy chủ (mạng hoặc khoá mã hoá).' }
 
   let snap = await guardSyncSnapshot()
   if (!remote.data) {
@@ -99,7 +99,7 @@ async function doSync(): Promise<GuardSyncResult> {
     }
     return (await push(secret, session.uid, snap.data))
       ? { ok: true, action: 'pushed' }
-      : { ok: false, error: 'Không ghi được cấu hình khoá lên cloud.' }
+      : { ok: false, error: 'Không ghi được cấu hình khoá lên máy chủ.' }
   }
 
   if (remote.data.rev > snap.data.rev) {
@@ -107,7 +107,7 @@ async function doSync(): Promise<GuardSyncResult> {
     await applyRemoteGuard(remote.data, union)
     if (union) {
       snap = await guardSyncSnapshot()
-      if (!(await push(secret, session.uid, snap.data))) return { ok: false, error: 'Không ghi được cấu hình khoá lên cloud.' }
+      if (!(await push(secret, session.uid, snap.data))) return { ok: false, error: 'Không ghi được cấu hình khoá lên máy chủ.' }
       return { ok: true, action: 'pushed' }
     }
     return { ok: true, action: 'adopted' }
@@ -115,7 +115,7 @@ async function doSync(): Promise<GuardSyncResult> {
   if (snap.data.rev > remote.data.rev) {
     return (await push(secret, session.uid, snap.data))
       ? { ok: true, action: 'pushed' }
-      : { ok: false, error: 'Không ghi được cấu hình khoá lên cloud.' }
+      : { ok: false, error: 'Không ghi được cấu hình khoá lên máy chủ.' }
   }
   return { ok: true, action: 'none' }
 }

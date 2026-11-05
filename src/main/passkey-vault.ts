@@ -121,11 +121,11 @@ export function syncPasskeyVault(): Promise<VaultSyncResult> {
 async function doSync(): Promise<VaultSyncResult> {
   {
     const session = getCloudSession()
-    if (!session) return { ok: false, error: 'Chưa đăng nhập cloud.' }
+    if (!session) return { ok: false, error: 'Chưa đăng nhập máy chủ.' }
     const secret = await getAccountSecret()
-    if (!secret) return { ok: false, error: 'Chưa mở khoá mã hoá cloud.' }
+    if (!secret) return { ok: false, error: 'Chưa mở khoá mã hoá dữ liệu.' }
     const cloud = await fetchVault(secret, session.uid)
-    if (!cloud) return { ok: false, error: 'Không đọc được két passkey trên cloud (mạng hoặc khoá mã hoá).' }
+    if (!cloud) return { ok: false, error: 'Không đọc được két passkey trên máy chủ (mạng hoặc khoá mã hoá).' }
 
     // 1) KÉO: két → kho cục bộ của các profile đang có trên tài khoản này.
     const valid = new Set((await listProfiles()).map((p) => p.id))
@@ -159,7 +159,7 @@ async function doSync(): Promise<VaultSyncResult> {
     const changed = canonical(next) !== canonical(cloud.vault)
     let pushed = false
     if (changed && (countCreds(next) > 0 || Object.keys(next.tomb).length > 0 || cloud.exists)) {
-      if (!(await putVault(secret, session.uid, next))) return { ok: false, error: 'Không ghi được két lên cloud.', pulled, removed }
+      if (!(await putVault(secret, session.uid, next))) return { ok: false, error: 'Không ghi được két lên máy chủ.', pulled, removed }
       pushed = true
     }
     return { ok: true, pulled, removed, pushed, total: countCreds(changed ? next : cloud.vault) }

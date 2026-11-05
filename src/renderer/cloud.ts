@@ -76,11 +76,11 @@ async function unprotectData<T>(
       expectedUid,
       profileId
     )
-    if (!dec) throw new Error('Không giải mã được dữ liệu cloud. Kiểm tra passphrase.')
+    if (!dec) throw new Error('Không giải mã được dữ liệu máy chủ. Kiểm tra passphrase.')
     try {
       return { value: JSON.parse(dec.plaintext) as T, legacy: dec.legacy }
     } catch {
-      throw new Error('Dữ liệu cloud sau giải mã không đúng định dạng.')
+      throw new Error('Dữ liệu máy chủ sau giải mã không đúng định dạng.')
     }
   }
   return null
@@ -110,7 +110,7 @@ async function decodeOrMigrateLegacy<T>(
         .update({ data: envelope, updated_at: new Date().toISOString() })
         .eq('owner', currentUid)
         .eq(idColumn, id)
-      if (error) throw new Error(`Không thể nâng cấp mã hoá cloud: ${error.message}`)
+      if (error) throw new Error(`Không thể nâng cấp mã hoá dữ liệu: ${error.message}`)
     }
     return decoded.value
   }
@@ -130,7 +130,7 @@ async function decodeOrMigrateLegacy<T>(
     .update({ data: envelope, updated_at: new Date().toISOString() })
     .eq('owner', currentUid)
     .eq(idColumn, id)
-  if (error) throw new Error(`Không thể mã hoá dữ liệu cloud cũ: ${error.message}`)
+  if (error) throw new Error(`Không thể mã hoá dữ liệu máy chủ cũ: ${error.message}`)
   return row.data as T
 }
 

@@ -112,7 +112,7 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
 
 async function secretOrThrow(): Promise<string> {
   const s = await getAccountSecret()
-  if (!s) throw new PkError('NotAllowedError', 'Chưa mở khoá mã hoá cloud — chưa dùng được kho passkey.')
+  if (!s) throw new PkError('NotAllowedError', 'Chưa mở khoá mã hoá dữ liệu — chưa dùng được kho passkey.')
   return s
 }
 
@@ -127,7 +127,7 @@ async function readStore(profileId: string, secret: string): Promise<PkFile> {
   }
   if (!isEncryptedBytes(raw)) throw new PkError('UnknownError', 'Kho passkey không đúng định dạng.')
   const plain = decryptBytes(secret, context(profileId), raw)
-  if (!plain) throw new PkError('UnknownError', 'Không giải mã được kho passkey (sai khoá mã hoá cloud?).')
+  if (!plain) throw new PkError('UnknownError', 'Không giải mã được kho passkey (sai khoá mã hoá dữ liệu?).')
   try {
     const parsed = JSON.parse(plain.toString('utf8')) as PkFile
     if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.creds)) throw new Error('bad')

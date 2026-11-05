@@ -513,7 +513,7 @@ async function uploadCredentials(
     const loginTs = (l: SavedLogin): number => l.date_password_modified ?? l.date_created ?? 0
     const tasks: Array<Promise<void>> = []
     if (!base.cookiesKnown) {
-      out.skipped.push('cookie (không đọc được bản cloud)')
+      out.skipped.push('cookie (không đọc được bản trên máy chủ)')
     } else if (!ready.cookies) {
       // Local read unready this cycle — already recorded in out.errors above. Do NOT upload:
       // the cloud set is left exactly as-is (nothing lost), and re-uploading would just waste a
@@ -534,7 +534,7 @@ async function uploadCredentials(
       }
     }
     if (!base.loginsKnown) {
-      out.skipped.push('mật khẩu (không đọc được bản cloud)')
+      out.skipped.push('mật khẩu (không đọc được bản trên máy chủ)')
     } else if (!ready.logins) {
       // Local read unready this cycle — already recorded in out.errors above. Same reasoning as
       // the cookie branch: leave the cloud set untouched rather than re-upload a stale copy.
@@ -717,7 +717,7 @@ async function syncDataOnClose(id: string, entry: RunningProfile): Promise<Close
   const result: CloseSyncResult = { ok: false, tag: null, reason: null, creds: null }
   try {
     if (!expectedUid || !sameAccount(expectedUid)) {
-      result.reason = 'tài khoản cloud đã thay đổi'
+      result.reason = 'tài khoản đã thay đổi'
       return result
     }
     // Hold the per-profile lock for the WHOLE flush+upload, and take it BEFORE the
@@ -730,7 +730,7 @@ async function syncDataOnClose(id: string, entry: RunningProfile): Promise<Close
         // small grace so Chromium finishes flushing Cookies/Login Data SQLite files
         await sleepMs(1200)
         if (!sameAccount(expectedUid)) {
-          result.reason = 'tài khoản cloud đã thay đổi'
+          result.reason = 'tài khoản đã thay đổi'
           return
         }
         broadcastData({
@@ -738,7 +738,7 @@ async function syncDataOnClose(id: string, entry: RunningProfile): Promise<Close
           phase: 'upload',
           message: entry.takenOver
             ? 'Máy khác đã mở profile này — đang lưu phiên để chuyển sang…'
-            : 'Đang lưu phiên lên cloud…'
+            : 'Đang lưu phiên lên máy chủ…'
         })
         // 1) The session zip — Local Storage / IndexedDB / Preferences / tabs (NOT Cookies /
         //    Login Data: excluded via SKIP_FILES, they travel via the credential union below).
@@ -799,7 +799,7 @@ async function syncDataOnClose(id: string, entry: RunningProfile): Promise<Close
         const snapshot = entry.credsImportOk && entry.cloudCreds ? entry.cloudCreds : null
         result.creds = await uploadCredentials(id, expectedUid, cloudBase, snapshot)
         if (result.creds.errors.length) {
-          const why = `cookie/mật khẩu chưa lên cloud: ${result.creds.errors.join('; ')}`
+          const why = `cookie/mật khẩu chưa lên máy chủ: ${result.creds.errors.join('; ')}`
           result.reason = result.reason ? `${result.reason}; ${why}` : why
         }
         result.ok = !zipErr && result.creds.errors.length === 0
@@ -813,14 +813,14 @@ async function syncDataOnClose(id: string, entry: RunningProfile): Promise<Close
     dbg(`[close ${id}] save error: ${result.reason}`)
   }
   if (result.ok) {
-    broadcastData({ id, phase: 'done', message: `Đã lưu phiên lên cloud (${credsSummary(result.creds)})` })
+    broadcastData({ id, phase: 'done', message: `Đã lưu phiên lên máy chủ (${credsSummary(result.creds)})` })
   } else {
     broadcastData({
       id,
       phase: 'error',
       sticky: true,
       message:
-        `CHƯA lưu được đầy đủ phiên lên cloud: ${result.reason ?? 'lỗi không rõ'}. ` +
+        `CHƯA lưu được đầy đủ phiên lên máy chủ: ${result.reason ?? 'lỗi không rõ'}. ` +
         `${credsSummary(result.creds)}. Phiên vẫn còn nguyên trên máy này.`
     })
   }
@@ -1008,7 +1008,7 @@ async function checkKicked(id: string): Promise<void> {
           phase: 'warn',
           sticky: true,
           message:
-            'Máy kia vừa lưu phiên CŨ hơn lên cloud (nó đã ngủ/mất mạng lúc bạn mở). Phiên đang chạy ở đây sẽ được giữ khi đóng; cookie/mật khẩu hai bên được gộp.'
+            'Máy kia vừa lưu phiên CŨ hơn lên máy chủ (nó đã ngủ/mất mạng lúc bạn mở). Phiên đang chạy ở đây sẽ được giữ khi đóng; cookie/mật khẩu hai bên được gộp.'
         })
       }
     }
@@ -1100,7 +1100,7 @@ async function stopRunningAndSync(
               broadcastData({
                 id,
                 phase: 'upload',
-                message: quitting ? 'Đang lưu phiên lên cloud trước khi thoát…' : savingMessage
+                message: quitting ? 'Đang lưu phiên lên máy chủ trước khi thoát…' : savingMessage
               })
               const res = await syncDataOnClose(id, entry)
               await settleLockAfterClose(id, entry, res)
@@ -1142,7 +1142,7 @@ export function stopAllForAccountSwitch(): Promise<void> {
 /** The admin revoked the signed-in email: close every engine and sync its session so
  *  nothing is lost if the email is approved again later. */
 export function stopAllForRevoke(): Promise<void> {
-  return stopRunningAndSync(false, 'Quyền truy cập bị thu hồi — đang lưu phiên lên cloud…')
+  return stopRunningAndSync(false, 'Quyền truy cập bị thu hồi — đang lưu phiên lên máy chủ…')
 }
 
 /** Ids of the profiles currently running for the signed-in account. */
@@ -1652,7 +1652,7 @@ async function launchProfileImpl(
                 id,
                 phase: 'warn',
                 sticky: true,
-                message: `${who} KHÔNG lưu được phiên (${outcome.reason}) — mở bằng bản cloud cũ hơn; phiên mới nhất vẫn nằm trên máy đó.`
+                message: `${who} KHÔNG lưu được phiên (${outcome.reason}) — mở bằng bản trên máy chủ cũ hơn; phiên mới nhất vẫn nằm trên máy đó.`
               })
             } else if (outcome.status === 'timeout' && !prevIsMe) {
               // Another machine that never answered = asleep / offline / crashed: its work since its
@@ -1663,7 +1663,7 @@ async function launchProfileImpl(
                 id,
                 phase: 'warn',
                 sticky: true,
-                message: `${who} không phản hồi (đang ngủ / mất mạng?) — mở bằng bản cloud gần nhất; những gì làm trên máy đó sau lần lưu cuối chưa có ở đây.`
+                message: `${who} không phản hồi (đang ngủ / mất mạng?) — mở bằng bản trên máy chủ gần nhất; những gì làm trên máy đó sau lần lưu cuối chưa có ở đây.`
               })
             }
           }
@@ -1685,11 +1685,11 @@ async function launchProfileImpl(
       if (!(await getAccountSecret())) {
         dbg(`[open ${id}] account secret unavailable on this machine — session sync skipped`)
         throw new Error(
-          'Máy này chưa mở khoá mã hoá cloud (hoặc đang mất mạng) → không tải được phiên đăng nhập. ' +
-            'Vào Cài đặt → Mã hoá cloud → nhập passphrase, rồi mở lại profile.'
+          'Máy này chưa mở khoá mã hoá dữ liệu (hoặc đang mất mạng) → không tải được phiên đăng nhập. ' +
+            'Vào Cài đặt → Mã hoá dữ liệu → nhập passphrase, rồi mở lại profile.'
         )
       }
-      broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ cloud…' })
+      broadcastData({ id, phase: 'download', message: 'Đang đồng bộ dữ liệu từ máy chủ…' })
       // Cloud cookies + saved logins: downloaded ONCE here — merged into the local stores below
       // and kept on the RunningProfile so the close can upload the UNION without re-downloading.
       // When this machine already has its credential stores (every open after the first), the
@@ -1710,8 +1710,8 @@ async function launchProfileImpl(
           phase: 'warn',
           sticky: true,
           message:
-            'Không đọc được cookie/mật khẩu trên cloud (mạng hoặc passphrase) — có thể phải đăng nhập lại. ' +
-            'Bản cloud sẽ KHÔNG bị ghi đè khi đóng.'
+            'Không đọc được cookie/mật khẩu trên máy chủ (mạng hoặc passphrase) — có thể phải đăng nhập lại. ' +
+            'Bản máy chủ sẽ KHÔNG bị ghi đè khi đóng.'
         })
       }
       // FIRST OPEN ON THIS MACHINE? The credential bridge can only MERGE into stores the
@@ -1754,8 +1754,8 @@ async function launchProfileImpl(
           phase: 'warn',
           sticky: true,
           message:
-            'Không đọc được khoá mã hoá của máy này (DPAPI / Keychain) — cookie/mật khẩu từ cloud chưa nhập được lần này. ' +
-            'Bản cloud sẽ không bị ghi đè khi đóng.'
+            'Không đọc được khoá mã hoá của máy này (DPAPI / Keychain) — cookie/mật khẩu từ máy chủ chưa nhập được lần này. ' +
+            'Bản máy chủ sẽ không bị ghi đè khi đóng.'
         })
       }
       // Held under the per-profile data lock so a still-running close-upload of the
@@ -2574,7 +2574,7 @@ export function isProfileRunning(id: string): boolean {
 export async function manualUploadProfileData(id: string): Promise<void> {
   requireProfileId(id)
   if (running.has(id)) {
-    throw new Error('Profile đang mở ở máy này — đóng profile trước khi đẩy phiên lên cloud.')
+    throw new Error('Profile đang mở ở máy này — đóng profile trước khi đẩy phiên lên máy chủ.')
   }
   // soloMode profiles never claim the lock on open (see launchProfileImpl), so their row is
   // never populated while genuinely running elsewhere — this peek-based refusal has no signal

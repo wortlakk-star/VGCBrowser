@@ -186,11 +186,11 @@ function handle(
 
 function requireCurrentAccount(expectedUid: unknown, required = false): void {
   if (expectedUid === undefined) {
-    if (required) throw new Error('Thiếu tài khoản cho thao tác cloud.')
+    if (required) throw new Error('Thiếu tài khoản cho thao tác máy chủ.')
     return
   }
   const uid = requireUuid(expectedUid, 'Account ID')
-  if (getCloudSession()?.uid !== uid) throw new Error('Tài khoản đã thay đổi; thao tác cloud bị huỷ.')
+  if (getCloudSession()?.uid !== uid) throw new Error('Tài khoản đã thay đổi; thao tác máy chủ bị huỷ.')
 }
 
 let cloudSessionRevision = 0
@@ -727,7 +727,7 @@ export function registerIpc(): void {
         typeof plaintext !== 'string' ||
         Buffer.byteLength(plaintext, 'utf8') > 16 * 1024 * 1024
       ) {
-        throw new Error('Dữ liệu mã hoá cloud không hợp lệ')
+        throw new Error('Dữ liệu mã hoá dữ liệu không hợp lệ')
       }
       const safeObjectId =
         context === 'profile'
@@ -790,7 +790,7 @@ export function registerIpc(): void {
     (_e, context: string, blob: string, expectedUid: string, objectId?: string) => runAccountOperation(async () => {
       requireCurrentAccount(expectedUid, true)
       if (!['profile', 'proxy'].includes(context) || typeof blob !== 'string' || blob.length > 24 * 1024 * 1024) {
-        throw new Error('Dữ liệu giải mã cloud không hợp lệ')
+        throw new Error('Dữ liệu giải mã máy chủ không hợp lệ')
       }
       const safeObjectId =
         context === 'profile'

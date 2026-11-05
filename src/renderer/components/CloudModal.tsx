@@ -114,7 +114,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
     setMsg(
       error
         ? 'Lỗi: ' + error.message
-        : 'Đã tạo tài khoản. Nếu Supabase bật xác nhận email, hãy xác nhận rồi đăng nhập.'
+        : 'Đã tạo tài khoản. Nếu máy chủ bật xác nhận email, hãy xác nhận rồi đăng nhập.'
     )
   }
 
@@ -180,7 +180,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
       }
       const encryption = await window.vgc.cloudEncryptionStatus()
       if (!encryption.configured || !encryption.unlocked) {
-        setMsg('Lỗi: cần mở khoá mã hoá Cloud trong Cài đặt trước khi đồng bộ.')
+        setMsg('Lỗi: cần mở khoá mã hoá Máy chủ trong Cài đặt trước khi đồng bộ.')
         return
       }
       const locals = await window.vgc.listProfiles()
@@ -196,7 +196,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
       }
       // 2) Use the same encrypted metadata pipeline as automatic sync.
       const count = await pushCloudProfileList(true)
-      setMsg(`Đã đẩy ${count} profile (kèm dữ liệu phiên đăng nhập) lên cloud.`)
+      setMsg(`Đã đẩy ${count} profile (kèm dữ liệu phiên đăng nhập) lên máy chủ.`)
     } catch (error) {
       setMsg(`Lỗi: ${error instanceof Error ? error.message : 'đồng bộ thất bại'}`)
     } finally {
@@ -212,7 +212,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
     try {
       const encryption = await window.vgc.cloudEncryptionStatus()
       if (!encryption.configured || !encryption.unlocked) {
-        setMsg('Lỗi: cần mở khoá mã hoá Cloud trong Cài đặt trước khi đồng bộ.')
+        setMsg('Lỗi: cần mở khoá mã hoá Máy chủ trong Cài đặt trước khi đồng bộ.')
         return
       }
       const count = await pullCloudProfileList()
@@ -247,7 +247,7 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 560 }}>
         <header className="modal-head">
-          <h2>Cloud</h2>
+          <h2>Đồng bộ dữ liệu</h2>
           <button className="btn" onClick={onClose}>
             <Icon name="x" size={16} strokeWidth={2.4} />
           </button>
@@ -258,9 +258,9 @@ export function CloudModal({ onClose, onSynced }: Props): JSX.Element {
             <div className="empty">Đang tải…</div>
           ) : ready === false ? (
             <section className="card">
-              <h3>Chưa cấu hình Supabase</h3>
+              <h3>Chưa cấu hình máy chủ</h3>
               <p className="hint">
-                Mở <b>Cài đặt → Cloud</b>, dán <b>Project URL</b> + <b>anon key</b>, và chạy{' '}
+                Mở <b>Cài đặt → Máy chủ</b>, dán <b>Project URL</b> + <b>anon key</b>, và chạy{' '}
                 <code>supabase/schema.sql</code> trong SQL Editor của project.
               </p>
             </section>

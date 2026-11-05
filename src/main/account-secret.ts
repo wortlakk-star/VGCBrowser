@@ -285,15 +285,15 @@ async function resolveAccountSecret(
 
 export async function setCloudEncryptionPassphrase(passphrase: string): Promise<void> {
   const session = getCloudSession()
-  if (!session) throw new Error('Chưa đăng nhập cloud.')
+  if (!session) throw new Error('Chưa đăng nhập máy chủ.')
   const normalized = passphrase.normalize('NFKC')
-  if (normalized.length < 12) throw new Error('Passphrase cloud phải có ít nhất 12 ký tự.')
-  if (normalized.length > 1024) throw new Error('Passphrase cloud quá dài.')
+  if (normalized.length < 12) throw new Error('Passphrase mã hoá phải có ít nhất 12 ký tự.')
+  if (normalized.length > 1024) throw new Error('Passphrase mã hoá quá dài.')
   const context = await remoteContext()
-  if (!context || context.uid !== session.uid) throw new Error('Phiên cloud không hợp lệ.')
+  if (!context || context.uid !== session.uid) throw new Error('Phiên máy chủ không hợp lệ.')
   const secret = await resolveAccountSecret(context, normalized, loadPersistedSecret(session.uid))
   if (!secret) {
-    throw new Error('Không mở hoặc di chuyển được khoá cloud. Kiểm tra passphrase và migration SQL.')
+    throw new Error('Không mở hoặc di chuyển được khoá mã hoá. Kiểm tra passphrase và migration SQL.')
   }
   // Persist only after the candidate passphrase has authenticated the remote wrapper.
   // A typo therefore cannot overwrite a working local passphrase.
@@ -351,7 +351,7 @@ export async function getAccountSecret(): Promise<string | null> {
 
 function keyFor(secret: string, context: string): Buffer {
   if (!/^[a-f0-9]{64}$/i.test(secret) || !/^[a-z0-9:_-]{1,128}$/i.test(context)) {
-    throw new Error('Ngữ cảnh mã hoá cloud không hợp lệ')
+    throw new Error('Ngữ cảnh mã hoá dữ liệu không hợp lệ')
   }
   return createHash('sha256').update(`${secret}:${context}`).digest()
 }

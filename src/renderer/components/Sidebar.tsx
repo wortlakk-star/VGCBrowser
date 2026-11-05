@@ -197,7 +197,7 @@ export function Sidebar({
             <span>
               <b>{runningCount}</b> đang chạy
             </span>
-            <span>Đồng bộ cloud</span>
+            <span>Đồng bộ máy chủ</span>
           </div>
         </div>
         <div className="side-actions">

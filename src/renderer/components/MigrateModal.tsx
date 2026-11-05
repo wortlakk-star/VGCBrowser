@@ -26,7 +26,7 @@ const STEPS: Step[] = [
 export const MIGRATED_KEY = 'vgc.migratedToCompanyServer'
 
 function classifyUploadError(msg: string): 'newer' | 'empty' | 'warn' {
-  if (/bản cloud đã mới hơn|không có dấu đồng bộ cục bộ/.test(msg)) return 'newer'
+  if (/bản (cloud|trên máy chủ) đã mới hơn|không có dấu đồng bộ cục bộ/.test(msg)) return 'newer'
   if (/snapshot local đang trống|chưa hoàn chỉnh|chưa có dữ liệu|ENOENT/i.test(msg)) return 'empty'
   return 'warn'
 }

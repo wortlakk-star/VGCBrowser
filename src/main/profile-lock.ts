@@ -338,7 +338,7 @@ export async function waitForHandoff(
       }
       if (Date.now() - lastProgress >= 2000) {
         lastProgress = Date.now()
-        opts.onProgress?.(`${who} đang lưu phiên lên cloud… (${elapsed()}) — mở ngay khi lưu xong`)
+        opts.onProgress?.(`${who} đang lưu phiên lên máy chủ… (${elapsed()}) — mở ngay khi lưu xong`)
       }
     } else if (tag) {
       return { status: 'ready', tag, waitedMs: Date.now() - start }

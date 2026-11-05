@@ -13,7 +13,7 @@ let session: CloudSession | null = null
 async function boundedUserResponse(res: Response): Promise<{ id?: string }> {
   const max = 64 * 1024
   const declared = Number(res.headers.get('content-length') || 0)
-  if (declared > max || !res.body) throw new Error('Phản hồi xác thực cloud không hợp lệ')
+  if (declared > max || !res.body) throw new Error('Phản hồi xác thực máy chủ không hợp lệ')
   const reader = res.body.getReader()
   const chunks: Buffer[] = []
   let total = 0
@@ -22,7 +22,7 @@ async function boundedUserResponse(res: Response): Promise<{ id?: string }> {
       const { done, value } = await reader.read()
       if (done) break
       total += value.byteLength
-      if (total > max) throw new Error('Phản hồi xác thực cloud vượt giới hạn')
+      if (total > max) throw new Error('Phản hồi xác thực máy chủ vượt giới hạn')
       chunks.push(Buffer.from(value))
     }
   } catch (error) {
@@ -36,7 +36,7 @@ async function boundedUserResponse(res: Response): Promise<{ id?: string }> {
  * are insufficient because a renderer compromise could fabricate an unsigned JWT. */
 export async function validateCloudSession(s: CloudSession): Promise<void> {
   if (!isUuid(s.uid) || typeof s.accessToken !== 'string' || s.accessToken.length > 16_384) {
-    throw new Error('Cloud session không hợp lệ')
+    throw new Error('Máy chủ session không hợp lệ')
   }
   try {
     const parts = s.accessToken.split('.')
@@ -60,7 +60,7 @@ export async function validateCloudSession(s: CloudSession): Promise<void> {
       !audience.includes('authenticated') ||
       payload.role !== 'authenticated'
     ) {
-      throw new Error('Cloud session không khớp tài khoản')
+      throw new Error('Máy chủ session không khớp tài khoản')
     }
 
     const res = await fetch(`${settings.supabaseUrl}/auth/v1/user`, {
@@ -73,12 +73,12 @@ export async function validateCloudSession(s: CloudSession): Promise<void> {
     })
     if (!res.ok) {
       await res.body?.cancel().catch(() => {})
-      throw new Error('Supabase từ chối cloud session')
+      throw new Error('Máy chủ từ chối phiên đăng nhập')
     }
     const user = await boundedUserResponse(res)
-    if (user.id !== s.uid) throw new Error('Cloud session không khớp người dùng')
+    if (user.id !== s.uid) throw new Error('Máy chủ session không khớp người dùng')
   } catch {
-    throw new Error('Cloud session không hợp lệ')
+    throw new Error('Máy chủ session không hợp lệ')
   }
 }
 

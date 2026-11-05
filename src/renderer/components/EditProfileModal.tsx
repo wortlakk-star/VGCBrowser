@@ -351,8 +351,8 @@ Nếu đây là cách đăng nhập duy nhất của tài khoản đó thì bạ
       'no-cookies-db': 'Chưa từng mở profile này trên máy nào — không có dữ liệu để kiểm tra.',
       'db-locked': 'Profile đang chạy ở đâu đó, dữ liệu chưa flush xong — thử lại sau khi đóng.',
       'engine-key-unavailable': 'Không đọc được khoá mã hoá máy (Keychain/DPAPI) lúc này.',
-      'not-signed-in': 'Chưa đăng nhập tài khoản cloud VGC.',
-      'no-cloud-data': 'Chưa có dữ liệu phiên trên cloud cho profile này.',
+      'not-signed-in': 'Chưa đăng nhập tài khoản VGC.',
+      'no-cloud-data': 'Chưa có dữ liệu phiên trên máy chủ cho profile này.',
       error: 'Lỗi không xác định khi kiểm tra.'
     }
     return `⚠️ Không kiểm tra được: ${why[r.reason] ?? r.reason}`
@@ -481,7 +481,7 @@ Nếu đây là cách đăng nhập duy nhất của tài khoản đó thì bạ
             <p className="hint" style={{ marginTop: -2 }}>
               Bật = khi mở profile này phải nhập <b>mật khẩu chủ</b> (đặt một lần trong Cài đặt, dùng
               chung cho mọi profile — không cần đặt riêng). <b>Nhập sai {lockLimit} lần → XOÁ VĨNH VIỄN
-              riêng profile này</b> (cả dữ liệu cloud, không khôi phục được); tổng sai trên mọi profile
+              riêng profile này</b> (cả dữ liệu máy chủ, không khôi phục được); tổng sai trên mọi profile
               chạm mức chung → xoá TẤT CẢ.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>

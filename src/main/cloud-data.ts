@@ -121,7 +121,7 @@ function cloudFetch(url: string, init: RequestInit = {}): Promise<Response> {
 
 async function responseBuffer(res: Response, maxBytes: number): Promise<Buffer> {
   const declared = Number(res.headers.get('content-length') || 0)
-  if (declared > maxBytes) throw new Error('Dữ liệu cloud vượt giới hạn an toàn.')
+  if (declared > maxBytes) throw new Error('Dữ liệu máy chủ vượt giới hạn an toàn.')
   if (!res.body) return Buffer.alloc(0)
   const reader = res.body.getReader()
   const chunks: Buffer[] = []
@@ -131,7 +131,7 @@ async function responseBuffer(res: Response, maxBytes: number): Promise<Buffer> 
       const { done, value } = await reader.read()
       if (done) break
       total += value.byteLength
-      if (total > maxBytes) throw new Error('Dữ liệu cloud vượt giới hạn an toàn.')
+      if (total > maxBytes) throw new Error('Dữ liệu máy chủ vượt giới hạn an toàn.')
       chunks.push(Buffer.from(value))
     }
   } catch (error) {
@@ -656,16 +656,16 @@ export interface UploadProfileDataOptions {
  *  new cloud ETag (the tag to publish for a waiting machine). */
 export async function uploadProfileData(id: string, opts: UploadProfileDataOptions = {}): Promise<string> {
   const session = getCloudSession()
-  if (!session) throw new Error('Chưa đăng nhập cloud')
+  if (!session) throw new Error('Chưa đăng nhập máy chủ')
   const s = await getSettings()
-  if (!s.supabaseUrl || !s.supabaseAnonKey) throw new Error('Chưa cấu hình Supabase')
+  if (!s.supabaseUrl || !s.supabaseAnonKey) throw new Error('Chưa cấu hình máy chủ')
 
   const zip = buildZip(id)
   // Don't overwrite a good cloud session with a partial one (locked cookie DB).
   if (!zipHasCriticalSession(zip, id)) {
     dbg(`[sync ${id}] upload refused: empty/partial local snapshot`)
     throw new Error(
-      'Bỏ qua lưu phiên: snapshot local đang trống hoặc chưa hoàn chỉnh. Giữ nguyên bản cloud cũ.'
+      'Bỏ qua lưu phiên: snapshot local đang trống hoặc chưa hoàn chỉnh. Giữ nguyên bản trên máy chủ cũ.'
     )
   }
   // Encrypt the WHOLE session zip with the per-account secret before upload, so the
@@ -678,7 +678,7 @@ export async function uploadProfileData(id: string, opts: UploadProfileDataOptio
   }
   const encSecret = await keyForProfile(id)
   if (!encSecret) {
-    throw new Error('Bỏ qua lưu phiên: chưa có khoá mã hoá đầu-cuối. Không tải dữ liệu plaintext lên cloud.')
+    throw new Error('Bỏ qua lưu phiên: chưa có khoá mã hoá đầu-cuối. Không tải dữ liệu plaintext lên máy chủ.')
   }
   const body = encryptSession(encSecret, id, rawZip)
   if (body.length > MAX_CLOUD_OBJECT_BYTES) throw new Error('Dữ liệu phiên mã hoá vượt giới hạn 64 MB.')
@@ -705,10 +705,10 @@ export async function uploadProfileData(id: string, opts: UploadProfileDataOptio
       // one-machine user think someone/something else touched their profile when nothing did.
       const msg =
         state.reason === 'mismatch'
-          ? 'Bỏ qua lưu phiên: bản cloud đã mới hơn (máy khác vừa lưu) — không ghi đè để tránh mất dữ liệu.'
+          ? 'Bỏ qua lưu phiên: bản trên máy chủ đã mới hơn (máy khác vừa lưu) — không ghi đè để tránh mất dữ liệu.'
           : state.reason === 'no-local-tag'
-            ? 'Bỏ qua lưu phiên: máy này không có dấu đồng bộ cục bộ cho profile này (có thể do một lần ghi file trước đó thất bại) — không ghi đè để an toàn. Mở lại profile để tải phiên cloud và tự khắc phục.'
-            : 'Bỏ qua lưu phiên: không đọc được bản cloud (mạng/máy chủ) — không ghi đè để tránh mất dữ liệu.'
+            ? 'Bỏ qua lưu phiên: máy này không có dấu đồng bộ cục bộ cho profile này (có thể do một lần ghi file trước đó thất bại) — không ghi đè để an toàn. Mở lại profile để tải phiên máy chủ và tự khắc phục.'
+            : 'Bỏ qua lưu phiên: không đọc được bản trên máy chủ (mạng/máy chủ) — không ghi đè để tránh mất dữ liệu.'
       throw new CloudAdvancedError(msg)
     }
   }
@@ -730,7 +730,7 @@ export async function uploadProfileData(id: string, opts: UploadProfileDataOptio
     dbg(`[sync ${id}] upload FAILED http=${res.status} ${mb}MB ${detail.slice(0, 120)}`)
     if (res.status === 413 || detail.includes('too large')) {
       throw new Error(
-        `Dữ liệu phiên quá lớn (${mb}MB) vượt giới hạn cloud (64MB). Thử xoá bớt cache trong profile.`
+        `Dữ liệu phiên quá lớn (${mb}MB) vượt giới hạn máy chủ (64MB). Thử xoá bớt cache trong profile.`
       )
     }
     throw new Error(`Upload dữ liệu lỗi HTTP ${res.status} (${mb}MB) ${detail}`)
@@ -754,7 +754,7 @@ export async function uploadProfileData(id: string, opts: UploadProfileDataOptio
     // The upload succeeded but this machine could not persist the marker. memoryTags keeps
     // this app session correct; after a restart the next open simply re-downloads. Surface it.
     throw new SyncTagError(
-      'Đã lưu phiên lên cloud nhưng không ghi được dấu đồng bộ cục bộ (kiểm tra quyền ghi thư mục sync-meta). Trong phiên app này vẫn lưu tiếp được bình thường.',
+      'Đã lưu phiên lên máy chủ nhưng không ghi được dấu đồng bộ cục bộ (kiểm tra quyền ghi thư mục sync-meta). Trong phiên app này vẫn lưu tiếp được bình thường.',
       newTag
     )
   }
@@ -781,9 +781,9 @@ export class SyncTagError extends Error {
  */
 export async function downloadProfileData(id: string): Promise<boolean> {
   const session = getCloudSession()
-  if (!session) throw new Error('Chưa đăng nhập cloud')
+  if (!session) throw new Error('Chưa đăng nhập máy chủ')
   const s = await getSettings()
-  if (!s.supabaseUrl || !s.supabaseAnonKey) throw new Error('Chưa cấu hình Supabase')
+  if (!s.supabaseUrl || !s.supabaseAnonKey) throw new Error('Chưa cấu hình máy chủ')
 
   // Read from the owner's folder for shared profiles (see uploadProfileData).
   const ownerUid = (await ownerForProfile(id)) ?? session.uid
@@ -838,7 +838,7 @@ export async function downloadProfileData(id: string): Promise<boolean> {
     needsMigration = true
   } else {
     if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b || !encSecret) {
-      throw new Error('Dữ liệu phiên cloud không có định dạng mã hoá hợp lệ.')
+      throw new Error('Dữ liệu phiên máy chủ không có định dạng mã hoá hợp lệ.')
     }
     needsMigration = true
   }
@@ -859,7 +859,7 @@ export async function downloadProfileData(id: string): Promise<boolean> {
     })
     if (!migrate.ok) {
       await migrate.body?.cancel().catch(() => {})
-      throw new Error(`Không thể mã hoá dữ liệu phiên cloud cũ (HTTP ${migrate.status}).`)
+      throw new Error(`Không thể mã hoá dữ liệu phiên máy chủ cũ (HTTP ${migrate.status}).`)
     }
     migratedTag = (migrate.headers.get('etag') || '').replace(/"/g, '')
     await migrate.body?.cancel().catch(() => {})

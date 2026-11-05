@@ -32,7 +32,7 @@ export async function getCloudAuth(key: string): Promise<string | null> {
 
 export async function setCloudAuth(key: string, value: string): Promise<void> {
   if (key !== ALLOWED_KEY || typeof value !== 'string' || value.length > 256 * 1024) {
-    throw new Error('Cloud auth payload không hợp lệ')
+    throw new Error('Máy chủ auth payload không hợp lệ')
   }
   await serialize(() => writeSecureJson(file(), { [key]: value }))
 }

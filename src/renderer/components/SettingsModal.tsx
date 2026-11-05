@@ -110,7 +110,7 @@ export function SettingsModal({
       r.ok
         ? `Đã đồng bộ ✓ — két có ${r.total ?? 0} passkey` +
             (r.pulled ? `, kéo về ${r.pulled} passkey mới` : '') +
-            (r.pushed ? ', đã cập nhật lên cloud' : '')
+            (r.pushed ? ', đã cập nhật lên máy chủ' : '')
         : r.error || 'Không đồng bộ được.'
     )
   }
@@ -355,7 +355,7 @@ export function SettingsModal({
             </p>
             <div className="proxy-check">
               <button className="btn" onClick={onOpenCloud}>
-                Cloud
+                Đồng bộ
               </button>
               <button className="btn" onClick={onSignOut}>
                 Đổi tài khoản
@@ -419,13 +419,13 @@ export function SettingsModal({
           </section>
 
           <section className="card">
-            <h3>Mã hoá cloud</h3>
+            <h3>Mã hoá dữ liệu</h3>
             <div style={{ display: 'grid', gap: 8 }}>
               <input
                 placeholder={
                   cloudEncryptionConfigured
-                    ? 'Nhập lại passphrase cloud để xác minh'
-                    : 'Passphrase cloud, tối thiểu 12 ký tự'
+                    ? 'Nhập lại passphrase mã hoá để xác minh'
+                    : 'Passphrase mã hoá, tối thiểu 12 ký tự'
                 }
                 type="password"
                 autoComplete={cloudEncryptionConfigured ? 'current-password' : 'new-password'}
@@ -476,7 +476,7 @@ export function SettingsModal({
               <p className="hint" style={{ marginTop: 6 }}>
                 Vào <b>Sửa profile</b> → mục này để bật khoá cho <b>từng profile</b> (không bật thì profile mở
                 bình thường). Sai <b>{gPerLimit}</b> lần → xoá vĩnh viễn riêng profile đó; tổng sai <b>{gGlobalLimit}</b> lần
-                (mọi profile) → xoá <b>TẤT CẢ</b>. Dữ liệu xoá gồm cả bản trên cloud, <b>không khôi phục được</b>.
+                (mọi profile) → xoá <b>TẤT CẢ</b>. Dữ liệu xoá gồm cả bản trên máy chủ, <b>không khôi phục được</b>.
                 {gLockedCount > 0 && <> Hiện có <b>{gLockedCount}</b> profile đang khoá.</>}
               </p>
 
@@ -585,11 +585,11 @@ export function SettingsModal({
           <section className="card">
             <h3>Passkey — sao lưu</h3>
             <p className="hint" style={{ marginTop: 0 }}>
-              <b>Tự động theo tài khoản:</b> passkey của mọi profile được cất trong một <b>két riêng trên cloud</b>
+              <b>Tự động theo tài khoản:</b> passkey của mọi profile được cất trong một <b>két riêng trên máy chủ</b>
               (mã hoá bằng khoá tài khoản). Đăng nhập tài khoản hoặc mở profile là app tự quét và kéo passkey về;
               tạo/xoá passkey tự đẩy lên. Xoá profile hay cài lại máy vẫn lấy lại được. Ngoài ra app giữ 5 bản sao
               cũ gần nhất trên máy này, và bạn có thể sao lưu ra file <code>.vgcpk</code> (mật khẩu riêng) để cất
-              ngoài cloud.
+              ngoài máy chủ.
             </p>
             <div className="row-inline" style={{ gap: 6, marginBottom: 8 }}>
               <button className="btn" onClick={() => void syncPasskeysNow()}>Đồng bộ két ngay</button>
