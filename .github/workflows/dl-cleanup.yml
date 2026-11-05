@@ -6,7 +6,8 @@ on:
     inputs:
       versions:
         description: Space-separated versions to delete, e.g. "2.1.84 2.1.86"
-        required: true
+        required: false
+        default: ""
 jobs:
   clean:
     runs-on: ubuntu-latest
@@ -31,5 +32,14 @@ jobs:
           for v in $VERSIONS; do
             for f in *"-$v-"* *"-$v."*; do [ -f "$f" ] && echo "delete $f" && rm -f -- "$f"; done
           done
-          echo "== after"; ls -la; du -sh .; df -h ~ 2>/dev/null || true; quota -s 2>/dev/null || true
+          echo "== after"; du -sh .
+          echo "== write test"
+          head -c 1024 /dev/zero > .wtest-small && echo "small write OK" || echo "small write FAILED"
+          head -c 52428800 /dev/zero > .wtest-big && echo "50MB write OK" || echo "50MB write FAILED"
+          head -c 209715200 /dev/zero > .wtest-big2 && echo "200MB write OK" || echo "200MB write FAILED"
+          ls -la .wtest-* ; rm -f .wtest-*
+          echo "== account usage"; cd ~
+          du -sh . 2>/dev/null; du -sh domains/* .[a-z]* 2>/dev/null | sort -h | tail -15
+          echo "inodes: $(find . -xdev 2>/dev/null | wc -l)"
+          df -i ~ 2>/dev/null || true
           REMOTE
