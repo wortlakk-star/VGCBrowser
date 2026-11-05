@@ -360,6 +360,11 @@ const api = {
     ipcRenderer.on('company:state', listener)
     return () => ipcRenderer.removeListener('company:state', listener)
   },
+  // Bản 2.2.0: đăng nhập lần đầu → máy chủ công ty chuyển dữ liệu lần cuối từ cloud (một lần).
+  companyCutoverStart: (email: string, password: string): Promise<{ state: string; job?: string }> =>
+    ipcRenderer.invoke('company:cutoverStart', email, password),
+  companyCutoverStatus: (job: string): Promise<{ state: 'done' | 'skip' | 'running' | 'failed'; step?: string; done?: number; total?: number; error?: string; profiles?: string; files?: string }> =>
+    ipcRenderer.invoke('company:cutoverStatus', job),
   migratePrepare: (): Promise<MigrationPrep> => ipcRenderer.invoke('migrate:prepare'),
   migrateStart: (password: string, full?: boolean): Promise<string> =>
     ipcRenderer.invoke('migrate:start', password, full),

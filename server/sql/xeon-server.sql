@@ -114,3 +114,16 @@ grant all on table public.vgc_control to service_role;
 --    đang giữ profile). Đẩy lên 10^12 một lần; chạy lại không giảm.
 select setval('public.profile_lock_epoch_seq',
               greatest(1000000000000, (select last_value from public.profile_lock_epoch_seq)), true);
+
+-- 7. Tài khoản đã CHUYỂN HẲN sang máy chủ (đăng nhập lần đầu bằng bản 2.2.0). Từ đó KHÔNG BAO GIỜ
+--    chép từ cloud nữa — bản cloud cũ không được ghi đè dữ liệu mới trên máy chủ.
+create table if not exists public.vgc_cutover (
+  email      text primary key check (email = lower(email)),
+  uid        uuid not null,
+  at         timestamptz not null default now(),
+  run_id     bigint
+);
+alter table public.vgc_cutover enable row level security;
+alter table public.vgc_cutover force row level security;
+revoke all on table public.vgc_cutover from anon, authenticated;
+grant all on table public.vgc_cutover to service_role;

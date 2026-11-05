@@ -176,3 +176,59 @@ export function startCompanyWatchdog(onLost: () => Promise<void>, onKill: () => 
   timer = setInterval(() => void tick(), PING_EVERY_MS)
   timer.unref()
 }
+
+// ── Chuyển hẳn khi đăng nhập lần đầu (bản 2.2.0) ─────────────────────────────────
+// App KHÔNG nói chuyện với cloud: gửi email + mật khẩu cho máy chủ công ty; máy chủ tự lấy dữ liệu
+// mới nhất của tài khoản từ cloud, đối chiếu 100%, rồi khoá — mỗi tài khoản đúng một lần.
+export interface CutoverStatus {
+  state: 'done' | 'skip' | 'running' | 'failed'
+  step?: string
+  done?: number
+  total?: number
+  error?: string
+  profiles?: string
+  files?: string
+}
+async function companyJson<T>(path: string, init: RequestInit): Promise<T> {
+  const r = await fetch(`${CLOUD.url}${path}`, { ...init, signal: AbortSignal.timeout(30_000), cache: 'no-store', redirect: 'error' })
+  const text = await r.text()
+  let j: unknown = null
+  try {
+    j = text ? JSON.parse(text) : null
+  } catch {
+    /* không phải JSON */
+  }
+  if (!r.ok) throw new Error((j as { error?: string } | null)?.error || (r.status >= 500 || r.status === 404 ? SERVER_DOWN_MESSAGE : `Máy chủ báo lỗi ${r.status}`))
+  return j as T
+}
+export async function cutoverStart(email: string, password: string): Promise<{ state: string; job?: string }> {
+  if (!COMPANY_MODE) return { state: 'skip' }
+  return companyJson('/vgc/v1/migrate/cutover', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: String(email).trim().slice(0, 320), password: String(password).slice(0, 512) })
+  })
+}
+export async function cutoverStatus(job: string): Promise<CutoverStatus> {
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(job)) throw new Error('Mã lượt chuyển không hợp lệ.')
+  const st = await companyJson<{
+    state: string
+    step: string
+    done: number
+    total: number
+    ok: boolean | null
+    report: { errors?: string[]; tables?: Record<string, { match: number; cloud: number }>; files?: { verified: number; cloud: number } } | null
+  }>(`/vgc/v1/migrate/status?job=${encodeURIComponent(job)}`, { method: 'GET' })
+  const p = st.report?.tables?.profiles_cloud
+  const f = st.report?.files
+  const base = {
+    step: st.step,
+    done: st.done,
+    total: st.total,
+    profiles: p ? `${p.match}/${p.cloud}` : undefined,
+    files: f ? `${f.verified}/${f.cloud}` : undefined
+  }
+  if (st.state !== 'done') return { state: 'running', ...base }
+  if (st.ok) return { state: 'done', ...base }
+  return { state: 'failed', ...base, error: (st.report?.errors ?? []).slice(0, 3).join('\n') || st.step }
+}

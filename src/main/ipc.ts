@@ -894,6 +894,14 @@ export function registerIpc(): void {
   })
 
   handle('settings:get', () => getSettings())
+  if (__VGC_TARGET__ === 'xeon') {
+    handle('company:cutoverStart', async (_e, email: string, password: string) =>
+      (await import('./company-server')).cutoverStart(String(email ?? ''), String(password ?? ''))
+    )
+    handle('company:cutoverStatus', async (_e, job: string) =>
+      (await import('./company-server')).cutoverStatus(String(job ?? ''))
+    )
+  }
   handle('company:state', async () => {
     const m = await import('./company-server')
     if (!m.COMPANY_MODE) return m.companyServerState()

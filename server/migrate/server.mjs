@@ -394,6 +394,20 @@ async function dstUserFromToken(authz) {
   return r.json()
 }
 
+// ── Chuyển hẳn (cutover) ────────────────────────────────────────────────────────
+async function getCutover(email) {
+  const rows = await json(await req(`${DST.url}/rest/v1/vgc_cutover?email=eq.${encodeURIComponent(email)}&select=*`, { headers: dstHeaders() }), 'đọc chuyển hẳn')
+  return rows[0] ?? null
+}
+async function setCutover(email, uid, runId) {
+  const r = await req(`${DST.url}/rest/v1/vgc_cutover?on_conflict=email`, {
+    method: 'POST',
+    headers: dstHeaders({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
+    body: JSON.stringify({ email, uid, run_id: runId, at: new Date().toISOString() })
+  })
+  await json(r, 'ghi chuyển hẳn')
+}
+
 // ── Huỷ khẩn cấp ─────────────────────────────────────────────────────────────
 async function getKill() {
   const rows = await json(await req(`${DST.url}/rest/v1/vgc_control?key=eq.kill&select=value`, { headers: dstHeaders() }), 'đọc lệnh')
@@ -412,7 +426,7 @@ async function setKill(v) {
 const jobs = new Map() // jobId → job
 const runningByUid = new Map() // uid → jobId
 
-async function runJob(job, src, password, full) {
+async function runJob(job, src, password, full, cutover = false) {
   const uid = src.user.id
   const report = { uid, email: src.user.email, account: null, tables: {}, files: null, pending: null, errors: [] }
   job.report = report
@@ -513,6 +527,11 @@ async function runJob(job, src, password, full) {
     const tablesOk = Object.values(report.tables).every((t) => t.match + t.pending === t.cloud)
     const filesOk = report.files.verified === report.files.cloud
     job.ok = report.errors.length === 0 && tablesOk && filesOk
+    if (job.ok && cutover) {
+      await setCutover(normEmail(src.user.email), uid, runId)
+      report.cutover = true
+      log(uid, 'CUTOVER done — cloud will never be copied again for this account')
+    }
   } catch (e) {
     job.ok = false
     report.errors.push(String(e.message ?? e))
@@ -528,6 +547,18 @@ async function runJob(job, src, password, full) {
     }).catch((e) => log('không ghi được biên bản', e.message))
     log(uid, 'done ok=', job.ok)
   }
+}
+
+function startJob(src, password, full, cutover) {
+  const uid = src.user.id
+  const running = runningByUid.get(uid)
+  if (running) return running
+  const id = randomBytes(18).toString('base64url')
+  const job = { id, uid, state: 'running', step: 'Bắt đầu', done: 0, total: 0, ok: null, report: null, at: Date.now() }
+  jobs.set(id, job)
+  runningByUid.set(uid, id)
+  void runJob(job, src, password, full, cutover)
+  return id
 }
 
 // ── HTTP: cổng công khai (qua vgc-gate) ──────────────────────────────────────
@@ -568,15 +599,28 @@ http
           return send(rs, 401, { error: 'Sai email hoặc mật khẩu VGC' })
         }
         failures.delete(email)
-        const uid = src.user.id
-        const running = runningByUid.get(uid)
-        if (running) return send(rs, 200, { job: running })
-        const id = randomBytes(18).toString('base64url')
-        const job = { id, uid, state: 'running', step: 'Bắt đầu', done: 0, total: 0, ok: null, report: null, at: Date.now() }
-        jobs.set(id, job)
-        runningByUid.set(uid, id)
-        void runJob(job, src, password, b.full === true)
-        return send(rs, 200, { job: id })
+        if (await getCutover(email)) return send(rs, 409, { error: 'Tài khoản này đã chuyển hẳn sang máy chủ công ty — hãy cập nhật VGC lên bản mới nhất.' })
+        return send(rs, 200, { job: startJob(src, password, b.full === true, false) })
+      }
+      if (rq.method === 'POST' && u.pathname === '/vgc/v1/migrate/cutover') {
+        // Bản 2.2.0, lần đăng nhập đầu: chuyển lần cuối từ cloud rồi khoá — mỗi tài khoản đúng một lần.
+        const b = await readBody(rq)
+        const email = String(b.email ?? '').trim().toLowerCase()
+        const password = String(b.password ?? '')
+        if (!email || !password || password.length > 512) return send(rs, 400, { error: 'Thiếu email hoặc mật khẩu' })
+        if (await getCutover(email)) return send(rs, 200, { state: 'done' })
+        if (!OPEN) return send(rs, 200, { state: 'skip' })
+        const f = failures.get(email)
+        if (f && f.until > Date.now()) return send(rs, 429, { error: 'Sai quá nhiều lần, thử lại sau 15 phút' })
+        const src = await srcLogin(email, password)
+        if (!src) {
+          // Không có tài khoản cloud (nhân viên mới) hoặc sai mật khẩu: để đăng nhập máy chủ tự báo.
+          const n = (f?.n ?? 0) + 1
+          failures.set(email, { n, until: n >= 5 ? Date.now() + 15 * 60_000 : 0 })
+          return send(rs, 200, { state: 'skip' })
+        }
+        failures.delete(email)
+        return send(rs, 200, { state: 'running', job: startJob(src, password, false, true) })
       }
       if (rq.method === 'GET' && u.pathname === '/vgc/v1/migrate/status') {
         const job = jobs.get(u.searchParams.get('job') ?? '')
@@ -663,6 +707,7 @@ async function adminPage(msg = '') {
   const pending = await json(await req(`${DST.url}/rest/v1/vgc_migration_pending?select=tbl,pk`, { headers: dstHeaders() }), 'đọc dòng chờ')
   const staff = await json(await req(`${DST.url}/rest/v1/vgc_staff?select=*&order=email`, { headers: dstHeaders() }), 'đọc nhân viên')
   const killState = await getKill()
+  const cut = new Map((await json(await req(`${DST.url}/rest/v1/vgc_cutover?select=email,at`, { headers: dstHeaders() }), 'đọc chuyển hẳn')).map((c) => [c.email, c.at]))
   const latest = new Map()
   for (const r of runs) if (!latest.has(r.email)) latest.set(r.email, r)
   const staffRows = staff
@@ -671,7 +716,7 @@ async function adminPage(msg = '') {
       const run = latest.get(m.email)
       return `<tr><td>${esc(m.email)}</td><td>${v.approved ? '<b class=ok>Được dùng</b>' : `<b class=bad>${v.reason === 'expired' ? 'Hết hạn' : 'Bị chặn'}</b>`}</td>
 <td>${m.expires ? esc(fmt(m.expires)) : 'không hạn'}</td><td>${esc(m.note ?? '')}</td><td>${esc(m.machine_name ?? '')}<br><small>${esc(fmt(m.last_seen))}</small></td>
-<td>${run ? (run.finished_at ? (run.ok ? '<span class=ok>✓ đã chuyển</span>' : '<span class=bad>✗ lỗi</span>') : '…') : '<span class=warn>chưa chuyển</span>'}</td>
+<td>${cut.has(m.email) ? `<b class=ok>✓ ĐÃ CHUYỂN HẲN</b><br><small>${esc(fmt(cut.get(m.email)))}</small>` : run ? (run.finished_at ? (run.ok ? '<span class=ok>✓ đã chép (chưa lên 2.2.0)</span>' : '<span class=bad>✗ lỗi</span>') : '…') : '<span class=warn>chưa chuyển</span>'}</td>
 <td><form method=post action=/staff/toggle><input type=hidden name=email value="${esc(m.email)}"><button>${m.approved ? 'Chặn' : 'Cho dùng'}</button></form></td></tr>`
     })
     .join('')
@@ -691,7 +736,7 @@ async function adminPage(msg = '') {
   return `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>VGC — Quản trị máy chủ</title>
 <style>body{font:14px system-ui;margin:24px;background:#0b0d14;color:#e8eaf2}table{border-collapse:collapse;width:100%;margin-bottom:28px}td,th{padding:7px 9px;border-bottom:1px solid #222838;text-align:left;vertical-align:top}th{color:#9aa3bd;font-weight:600}.ok{color:#5ee38f}.bad{color:#ff7a76}.warn{color:#f5c26b}.err{color:#ff9a96;font-size:12px;max-width:380px;white-space:pre-wrap}input,button{font:inherit;padding:6px 9px;border-radius:7px;border:1px solid #2a3146;background:#141826;color:#e8eaf2}button{cursor:pointer;background:#18c0ad;color:#05201c;border:0;font-weight:700}.msg{padding:10px 14px;background:#132a24;border-radius:9px;margin:10px 0}small{color:#9aa3bd}</style>
 <h2>VGC — Quản trị máy chủ công ty</h2>${msg ? `<div class=msg>${esc(msg)}</div>` : ''}
-<h3>Nhân viên được dùng VGC (${staff.filter((m) => verdict(m).approved).length}/${staff.length})</h3>
+<h3>Nhân viên được dùng VGC (${staff.filter((m) => verdict(m).approved).length}/${staff.length}) · đã chuyển hẳn ${cut.size}</h3>
 <form method=post action=/staff/add style="margin:8px 0 14px;display:flex;gap:8px;flex-wrap:wrap"><input name=email placeholder="email nhân viên" required size=30><input name=note placeholder="ghi chú (tên, bộ phận)"><input name=expires type=date title="hết hạn (bỏ trống = không hạn)"><button>Thêm / cập nhật</button></form>
 <table><tr><th>Email</th><th>Quyền</th><th>Hết hạn</th><th>Ghi chú</th><th>Máy dùng gần nhất</th><th>Chuyển dữ liệu</th><th></th></tr>${staffRows}</table>
 <h3 style="color:#ff7a76">Huỷ khẩn cấp</h3>

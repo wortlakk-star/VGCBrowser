@@ -53,6 +53,30 @@ export function AuthScreen({ onAuthed }: Props): JSX.Element {
     setMsg('')
     try {
       if (mode === 'login') {
+        // Bản máy chủ công ty: lần đăng nhập đầu, máy chủ chuyển dữ liệu lần cuối từ cloud (một lần
+        // duy nhất cho mỗi tài khoản). Chuyển chưa xong 100% thì KHÔNG vào app — tránh thiếu dữ liệu.
+        if (__VGC_TARGET__ === 'xeon') {
+          const st = await window.vgc.companyCutoverStart(email.trim(), pass)
+          if (st.state === 'running' && st.job) {
+            setOk(true)
+            setMsg('Đang chuyển dữ liệu của bạn sang máy chủ công ty (chỉ lần đầu)…')
+            for (;;) {
+              await new Promise((r) => setTimeout(r, 1000))
+              const s = await window.vgc.companyCutoverStatus(st.job)
+              if (s.state === 'running') {
+                setMsg(`Đang chuyển dữ liệu của bạn sang máy chủ công ty (chỉ lần đầu)… ${s.step ?? ''}`)
+                continue
+              }
+              if (s.state === 'failed') {
+                setOk(false)
+                setMsg(`Chuyển dữ liệu chưa xong — bấm Đăng nhập để thử lại. Vẫn lỗi thì báo quản trị.\n${s.error ?? ''}`)
+                return
+              }
+              setMsg(`Đã chuyển xong — khớp 100% (${s.profiles ?? '?'} profile, ${s.files ?? '?'} file). Đang đăng nhập…`)
+              break
+            }
+          }
+        }
         const { error } = await c.auth.signInWithPassword({ email: email.trim(), password: pass })
         if (error) {
           setOk(false)
