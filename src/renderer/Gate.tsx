@@ -5,7 +5,20 @@ import { AccessDenied } from './components/AccessDenied'
 import { getCloud, signOutEverywhere } from './cloud'
 import logo from './assets/logo.png'
 import type { Session } from '@supabase/supabase-js'
-import type { LicenseCheckResult } from '../shared/types'
+import type { LicenseCheckResult, UpdateStatus } from '../shared/types'
+import { entryFromNotes } from './components/WhatsNewModal'
+
+const BTN: React.CSSProperties = {
+  marginTop: 16,
+  background: '#18c0ad',
+  border: 'none',
+  color: '#05201c',
+  fontWeight: 700,
+  borderRadius: 10,
+  padding: '12px 22px',
+  fontSize: 15,
+  cursor: 'pointer'
+}
 
 type Status = 'loading' | 'out' | 'denied' | 'in'
 
@@ -70,17 +83,31 @@ export default function Gate(): JSX.Element {
     }
   }
 
-  // Forced-update check first — if blocked, we never reach auth/app.
+  // Forced-update check first — if blocked, we never reach auth/app. Re-checked every 30 min
+  // so an app left open all day (VPS) is also cut off once minVersion is raised.
   useEffect(() => {
-    void (async () => {
+    const run = async (): Promise<void> => {
       try {
         const g = await window.vgc.versionGate()
         if (g?.blocked) setGate(g)
       } catch {
         /* fail-open: don't block on error */
       }
-    })()
+    }
+    void run()
+    const t = setInterval(() => void run(), 30 * 60 * 1000)
+    return () => clearInterval(t)
   }, [])
+
+  // While blocked: fetch the new build right here (no website trip) and offer one-click install.
+  const [upd, setUpd] = useState<UpdateStatus | null>(null)
+  useEffect(() => {
+    if (!gate?.blocked) return
+    void window.vgc.getUpdateStatus().then(setUpd)
+    const off = window.vgc.onUpdateStatus(setUpd)
+    void window.vgc.checkForUpdate().then(setUpd).catch(() => {})
+    return off
+  }, [gate?.blocked])
 
   useEffect(() => {
     let unsub: (() => void) | undefined
@@ -201,22 +228,55 @@ export default function Gate(): JSX.Element {
             Phiên bản của bạn ({gate.current}) đã cũ và không còn được hỗ trợ. Vui lòng tải bản
             mới nhất ({gate.min} trở lên) để tiếp tục sử dụng.
           </p>
-          <button
-            onClick={() => void window.vgc.openExternal(gate.downloadUrl)}
-            style={{
-              marginTop: 16,
-              background: '#18c0ad',
-              border: 'none',
-              color: '#05201c',
-              fontWeight: 700,
-              borderRadius: 10,
-              padding: '12px 22px',
-              fontSize: 15,
-              cursor: 'pointer'
-            }}
-          >
-            Tải bản mới nhất
-          </button>
+          {upd?.releaseNotes && (
+            <div
+              style={{
+                textAlign: 'left',
+                margin: '14px 0 4px',
+                padding: '12px 14px',
+                borderRadius: 12,
+                background: 'rgba(255,255,255,.04)',
+                border: '1px solid rgba(255,255,255,.08)',
+                fontSize: 13,
+                lineHeight: 1.5,
+                maxHeight: 220,
+                overflow: 'auto'
+              }}
+            >
+              {(() => {
+                const e = entryFromNotes(upd.newVersion ?? '', upd.releaseNotes ?? '')
+                const sec = (t: string, c: string, l: string[]) =>
+                  l.length ? (
+                    <div key={t} style={{ marginBottom: 6 }}>
+                      <div style={{ fontWeight: 700, color: c }}>{t}</div>
+                      <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+                        {l.map((x, i) => (
+                          <li key={i}>{x}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null
+                return [
+                  sec('Nhân viên cần làm', '#2bd6c2', e.action),
+                  sec('Đã sửa lỗi', '#ff7a76', e.fixed),
+                  sec('Có gì mới', '#5ee38f', e.added)
+                ]
+              })()}
+            </div>
+          )}
+          {upd?.phase === 'downloaded' ? (
+            <button onClick={() => void window.vgc.installUpdate()} style={BTN}>
+              Cập nhật ngay
+            </button>
+          ) : upd?.phase === 'downloading' || upd?.phase === 'checking' || (upd?.phase === 'available' && !upd.manualDownloadUrl) ? (
+            <p style={{ margin: '16px 0 0', color: 'var(--dim,#9aa3bd)', fontSize: 14 }}>
+              Đang tải bản mới{upd.newVersion ? ` ${upd.newVersion}` : ''}…{typeof upd.percent === 'number' ? ` ${upd.percent}%` : ''}
+            </p>
+          ) : (
+            <button onClick={() => void window.vgc.openExternal(gate.downloadUrl)} style={BTN}>
+              Tải bản mới nhất
+            </button>
+          )}
         </div>
       </div>
     )

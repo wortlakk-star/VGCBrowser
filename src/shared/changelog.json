@@ -7,9 +7,12 @@
       "fixed": [],
       "added": [
         "Mỗi lần cập nhật, app hiện rõ bản mới sửa lỗi gì, thêm gì và nhân viên cần làm gì.",
-        "Thanh báo cập nhật có nút \"Xem thay đổi\" trước khi khởi động lại."
+        "Thanh báo cập nhật có nút \"Xem thay đổi\" trước khi khởi động lại.",
+        "Khi bắt buộc cập nhật: màn hình khoá tự tải bản mới ngay trong app, chỉ cần bấm \"Cập nhật ngay\" (không phải lên web tải)."
       ],
-      "action": []
+      "action": [
+        "Từ bản này, máy nào chưa cập nhật sẽ bị khoá cho tới khi cập nhật — cứ bấm cập nhật khi app báo."
+      ]
     },
     {
       "version": "2.1.88",
