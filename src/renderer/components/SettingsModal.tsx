@@ -3,6 +3,7 @@ import type { UpdateStatus } from '../../shared/types'
 import { Icon } from './Icon'
 import { WhatsNewModal, CHANGELOG } from './WhatsNewModal'
 import { MigrateModal } from './MigrateModal'
+import { pullCloudProfileList, pullCloudProxies } from '../cloud'
 
 const inp: CSSProperties = {
   width: '100%',
@@ -230,7 +231,17 @@ export function SettingsModal({
       await window.vgc.cloudSetPassphrase(cloudPassphrase)
       setCloudPassphrase('')
       setCloudEncryptionConfigured(true)
-      setCloudEncryptionMsg('Khoá cloud đã được bọc an toàn trên thiết bị này.')
+      // Máy mới: mở khoá xong thì tải ngay profile, proxy, passkey về (trước đây phải tải lại cửa sổ).
+      setCloudEncryptionMsg('Đã mở khoá — đang tải profile, proxy, passkey về…')
+      const n = await pullCloudProfileList().catch(() => -1)
+      await pullCloudProxies().catch(() => -1)
+      const pk = await window.vgc.passkeySyncNow().catch(() => null)
+      setCloudEncryptionMsg(
+        n >= 0
+          ? `Đã mở khoá — tải về ${n} profile${pk?.ok ? `, ${pk.total ?? 0} passkey` : ''}. Đang làm mới danh sách…`
+          : 'Đã mở khoá. Đang làm mới danh sách…'
+      )
+      setTimeout(() => window.location.reload(), 1500)
     } catch (error) {
       setCloudEncryptionMsg(`${error instanceof Error ? error.message : String(error)}`)
     }

@@ -128,6 +128,19 @@ export default function App(): JSX.Element {
   // Chuyển dữ liệu sang máy chủ công ty: nhắc ở đầu app tới khi tài khoản này chuyển xong.
   const [buildInfo, setBuildInfo] = useState<{ migration: boolean; test: boolean; target: string }>({ migration: false, test: false, target: '' })
   const [migrateOpen, setMigrateOpen] = useState(false)
+  // Máy mới (hoặc bản máy chủ công ty lần đầu): mã hoá cloud chưa mở khoá → danh sách profile trống.
+  const [encLocked, setEncLocked] = useState(false)
+  const checkEnc = (): void => {
+    void window.vgc
+      .cloudEncryptionStatus()
+      .then((s) => setEncLocked(!(s.configured && s.unlocked)))
+      .catch(() => {})
+  }
+  useEffect(() => {
+    checkEnc()
+    const t = setInterval(checkEnc, 15000)
+    return () => clearInterval(t)
+  }, [])
   const [migratedAt, setMigratedAt] = useState<string | null>(() => {
     try {
       return localStorage.getItem(MIGRATED_KEY)
@@ -996,6 +1009,17 @@ export default function App(): JSX.Element {
             <b>BẢN THỬ</b> — máy chủ dữ liệu: <b>{buildInfo.target === 'xeon' ? 'máy chủ công ty' : buildInfo.target === 'fake' ? 'cloud giả (thử)' : 'cloud'}</b>.
             Dữ liệu tách riêng, không đụng bản VGC thật trên máy.
           </span>
+        </div>
+      )}
+      {encLocked && accountEmail && (
+        <div className="update-banner" style={{ background: '#3a2a10' }}>
+          <Icon name="info" size={18} style={{ color: '#f5c26b' }} />
+          <span>
+            Chưa mở khoá mã hoá — nhập <b>passphrase mã hoá cloud</b> (Cài đặt → Mã hoá cloud) để tải profile và passkey của bạn về máy này.
+          </span>
+          <button className="btn primary" onClick={() => setShowSettings(true)}>
+            Nhập passphrase
+          </button>
         </div>
       )}
       {buildInfo.migration && !migratedAt && accountEmail && !migrateOpen && (
