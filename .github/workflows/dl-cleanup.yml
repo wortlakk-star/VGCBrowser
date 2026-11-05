@@ -39,7 +39,8 @@ jobs:
           head -c 209715200 /dev/zero > .wtest-big2 && echo "200MB write OK" || echo "200MB write FAILED"
           ls -la .wtest-* ; rm -f .wtest-*
           echo "== account usage"; cd ~
-          du -sh . 2>/dev/null; du -sh domains/* .[a-z]* 2>/dev/null | sort -h | tail -15
-          echo "inodes: $(find . -xdev 2>/dev/null | wc -l)"
-          df -i ~ 2>/dev/null || true
+          du -sh . 2>/dev/null
+          echo "-- top level"; du -sh -- * .[!.]* 2>/dev/null | sort -h | tail -12
+          echo "-- vgcbrowser.com"; du -h -d 2 domains/vgcbrowser.com 2>/dev/null | sort -h | tail -15
+          echo "-- biggest files (>200MB)"; find . -xdev -type f -size +200M -printf '%s\t%TY-%Tm-%Td\t%p\n' 2>/dev/null | sort -n | tail -40 | awk -F'\t' '{printf "%7.0fM  %s  %s\n", $1/1048576, $2, $3}'
           REMOTE
