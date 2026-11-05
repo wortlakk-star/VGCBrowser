@@ -102,7 +102,8 @@ import {
 } from './profile-lock'
 import { getMachineId } from './machine-id'
 import { isLocked as isProfileLocked, consumeUnlock as consumeUnlockTicket } from './guard'
-import { ensureLockExtension, releaseLockTokens } from './lock-ext'
+import { unwatchProfileWindows, watchProfileWindows } from './window-watch'
+import { ensureLifecycleExtension, ensureLockExtension, releaseLockTokens, setWindowsClosedHandler } from './lock-ext'
 import { ensurePasskeyExtension } from './passkey-ext'
 import { syncPasskeyVault } from './passkey-vault'
 
@@ -2085,7 +2086,9 @@ async function launchProfileImpl(
   const lockExt = (await isProfileLocked(id)) ? await ensureLockExtension(userDataDir, id) : null
   // Passkey phần mềm riêng từng profile (nạp tự động; tắt bằng profile.passkeys = false).
   const passkeyExt = profile.passkeys === false ? null : await ensurePasskeyExtension(userDataDir, id)
-  const extList = [guardExt, ...(passkeyExt ? [passkeyExt] : []), ...(lockExt ? [lockExt] : []), ...safeExtensions]
+  // Đóng cửa sổ cuối cùng = tắt profile (macOS giữ trình duyệt chạy ngầm khi bấm X).
+  const lifeExt = await ensureLifecycleExtension(userDataDir, id)
+  const extList = [guardExt, ...(passkeyExt ? [passkeyExt] : []), ...(lockExt ? [lockExt] : []), ...(lifeExt ? [lifeExt] : []), ...safeExtensions]
   if (extList.length > 0) {
     const list = extList.join(',')
     args.push(`--load-extension=${list}`, `--disable-extensions-except=${list}`)
@@ -2178,6 +2181,12 @@ async function launchProfileImpl(
   running.set(id, entry)
   recordEnginePid(id, userDataDir, proc.pid)
   broadcast(state)
+  // macOS: đóng cửa sổ cuối cùng (bấm X) = tắt profile (window-watch.ts).
+  if (!opts.headless) {
+    watchProfileWindows(id, proc.pid, (pid) => {
+      if (running.get(pid) === entry) stopProfile(pid)
+    })
+  }
 
   // Attach exit/error listeners IMMEDIATELY (before any await) so a process that dies
   // during the patchProfile await below is still cleaned up (never left in `running`).
@@ -2187,6 +2196,7 @@ async function launchProfileImpl(
     if (entry.autosavePoll) clearInterval(entry.autosavePoll)
     if (entry.forceTimer) clearTimeout(entry.forceTimer)
     clearEnginePid(id, proc.pid)
+    unwatchProfileWindows(id, proc.pid)
     releaseLockTokens(id)
     entry.injector?.dispose()
     entry.automationConn?.close()
@@ -2449,6 +2459,11 @@ export function stopProfile(id: string, forceAfterMs = FORCE_KILL_AFTER_MS): voi
 }
 
 /** Read the live cookies of a running profile (for export). Null if not running. */
+// Đóng cửa sổ cuối cùng của profile (extension VGC Life báo) → tắt profile như bấm Dừng.
+setWindowsClosedHandler((id) => {
+  if (running.has(id)) stopProfile(id)
+})
+
 export async function getProfileCookies(id: string): Promise<Cookie[] | null> {
   requireProfileId(id)
   const r = running.get(id)

@@ -74,6 +74,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return send(res, 200, r)
     }
     if (req.method === 'POST' && url.pathname.startsWith('/pk/')) return await handlePasskey(url.pathname.slice(4), req, res)
+    if (req.method === 'POST' && url.pathname === '/life/closed') {
+      // Extension VGC Life: người dùng đã đóng cửa sổ cuối cùng của profile (macOS vẫn giữ trình
+      // duyệt chạy ngầm) → app tắt profile như bấm Dừng (lưu phiên, nhả khoá).
+      const body = await readJson(req)
+      const id = tokens.get(String(body.t ?? ''))
+      if (!id) return send(res, 403, { error: 'forbidden' })
+      dbg(`[life ${id}] last window closed -> stopping profile`)
+      if (windowsClosedHandler) windowsClosedHandler(id)
+      return send(res, 200, { ok: true })
+    }
     return send(res, 404, { error: 'not found' })
   } catch {
     return send(res, 400, { error: 'bad request' })
@@ -134,6 +144,12 @@ async function handlePasskey(op: string, req: IncomingMessage, res: ServerRespon
     dbg(`${tag} FAIL unexpected: ${(e as Error)?.message ?? e}`)
     return send(res, 200, { ok: false, err: 'UnknownError', msg: 'Lỗi kho passkey.' })
   }
+}
+
+let windowsClosedHandler: ((profileId: string) => void) | null = null
+/** profile-manager đăng ký: tắt profile khi cửa sổ cuối cùng của nó bị đóng. */
+export function setWindowsClosedHandler(fn: ((profileId: string) => void) | null): void {
+  windowsClosedHandler = fn
 }
 
 export function ensureServer(): Promise<number> {
@@ -390,5 +406,54 @@ export async function ensureLockExtension(userDataDir: string, profileId: string
     return dir
   } catch {
     return null // không chặn việc mở profile nếu không dựng được khoá cửa sổ
+  }
+}
+
+// ── Extension "VGC Life": đóng cửa sổ cuối cùng = tắt profile ─────────────────────
+// Trên macOS, bấm X đóng cửa sổ cuối cùng thì trình duyệt vẫn chạy ngầm (biểu tượng còn trên Dock),
+// profile chưa thật sự tắt nên chưa lưu phiên / chưa nhả khoá. Extension này canh cửa sổ và báo app.
+const LIFE_MANIFEST = JSON.stringify({
+  manifest_version: 3,
+  name: 'VGC Life',
+  version: '1.0',
+  host_permissions: ['http://127.0.0.1/*'],
+  background: { service_worker: 'background.js' }
+})
+const LIFE_JS = String.raw`function cfg() {
+  return fetch(chrome.runtime.getURL('config.json'), { cache: 'no-store' }).then(function (r) { return r.json(); });
+}
+// Đọc sẵn cổng + token khi service worker khởi động (mỗi lần mở trình duyệt nó khởi động lại nên
+// cổng/token luôn mới): lúc đóng cửa sổ cuối, Chrome tắt service worker chưa tới 1 giây (đã đo) —
+// không kịp đọc file rồi mới gửi.
+var C = null;
+cfg().then(function (c) { C = c; }).catch(function () {});
+function send(c) {
+  // Gửi ngay, yêu cầu đơn giản (không header JSON, không keepalive — cả hai đều làm Chrome bỏ yêu
+  // cầu khi service worker sắp bị tắt; đã đo). Máy chủ đọc JSON từ thân yêu cầu.
+  return fetch('http://127.0.0.1:' + c.port + '/life/closed', { method: 'POST', body: JSON.stringify({ t: c.token }) });
+}
+function check() {
+  // Cửa sổ bình thường / popup / app — không tính DevTools. Kéo tab ra cửa sổ mới: cửa sổ mới có
+  // trước khi cửa sổ cũ đóng → đếm > 0, không tắt nhầm.
+  chrome.windows.getAll({ windowTypes: ['normal', 'popup', 'app'] }).then(function (wins) {
+    if (wins.length > 0) return;
+    return C ? send(C) : cfg().then(send);
+  }).catch(function () {});
+}
+chrome.windows.onRemoved.addListener(check);
+`
+export async function ensureLifecycleExtension(userDataDir: string, profileId: string): Promise<string | null> {
+  try {
+    const port = await ensureServer()
+    const token = tokenFor(profileId)
+    const dir = prepareExtDir(userDataDir, 'vgc-life', LIFE_JS)
+    const write = (name: string, content: string): void => writeFileSync(join(dir, name), content, { mode: 0o600 })
+    write('manifest.json', LIFE_MANIFEST)
+    write('background.js', LIFE_JS)
+    write('config.json', JSON.stringify({ port, token }))
+    return dir
+  } catch (e) {
+    dbg(`[life ${profileId}] extension not prepared: ${(e as Error)?.message ?? e}`)
+    return null
   }
 }
