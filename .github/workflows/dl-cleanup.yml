@@ -8,6 +8,10 @@ on:
         description: Space-separated versions to delete, e.g. "2.1.84 2.1.86"
         required: false
         default: ""
+      min_version:
+        description: Force every app older than this to update (writes dl/min-version.json). Empty = unchanged.
+        required: false
+        default: ""
       purge_archive:
         description: Also delete old installers in domains/vgcbrowser.com/dl-archive
         type: boolean
@@ -21,15 +25,23 @@ jobs:
           SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
           VERSIONS: ${{ inputs.versions }}
           PURGE: ${{ inputs.purge_archive }}
+          MINV: ${{ inputs.min_version }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          if [ -n "$MINV" ]; then
+            echo "$MINV" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad min_version"; exit 1; }
+            curl -fsS "https://vgcbrowser.com/dl/latest.yml?t=$(date +%s)" | grep -q "^version: $MINV$" \
+              || { echo "::error::latest.yml chưa phải $MINV — không khoá máy khi chưa có bản để cập nhật"; exit 1; }
+            curl -fsS "https://vgcbrowser.com/dl/latest-mac.yml?t=$(date +%s)" | grep -q "^version: $MINV$" \
+              || { echo "::error::latest-mac.yml chưa phải $MINV"; exit 1; }
+          fi
           for v in $VERSIONS; do
             echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad version $v"; exit 1; }
           done
           ssh -p 65002 -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            u469659181@195.179.238.65 "VERSIONS='$VERSIONS' PURGE='$PURGE' bash -s" <<'REMOTE'
+            u469659181@195.179.238.65 "VERSIONS='$VERSIONS' PURGE='$PURGE' MINV='$MINV' bash -s" <<'REMOTE'
           set -u
           cd domains/vgcbrowser.com/public_html/dl
           echo "== before"; ls -la; du -sh . ; df -h ~ 2>/dev/null || true; quota -s 2>/dev/null || true
@@ -41,6 +53,10 @@ jobs:
             echo "== purge dl-archive"
             find ~/domains/vgcbrowser.com/dl-archive -maxdepth 1 -type f -name 'VGC-Browser-*' -print -delete
             du -sh ~/domains/vgcbrowser.com/dl-archive
+          fi
+          if [ -n "$MINV" ]; then
+            printf '{\n  "minVersion": "%s",\n  "downloadUrl": "https://vgcbrowser.com/"\n}\n' "$MINV" > .min-version.tmp && mv -f .min-version.tmp min-version.json
+            echo "== min-version.json"; cat min-version.json
           fi
           echo "== after"; du -sh .
           echo "== write test"
