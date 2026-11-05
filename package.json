@@ -1,6 +1,6 @@
 {
   "name": "vgc-browser",
-  "version": "2.1.88",
+  "version": "2.1.89",
   "description": "VGC Browser - secure multi-account profile manager by VGC Group",
   "author": "VGC Group",
   "license": "UNLICENSED",
@@ -27,8 +27,8 @@
     "ui:preview": "vite build --config test/ui-preview/vite.config.ts && node test/ui-preview/shot.cjs",
     "ui:preview:electron": "node test/ui-preview/shot-electron.cjs",
     "fetch-engine": "node scripts/fetch-engine.mjs",
-    "dist": "node scripts/fetch-engine.mjs && node scripts/brand-engine.mjs && electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac"
+    "dist": "node scripts/fetch-engine.mjs && node scripts/brand-engine.mjs && node scripts/release-notes.mjs && electron-vite build && electron-builder --win",
+    "dist:mac": "node scripts/release-notes.mjs && electron-vite build && electron-builder --mac"
   },
   "build": {
     "appId": "com.vgcgroup.browser",

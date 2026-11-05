@@ -326,6 +326,8 @@ export interface UpdateStatus {
   percent?: number
   /** Human message (errors / dev note). */
   message?: string
+  /** Ghi chú phát hành của bản mới (từ latest.yml): lỗi đã sửa / có gì mới / nhân viên cần làm. */
+  releaseNotes?: string
   /**
    * When set (macOS only), auto-install isn't possible — the app isn't code-signed
    * with an Apple Developer ID, so the user must download + install manually. The UI

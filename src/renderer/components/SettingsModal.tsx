@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import type { UpdateStatus } from '../../shared/types'
 import { Icon } from './Icon'
+import { WhatsNewModal, CHANGELOG } from './WhatsNewModal'
 
 const inp: CSSProperties = {
   width: '100%',
@@ -60,6 +61,7 @@ export function SettingsModal({
 }: Props): JSX.Element {
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [showLog, setShowLog] = useState(false)
   const [apiEnabled, setApiEnabled] = useState(false)
   const [apiPort, setApiPort] = useState('36912')
   const [apiToken, setApiToken] = useState('')
@@ -806,6 +808,14 @@ export function SettingsModal({
               <p className="hint" style={{ marginBottom: 0 }}>
                 {updateLabel(update)}
               </p>
+            )}
+            <div className="proxy-check">
+              <button className="btn ghost" onClick={() => setShowLog(true)}>
+                Xem nhật ký cập nhật
+              </button>
+            </div>
+            {showLog && (
+              <WhatsNewModal title="Nhật ký cập nhật" entries={CHANGELOG.slice(0, 15)} onClose={() => setShowLog(false)} />
             )}
           </section>
         </div>

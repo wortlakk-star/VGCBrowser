@@ -1,0 +1,38 @@
+{
+  "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
+  "entries": [
+    {
+      "version": "2.1.89",
+      "date": "2026-11-05",
+      "fixed": [],
+      "added": [
+        "Mỗi lần cập nhật, app hiện rõ bản mới sửa lỗi gì, thêm gì và nhân viên cần làm gì.",
+        "Thanh báo cập nhật có nút \"Xem thay đổi\" trước khi khởi động lại."
+      ],
+      "action": []
+    },
+    {
+      "version": "2.1.88",
+      "date": "2026-11-05",
+      "fixed": [
+        "Passkey Google báo \"Something went wrong\" / \"Không kết nối được VGC Browser\" sau khi tắt mở lại app — đã sửa, passkey dùng lại được.",
+        "Khoá profile (mật khẩu chủ) đôi khi không mở được sau khi khởi động lại app.",
+        "Trên Mac: lần đầu mở profile không nhận phiên đăng nhập (cookie) từ cloud."
+      ],
+      "added": [],
+      "action": [
+        "Profile nào trước đó báo lỗi passkey: mở lại profile rồi đăng nhập Google bằng passkey như bình thường.",
+        "Nếu vẫn lỗi: tắt hẳn app VGC Browser, mở lại rồi thử lần nữa."
+      ]
+    },
+    {
+      "version": "2.1.87",
+      "date": "2026-10-25",
+      "fixed": [
+        "Passkey Google: báo đúng loại passkey để Google chấp nhận đăng nhập."
+      ],
+      "added": [],
+      "action": []
+    }
+  ]
+}

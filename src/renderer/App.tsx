@@ -24,6 +24,7 @@ import { GmailPasswordModal } from './components/GmailPasswordModal'
 import { Sidebar } from './components/Sidebar'
 import { Dropdown } from './components/Dropdown'
 import { Icon } from './components/Icon'
+import { WhatsNewModal, entriesSince, entryFromNotes, type ChangeEntry } from './components/WhatsNewModal'
 import { applyTheme, getTheme, type Theme } from './theme'
 import logo from './assets/logo.png'
 import {
@@ -120,6 +121,8 @@ export default function App(): JSX.Element {
     }
   }, [])
   const [updateReady, setUpdateReady] = useState<UpdateStatus | null>(null)
+  // "Có gì mới": tự hiện 1 lần sau khi app vừa lên bản mới, hoặc khi bấm "Xem thay đổi" trên thanh báo cập nhật.
+  const [whatsNew, setWhatsNew] = useState<{ title: string; entries: ChangeEntry[]; pending?: UpdateStatus } | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
   const [refreshing, setRefreshing] = useState(false)
   const [appVersion, setAppVersion] = useState('')
@@ -171,6 +174,29 @@ export default function App(): JSX.Element {
     }
     void window.vgc.getUpdateStatus().then(show)
     return window.vgc.onUpdateStatus(show)
+  }, [])
+
+  // Lần mở đầu tiên sau khi cập nhật: hiện các thay đổi kể từ bản nhân viên đã xem lần trước.
+  useEffect(() => {
+    const KEY = 'vgc.whatsNewSeen'
+    void window.vgc.getUpdateStatus().then((s) => {
+      const current = s.currentVersion
+      if (!current) return
+      let seen: string | null = null
+      try {
+        seen = localStorage.getItem(KEY)
+      } catch {
+        /* không đọc được → coi như chưa xem */
+      }
+      if (seen === current) return
+      const list = entriesSince(seen, current)
+      try {
+        localStorage.setItem(KEY, current)
+      } catch {
+        /* bỏ qua */
+      }
+      if (list.length) setWhatsNew({ title: `Đã cập nhật lên bản ${current}`, entries: list })
+    })
   }, [])
 
   // Toast for cloud profile-data sync (download on open / upload on close). STICKY messages
@@ -973,10 +999,52 @@ export default function App(): JSX.Element {
               </button>
             </>
           )}
+          {updateReady.releaseNotes && (
+            <button
+              className="btn"
+              onClick={() =>
+                setWhatsNew({
+                  title: `Bản mới ${updateReady.newVersion ?? ''} có gì`,
+                  entries: [entryFromNotes(updateReady.newVersion ?? '', updateReady.releaseNotes ?? '')],
+                  pending: updateReady
+                })
+              }
+            >
+              <Icon name="info" size={15} />
+              Xem thay đổi
+            </button>
+          )}
           <button className="btn ghost" onClick={() => setUpdateReady(null)}>
             Để sau
           </button>
         </div>
+      )}
+      {whatsNew && (
+        <WhatsNewModal
+          title={whatsNew.title}
+          entries={whatsNew.entries}
+          onClose={() => setWhatsNew(null)}
+          footer={
+            whatsNew.pending ? (
+              <>
+                <button className="btn" onClick={() => setWhatsNew(null)}>
+                  Để sau
+                </button>
+                {whatsNew.pending.manualDownloadUrl ? (
+                  <button className="btn primary" onClick={() => void window.vgc.openUpdateDownload()}>
+                    <Icon name="download" size={15} />
+                    Tải về
+                  </button>
+                ) : (
+                  <button className="btn primary" onClick={() => void window.vgc.installUpdate()}>
+                    <Icon name="refresh" size={15} />
+                    Khởi động lại để cập nhật
+                  </button>
+                )}
+              </>
+            ) : undefined
+          }
+        />
       )}
       <Sidebar
         email={accountEmail}

@@ -21,6 +21,19 @@ let lastStatus: UpdateStatus = { phase: 'idle', currentVersion: app.getVersion()
 // reopening (the user closed the app — don't force it back open).
 let relaunchAfterInstall = false
 
+/** electron-updater trả releaseNotes dạng chuỗi hoặc mảng [{version, note}] — gộp về chuỗi thường. */
+function notesOf(info: { releaseNotes?: unknown }): string | undefined {
+  const n = info.releaseNotes
+  const text = Array.isArray(n)
+    ? n.map((x) => (x && typeof x === 'object' && 'note' in x ? String((x as { note: unknown }).note ?? '') : '')).join('\n')
+    : typeof n === 'string'
+      ? n
+      : ''
+  // Ghi chú có thể bị chuyển sang HTML ở vài nền tảng — bỏ thẻ, giữ chữ.
+  const plain = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|li|h\d)>/gi, '\n').replace(/<li>/gi, '- ').replace(/<[^>]+>/g, '').trim()
+  return plain || undefined
+}
+
 function broadcast(s: UpdateStatus): void {
   lastStatus = s
   for (const w of BrowserWindow.getAllWindows()) {
@@ -52,6 +65,7 @@ export function initUpdater(): void {
       phase: 'available',
       currentVersion: app.getVersion(),
       newVersion: info.version,
+      releaseNotes: notesOf(info),
       ...(process.platform === 'darwin' ? { manualDownloadUrl: MAC_DOWNLOAD_PAGE } : {})
     })
   )
@@ -62,11 +76,18 @@ export function initUpdater(): void {
     broadcast({
       phase: 'downloading',
       currentVersion: app.getVersion(),
+      newVersion: lastStatus.newVersion,
+      releaseNotes: lastStatus.releaseNotes,
       percent: Math.round(p.percent)
     })
   )
   autoUpdater.on('update-downloaded', (info) =>
-    broadcast({ phase: 'downloaded', currentVersion: app.getVersion(), newVersion: info.version })
+    broadcast({
+      phase: 'downloaded',
+      currentVersion: app.getVersion(),
+      newVersion: info.version,
+      releaseNotes: notesOf(info) ?? lastStatus.releaseNotes
+    })
   )
   autoUpdater.on('error', (err) =>
     broadcast({

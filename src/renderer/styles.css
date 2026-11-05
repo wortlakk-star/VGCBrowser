@@ -2758,3 +2758,28 @@ code {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Có gì mới (nhật ký cập nhật) ───────────────────────────────────────── */
+.whatsnew {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.whatsnew-ver {
+  font-weight: 700;
+  font-size: 14px;
+}
+.whatsnew-title {
+  font-weight: 700;
+  font-size: 12.5px;
+  margin-bottom: 4px;
+}
+.whatsnew ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
