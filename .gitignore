@@ -30,3 +30,5 @@ test/ui-preview/old/
 test/ui-preview/dist-old/
 test/ui-preview/review.html
 resources/release-notes.md
+release-test/
+release-test-xeon/

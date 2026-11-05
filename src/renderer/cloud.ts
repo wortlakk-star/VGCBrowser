@@ -22,6 +22,7 @@ export async function getCloud(): Promise<SupabaseClient | null> {
       localStorage.removeItem(AUTH_STORAGE_KEY)
     }
     client = createClient(s.supabaseUrl, s.supabaseAnonKey, {
+      global: { headers: { ...(s.cloudHeaders ?? {}) } },
       auth: {
         persistSession: true,
         storageKey: AUTH_STORAGE_KEY,

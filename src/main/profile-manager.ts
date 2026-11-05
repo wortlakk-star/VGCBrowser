@@ -13,6 +13,7 @@
 //   • CDP fingerprint injection (canvas/webgl/audio/webrtc) — Phase 1
 //   • proxy authentication via local relay — Phase 3
 
+import { COMPANY_MODE, requireCompanyServer } from './company-server'
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { randomBytes } from 'crypto'
 import type { Readable, Writable } from 'node:stream'
@@ -54,7 +55,8 @@ import {
   uploadProfilePasswords,
   downloadProfilePasswords,
   ensureSafeProfileDestination,
-  SyncTagError
+  SyncTagError,
+  forgetLocalSessionTag
 } from './cloud-data'
 import {
   exportCookies,
@@ -875,6 +877,40 @@ async function syncAndUnlockOnClose(id: string, entry: RunningProfile): Promise<
   if (isQuitting || accountTransitioning) return
   const res = await syncDataOnClose(id, entry)
   await settleLockAfterClose(id, entry, res)
+  if (COMPANY_MODE && res.ok) await forgetLocalProfile(id)
+}
+
+/** Bản công ty: phiên đã lên máy chủ đầy đủ → xoá bản profile trên máy (và dấu đồng bộ của nó).
+ *  Lưu KHÔNG đủ thì giữ nguyên trên máy để không mất dữ liệu. */
+async function forgetLocalProfile(id: string): Promise<void> {
+  await withDataLock(id, async () => {
+    if (running.has(id)) return
+    const dir = join(app.getPath('userData'), 'profiles', requireProfileId(id))
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch((e) =>
+      dbg(`[company ${id}] local wipe failed: ${errMsg(e)}`)
+    )
+    await forgetLocalSessionTag(id)
+    dbg(`[company ${id}] local copy removed after a complete save`)
+  })
+}
+
+/** HUỶ KHẨN CẤP (lệnh từ máy chủ công ty): giết ngay mọi engine KHÔNG lưu, chặn mọi lần mở/lưu
+ *  sau đó. Phần xoá file do company-server làm tiếp. */
+export async function emergencyKillProfiles(): Promise<void> {
+  isQuitting = true
+  for (const [, entry] of running) {
+    try {
+      entry.proc.kill('SIGKILL')
+    } catch {
+      // đã chết
+    }
+  }
+  await sleepMs(1500)
+}
+
+/** Mất máy chủ công ty ~2 phút: đóng mọi profile (cố lưu; lưu không được thì phiên ở lại máy). */
+export function stopAllForServerLoss(): Promise<void> {
+  return stopRunningAndSync(false, 'Mất kết nối máy chủ công ty — đang đóng profile…')
 }
 
 /**
@@ -1423,6 +1459,10 @@ async function launchProfileImpl(
   }
   const launchAccountUid = currentAccountUid()
   requireProfileId(id)
+  if (COMPANY_MODE && !running.has(id)) {
+    if (!getCloudSession()) throw new Error('Hãy đăng nhập VGC trước khi mở profile.')
+    await requireCompanyServer()
+  }
   const existing = running.get(id)
   if (existing) {
     // Automation mode needs a control pipe. If this profile is already open but WITHOUT

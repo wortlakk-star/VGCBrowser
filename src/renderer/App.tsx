@@ -15,6 +15,7 @@ import { EditProfileModal } from './components/EditProfileModal'
 import { CreateProfileModal } from './components/CreateProfileModal'
 import { ProxyPickerModal } from './components/ProxyPickerModal'
 import { SettingsModal } from './components/SettingsModal'
+import { MigrateModal, MIGRATED_KEY } from './components/MigrateModal'
 import { UnlockModal } from './components/UnlockModal'
 import { AdminPromptModal } from './components/AdminPromptModal'
 import { CloudModal } from './components/CloudModal'
@@ -124,6 +125,21 @@ export default function App(): JSX.Element {
   // "Có gì mới": tự hiện 1 lần sau khi app vừa lên bản mới, hoặc khi bấm "Xem thay đổi" trên thanh báo cập nhật.
   const [whatsNew, setWhatsNew] = useState<{ title: string; entries: ChangeEntry[]; pending?: UpdateStatus } | null>(null)
   const [accountEmail, setAccountEmail] = useState<string>('')
+  // Chuyển dữ liệu sang máy chủ công ty: nhắc ở đầu app tới khi tài khoản này chuyển xong.
+  const [buildInfo, setBuildInfo] = useState<{ migration: boolean; test: boolean; target: string }>({ migration: false, test: false, target: '' })
+  const [migrateOpen, setMigrateOpen] = useState(false)
+  const [migratedAt, setMigratedAt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(MIGRATED_KEY)
+    } catch {
+      return null
+    }
+  })
+  useEffect(() => {
+    void window.vgc.getSettings().then((s) =>
+      setBuildInfo({ migration: s.migrationAvailable === true, test: s.testBuild === true, target: s.cloudTarget ?? '' })
+    )
+  }, [])
   const [refreshing, setRefreshing] = useState(false)
   const [appVersion, setAppVersion] = useState('')
 
@@ -973,6 +989,37 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app">
+      {buildInfo.test && (
+        <div className="update-banner" style={{ background: '#5a1d1d' }}>
+          <Icon name="info" size={18} />
+          <span>
+            <b>BẢN THỬ</b> — máy chủ dữ liệu: <b>{buildInfo.target === 'xeon' ? 'máy chủ công ty' : buildInfo.target === 'fake' ? 'cloud giả (thử)' : 'cloud'}</b>.
+            Dữ liệu tách riêng, không đụng bản VGC thật trên máy.
+          </span>
+        </div>
+      )}
+      {buildInfo.migration && !migratedAt && accountEmail && !migrateOpen && (
+        <div className="update-banner">
+          <Icon name="cloud" size={18} style={{ color: 'var(--green)' }} />
+          <span>Công ty chuyển dữ liệu VGC sang máy chủ riêng. Bấm để chuyển profile và passkey của bạn (khoảng 1 phút).</span>
+          <button className="btn primary" onClick={() => setMigrateOpen(true)}>
+            Chuyển ngay
+          </button>
+        </div>
+      )}
+      {migrateOpen && (
+        <MigrateModal
+          email={accountEmail}
+          onClose={() => {
+            setMigrateOpen(false)
+            try {
+              setMigratedAt(localStorage.getItem(MIGRATED_KEY))
+            } catch {
+              /* ignore */
+            }
+          }}
+        />
+      )}
       {updateReady && (
         <div className="update-banner">
           <Icon name="sparkles" size={18} style={{ color: 'var(--green)' }} />

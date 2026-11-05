@@ -287,6 +287,14 @@ export interface AppSettings {
   /** Supabase project URL + anon key for Cloud/Team (Phase 6). */
   supabaseUrl: string
   supabaseAnonKey: string
+  /** Header thêm cho mọi lệnh gọi máy chủ dữ liệu (khoá app của máy chủ công ty). */
+  cloudHeaders?: Record<string, string>
+  /** Máy chủ dữ liệu của bản build: cloud Supabase, máy chủ công ty (xeon), hoặc cloud giả để thử. */
+  cloudTarget?: 'supabase' | 'xeon' | 'fake'
+  /** Bản này có nút "Chuyển dữ liệu sang máy chủ công ty". */
+  migrationAvailable?: boolean
+  /** Bản thử (VGC Browser TEST). */
+  testBuild?: boolean
   /** URL of the VGC Core engine .zip on the server; downloaded on first run. */
   engineUrl: string
   /** Pinned SHA-256 for the Windows engine archive. Empty disables runtime download. */
@@ -513,4 +521,44 @@ export interface PasskeyInfo {
   displayName: string
   created: string
   lastUsed?: string
+}
+
+// ── Chuyển dữ liệu sang máy chủ công ty (Xeon) ──────────────────────────────
+export interface MigrationTableReport {
+  cloud: number
+  server: number
+  match: number
+  pending: number
+  removed: number
+}
+export interface MigrationReport {
+  uid: string
+  email: string
+  account: 'created' | 'updated' | null
+  staff?: string
+  tables: Record<string, MigrationTableReport>
+  files: {
+    cloud: number
+    copied: number
+    unchanged: number
+    verified: number
+    bytes: number
+    removed: number
+    passkeyVault: boolean
+    guardConfig: boolean
+  } | null
+  pending: { fixed: number; left: number } | null
+  errors: string[]
+}
+export interface MigrationStatus {
+  state: 'running' | 'done'
+  step: string
+  done: number
+  total: number
+  ok: boolean | null
+  report: MigrationReport | null
+}
+export interface MigrationPrep {
+  passkeys: { ok: boolean; total?: number; error?: string }
+  guard: { ok: boolean; error?: string }
 }

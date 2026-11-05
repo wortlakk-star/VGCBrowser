@@ -33,6 +33,11 @@ jobs:
       VGC_ENGINE_URL: https://vgcbrowser.com/dl/vgc-core-159.zip
       VGC_ENGINE_SHA256: 1ccb4569f06ee62308344f7d4f101e67993b42027074b3549bc8ab19bd294112
       VGC_ALLOW_UNSIGNED_BUILD: '1'
+      # Máy chủ dữ liệu của bản build (electron.vite.config.ts): biến repo VGC_TARGET = supabase | xeon.
+      # VGC_APP_KEY (bí mật) = khoá app qua cổng máy chủ công ty; thiếu thì bản supabase không có nút
+      # chuyển dữ liệu, bản xeon từ chối build.
+      VGC_TARGET: ${{ vars.VGC_TARGET || 'supabase' }}
+      VGC_APP_KEY: ${{ secrets.VGC_APP_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -135,6 +140,12 @@ jobs:
 
   build-mac:
     runs-on: macos-latest
+    env:
+      # Máy chủ dữ liệu của bản build (electron.vite.config.ts): biến repo VGC_TARGET = supabase | xeon.
+      # VGC_APP_KEY (bí mật) = khoá app qua cổng máy chủ công ty; thiếu thì bản supabase không có nút
+      # chuyển dữ liệu, bản xeon từ chối build.
+      VGC_TARGET: ${{ vars.VGC_TARGET || 'supabase' }}
+      VGC_APP_KEY: ${{ secrets.VGC_APP_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

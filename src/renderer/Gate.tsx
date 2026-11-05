@@ -99,6 +99,28 @@ export default function Gate(): JSX.Element {
     return () => clearInterval(t)
   }, [])
 
+  // Bản công ty: máy chủ công ty tắt → khoá toàn bộ app (main cũng đã đóng mọi profile).
+  const [serverDown, setServerDown] = useState<{ reason: string; killed?: boolean } | null>(null)
+  const [serverChecking, setServerChecking] = useState(false)
+  useEffect(() => {
+    let off: (() => void) | undefined
+    void window.vgc.companyState().then((s) => {
+      if (!s.mode) return
+      setServerDown(s.down ? { reason: s.reason, killed: s.killed } : null)
+      off = window.vgc.onCompanyState((n) => setServerDown(n.down ? { reason: n.reason, killed: n.killed } : null))
+    })
+    return () => off?.()
+  }, [])
+  const retryServer = async (): Promise<void> => {
+    setServerChecking(true)
+    try {
+      const s = await window.vgc.companyState()
+      setServerDown(s.down ? { reason: s.reason, killed: s.killed } : null)
+    } finally {
+      setServerChecking(false)
+    }
+  }
+
   // While blocked: fetch the new build right here (no website trip) and offer one-click install.
   const [upd, setUpd] = useState<UpdateStatus | null>(null)
   useEffect(() => {
@@ -277,6 +299,52 @@ export default function Gate(): JSX.Element {
               Tải bản mới nhất
             </button>
           )}
+        </div>
+      </div>
+    )
+  }
+
+  if (serverDown) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg)',
+          color: 'var(--fg, #eef0f7)',
+          padding: 20
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 460,
+            width: '96%',
+            textAlign: 'center',
+            background: 'linear-gradient(180deg,#1a0e12,#0a0c16)',
+            border: '1px solid #ff7a76',
+            borderRadius: 18,
+            padding: 34,
+            boxShadow: '0 30px 80px rgba(0,0,0,.6)'
+          }}
+        >
+          <img src={logo} alt="VGC" style={{ width: 60, height: 60 }} />
+          <h2 style={{ margin: '16px 0 6px', fontSize: 21 }}>
+            {serverDown.killed ? 'VGC đã bị quản trị khoá khẩn cấp' : 'Máy chủ công ty chưa bật'}
+          </h2>
+          <p style={{ margin: '0 0 8px', color: 'var(--dim,#9aa3bd)', fontSize: 14, lineHeight: 1.6 }}>
+            {serverDown.killed
+              ? 'Dữ liệu VGC trên máy này đã được xoá theo lệnh của quản trị. Khi quản trị mở lại, đăng nhập lại là dùng được.'
+              : 'VGC chỉ chạy khi máy chủ của công ty đang bật. Mọi profile đã được đóng. Báo quản trị bật máy chủ rồi bấm Thử lại.'}
+          </p>
+          {serverDown.reason && !serverDown.killed && (
+            <p style={{ margin: 0, color: 'var(--dim,#9aa3bd)', fontSize: 12 }}>Chi tiết: {serverDown.reason}</p>
+          )}
+          <button onClick={() => void retryServer()} style={BTN} disabled={serverChecking}>
+            {serverChecking ? 'Đang kiểm tra…' : 'Thử lại'}
+          </button>
         </div>
       </div>
     )

@@ -1,9 +1,11 @@
 // ── VGC Browser — main process entry ─────────────────────────────────────────
+import './early'
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { registerIpc } from './ipc'
-import { stopAllAndSync, reapOrphanEngines } from './profile-manager'
+import { stopAllAndSync, reapOrphanEngines, stopAllForServerLoss, emergencyKillProfiles } from './profile-manager'
+import { startCompanyWatchdog } from './company-server'
 import { restartApiServer, stopApiServer } from './api-manager'
 import { initUpdater, hasDownloadedUpdate, installOnQuit } from './updater'
 import { startProxyKeepAlive, stopProxyKeepAlive } from './proxy-keepalive'
@@ -207,6 +209,8 @@ app.whenReady().then(() => {
   try {
     // Keep residential (Evomi hardsession) IPs from rotating on inactivity.
     startProxyKeepAlive()
+    // Bản công ty: canh máy chủ — mất ~2 phút thì đóng mọi profile và khoá giao diện.
+    startCompanyWatchdog(stopAllForServerLoss, emergencyKillProfiles)
   } catch (e) {
     console.error('[startup] proxy keep-alive failed:', e)
   }

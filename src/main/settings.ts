@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto'
 import { join } from 'path'
 import type { AppSettings } from '../shared/types'
 import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-store'
+import { CLOUD, CLOUD_TARGET, IS_TEST_BUILD, MIGRATION } from './targets'
 
 export type { AppSettings }
 
@@ -16,9 +17,13 @@ const ENGINE_MANIFEST = Object.freeze({
   macArm64Sha256: '19d90923f393f5f922c6438ca68af713b1e2ea593909c2065360b65a79ef616b'
 })
 
-const CLOUD_MANIFEST = Object.freeze({
-  url: 'https://pwiledrttvbnmytghyip.supabase.co',
-  anonKey: 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO'
+// Máy chủ dữ liệu do bản build quyết định (src/main/targets.ts), không phải người dùng.
+const CLOUD_MANIFEST = Object.freeze({ url: CLOUD.url, anonKey: CLOUD.anonKey })
+const CLOUD_EXTRA = Object.freeze({
+  cloudHeaders: { ...CLOUD.headers },
+  cloudTarget: CLOUD_TARGET,
+  migrationAvailable: MIGRATION !== null,
+  testBuild: IS_TEST_BUILD
 })
 
 function settingsFile(): string {
@@ -40,6 +45,7 @@ function defaults(): AppSettings {
     apiToken: makeToken(),
     supabaseUrl: CLOUD_MANIFEST.url,
     supabaseAnonKey: CLOUD_MANIFEST.anonKey,
+    ...CLOUD_EXTRA,
     engineUrl: ENGINE_MANIFEST.windowsUrl,
     engineHash: ENGINE_MANIFEST.windowsSha256,
     engineUrlMac: ENGINE_MANIFEST.macArm64Url,
@@ -60,6 +66,10 @@ function normalize(stored: Partial<AppSettings>): AppSettings {
     // Cloud and engine provenance are release metadata, never renderer-controlled settings.
     supabaseUrl: d.supabaseUrl,
     supabaseAnonKey: d.supabaseAnonKey,
+    cloudHeaders: d.cloudHeaders,
+    cloudTarget: d.cloudTarget,
+    migrationAvailable: d.migrationAvailable,
+    testBuild: d.testBuild,
     engineUrl: d.engineUrl,
     engineHash: d.engineHash,
     engineUrlMac: d.engineUrlMac,

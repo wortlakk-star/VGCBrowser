@@ -34,7 +34,9 @@ import type {
   PasskeyInfo,
   UnlockResult,
   GroupUnlockResult,
-  GuardWipedEvent
+  GuardWipedEvent,
+  MigrationPrep,
+  MigrationStatus
 } from '../shared/types'
 
 const api = {
@@ -349,6 +351,19 @@ const api = {
     ipcRenderer.invoke('guard:setGroupLock', name, code, limit),
   guardUnlockGroup: (code: string): Promise<GroupUnlockResult> =>
     ipcRenderer.invoke('guard:unlockGroup', code),
+  // Chuyển dữ liệu sang máy chủ công ty.
+  // Bản công ty: máy chủ có đang chạy không (màn hình khoá khi tắt).
+  companyState: (): Promise<{ mode: boolean; down: boolean; lastOkAt: number; reason: string; killed?: boolean }> =>
+    ipcRenderer.invoke('company:state'),
+  onCompanyState: (cb: (s: { mode: boolean; down: boolean; lastOkAt: number; reason: string; killed?: boolean }) => void): (() => void) => {
+    const listener = (_e: unknown, s: { mode: boolean; down: boolean; lastOkAt: number; reason: string; killed?: boolean }): void => cb(s)
+    ipcRenderer.on('company:state', listener)
+    return () => ipcRenderer.removeListener('company:state', listener)
+  },
+  migratePrepare: (): Promise<MigrationPrep> => ipcRenderer.invoke('migrate:prepare'),
+  migrateStart: (password: string, full?: boolean): Promise<string> =>
+    ipcRenderer.invoke('migrate:start', password, full),
+  migrateStatus: (job: string): Promise<MigrationStatus> => ipcRenderer.invoke('migrate:status', job),
   onGuardWiped: (cb: (p: GuardWipedEvent) => void): (() => void) => {
     const listener = (_e: unknown, p: GuardWipedEvent): void => cb(p)
     ipcRenderer.on('guard:wiped', listener)

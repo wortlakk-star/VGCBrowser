@@ -2,6 +2,19 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.1.90",
+      "date": "2026-11-06",
+      "fixed": [],
+      "added": [
+        "Nút \"Chuyển dữ liệu sang máy chủ công ty\" (thanh nhắc trên đầu app và trong Cài đặt): chép toàn bộ profile, phiên đăng nhập, mật khẩu, mã 2FA, passkey, proxy và cấu hình khoá của bạn sang máy chủ riêng của công ty, đối chiếu từng byte.",
+        "Cloud không bị sửa hay xoá gì khi chuyển — vẫn làm việc bình thường; bấm lại bao nhiêu lần cũng được (lần sau chỉ chép phần thay đổi)."
+      ],
+      "action": [
+        "Đóng hết profile, bấm \"Chuyển ngay\" ở thanh trên đầu app, nhập mật khẩu VGC, chờ tới khi báo \"Đã chuyển xong — khớp 100%\" (thường dưới 1 phút).",
+        "Nếu báo lỗi: bấm \"Thử lại\"; vẫn lỗi thì chụp màn hình gửi quản trị."
+      ]
+    },
+    {
       "version": "2.1.89",
       "date": "2026-11-05",
       "fixed": [],

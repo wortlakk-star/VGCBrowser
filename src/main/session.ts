@@ -95,6 +95,8 @@ export function commitValidatedCloudSession(s: CloudSession | null): void {
   if (s) void import('./passkey-vault').then((m) => m.onCloudLogin()).catch(() => {})
   // Cấu hình khoá theo tài khoản: bật đồng bộ nền (lần kéo đầu do cloud:setSession chờ — guard-sync.ts).
   if (s) void import('./guard-sync').then((m) => m.onGuardLogin()).catch(() => {})
+  // Bản công ty: đổi dấu đồng bộ của cloud cũ sang máy chủ công ty (một lần mỗi tài khoản).
+  if (s) void import('./company-server').then((m) => m.remapTagsAfterMigration(s.uid, s.accessToken)).catch(() => {})
 }
 
 export function getCloudSession(): CloudSession | null {

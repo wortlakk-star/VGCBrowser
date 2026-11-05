@@ -23,6 +23,12 @@ on:
 jobs:
   build-mac:
     runs-on: macos-14 # Apple Silicon runner -> arm64 .dmg
+    env:
+      # Máy chủ dữ liệu của bản build (electron.vite.config.ts): biến repo VGC_TARGET = supabase | xeon.
+      # VGC_APP_KEY (bí mật) = khoá app qua cổng máy chủ công ty; thiếu thì bản supabase không có nút
+      # chuyển dữ liệu, bản xeon từ chối build.
+      VGC_TARGET: ${{ vars.VGC_TARGET || 'supabase' }}
+      VGC_APP_KEY: ${{ secrets.VGC_APP_KEY }}
     steps:
       - uses: actions/checkout@v4
 

@@ -960,6 +960,36 @@ export async function downloadProfileData(id: string): Promise<boolean> {
   return true
 }
 
+/** Bản công ty, lần đăng nhập đầu sau khi chuyển: "dấu đồng bộ" trên máy là ETag của cloud cũ; đổi
+ *  sang ETag của cùng file trên máy chủ công ty (bảng đối chiếu do máy chủ ghi lúc chép). Chỉ đổi
+ *  khi dấu trên máy KHỚP ĐÚNG bản cũ — khác thì giữ nguyên (máy này có thay đổi chưa lên cloud). */
+export async function remapSessionTags(map: { name: string; src: string; dst: string }[]): Promise<number> {
+  const session = getCloudSession()
+  if (!session) return 0
+  let n = 0
+  for (const m of map) {
+    const match = /^([0-9a-f-]{36})\/([0-9a-f-]{36})\.zip$/.exec(m.name)
+    if (!match || match[1] !== session.uid || !m.src || !m.dst || m.src === m.dst) continue
+    const id = match[2]
+    const cur = await readSyncTag(session.uid, id)
+    if (cur && cur === m.src) {
+      if (await writeSyncTag(session.uid, id, m.dst)) {
+        memoryTags.set(id, m.dst)
+        n++
+      }
+    }
+  }
+  return n
+}
+
+/** Bản công ty: sau khi xoá bản profile trên máy, quên luôn "dấu đồng bộ" — nếu không, lần mở
+ *  sau app tưởng máy đã có bản mới nhất, bỏ qua tải về và mở profile trống. */
+export async function forgetLocalSessionTag(id: string): Promise<void> {
+  memoryTags.delete(id)
+  const session = getCloudSession()
+  if (session) await fs.rm(syncTagPath(session.uid, id), { force: true }).catch(() => {})
+}
+
 /** The ETag this process last synced for `id` (uploaded or extracted), '' if none. */
 export function lastSyncedTag(id: string): string {
   return memoryTags.get(id) ?? ''

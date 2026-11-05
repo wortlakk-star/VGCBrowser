@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { UpdateStatus } from '../../shared/types'
 import { Icon } from './Icon'
 import { WhatsNewModal, CHANGELOG } from './WhatsNewModal'
+import { MigrateModal } from './MigrateModal'
 
 const inp: CSSProperties = {
   width: '100%',
@@ -62,6 +63,8 @@ export function SettingsModal({
   const [version, setVersion] = useState<string>('')
   const [update, setUpdate] = useState<UpdateStatus | null>(null)
   const [showLog, setShowLog] = useState(false)
+  const [canMigrate, setCanMigrate] = useState(false)
+  const [showMigrate, setShowMigrate] = useState(false)
   const [apiEnabled, setApiEnabled] = useState(false)
   const [apiPort, setApiPort] = useState('36912')
   const [apiToken, setApiToken] = useState('')
@@ -303,6 +306,7 @@ export function SettingsModal({
     // removed. Normalise any stale saved value so no profile is stuck in CDP /
     // system-Chrome mode.
     void window.vgc.getSettings().then((s) => {
+      setCanMigrate(s.migrationAvailable === true)
       if (s.nativeMode === false || s.useSystemBrowser) {
         void window.vgc.saveSettings({ nativeMode: true, useSystemBrowser: false })
       }
@@ -349,6 +353,14 @@ export function SettingsModal({
                 Đăng xuất
               </button>
             </div>
+            {canMigrate && (
+              <div className="proxy-check">
+                <button className="btn primary" onClick={() => setShowMigrate(true)}>
+                  Chuyển dữ liệu sang máy chủ công ty
+                </button>
+              </div>
+            )}
+            {showMigrate && <MigrateModal email={accountEmail || ''} onClose={() => setShowMigrate(false)} />}
           </section>
 
           <section className="card">

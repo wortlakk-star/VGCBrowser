@@ -4,6 +4,7 @@
 // 'profile:status' from the profile manager.
 
 import { ipcMain, dialog, BrowserWindow, app, shell, type IpcMainInvokeEvent } from 'electron'
+import { migrationPrepare, migrationStart, migrationStatus } from './migrate'
 import { checkVersionGate } from './version-gate'
 import { hostGpuFamily } from './host-fingerprint'
 import { refreshLicense, precheckEmail, shouldRevoke } from './license'
@@ -893,6 +894,22 @@ export function registerIpc(): void {
   })
 
   handle('settings:get', () => getSettings())
+  handle('company:state', async () => {
+    const m = await import('./company-server')
+    if (!m.COMPANY_MODE) return m.companyServerState()
+    // Hỏi ngay (màn hình khoá bấm "Thử lại")
+    const p = await m.pingCompanyServer()
+    const cur = m.companyServerState()
+    if (cur.killed) return cur
+    return { ...cur, down: !p.ok, reason: p.reason }
+  })
+  // Chuyển dữ liệu sang máy chủ công ty (src/main/migrate.ts). Chạy trong account-operation để
+  // không đua với đăng xuất/đổi tài khoản.
+  handle('migrate:prepare', () => runAccountOperation(() => migrationPrepare()))
+  handle('migrate:start', (_e, password: string, full?: boolean) =>
+    runAccountOperation(() => migrationStart(String(password ?? '').slice(0, 512), full === true))
+  )
+  handle('migrate:status', (_e, job: string) => migrationStatus(String(job ?? '')))
 
   handle('settings:save', async (_e, patch: Partial<AppSettings>) => {
     const s = await saveSettings(patch)

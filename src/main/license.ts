@@ -17,14 +17,18 @@ import { migratePlainJson, readSecureJson, writeSecureJson } from './secure-stor
 import { readLimitedResponseJson } from './http-limit'
 import type { LicenseStatus } from '../shared/types'
 
-const API = 'https://vgcbrowser.com/quanly/check.php'
-const REGISTER_API = 'https://vgcbrowser.com/quanly/register.php'
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+import { CLOUD_TARGET, LICENSE } from './targets'
+
+const API = LICENSE.check
+const REGISTER_API = LICENSE.register
+// Bản công ty: KHÔNG cho dùng tạm khi không hỏi được máy chủ (máy chủ tắt = không ai dùng được).
+const COMPANY = CLOUD_TARGET === 'xeon'
+const CACHE_TTL_MS = COMPANY ? 0 : 24 * 60 * 60 * 1000
 const MAX_RESPONSE_BYTES = 64 * 1024
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 /** While inside the app, this many consecutive "server unreachable and no approval in the
  *  last 24 h" verdicts end the session — one alone may be a cache-write hiccup. */
-const UNVERIFIED_STREAK_TO_REVOKE = 2
+const UNVERIFIED_STREAK_TO_REVOKE = COMPANY ? 1 : 2
 
 interface CachedDecision {
   approved: boolean
@@ -107,6 +111,7 @@ const SERVER_FAULT_REASONS = new Set(['err', 'no-db'])
  *  callers can tell "the server said no" apart from "could not ask the server". */
 async function queryServer(email: string): Promise<CheckResponse> {
   const r = await fetch(`${API}?email=${encodeURIComponent(email)}`, {
+    headers: LICENSE.headers,
     signal: AbortSignal.timeout(8000),
     cache: 'no-store',
     redirect: 'error'
@@ -229,7 +234,7 @@ export async function reportRegistration(email: string | null): Promise<void> {
   try {
     const response = await fetch(REGISTER_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...LICENSE.headers },
       body: JSON.stringify({
         email: e,
         machineId: getMachineId(),
