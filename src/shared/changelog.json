@@ -2,6 +2,21 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.2.0",
+      "date": "2026-11-06",
+      "fixed": [],
+      "added": [
+        "VGC chạy hoàn toàn trên máy chủ riêng của công ty — không còn lưu dữ liệu trên cloud.",
+        "Máy chủ công ty tắt hoặc mất kết nối: không mở được profile; profile đang mở tự đóng sau khoảng 2 phút.",
+        "Đóng profile và đã lưu đủ lên máy chủ thì bản trên máy được xoá — máy bị lấy cũng không còn phiên đăng nhập.",
+        "Quản trị có nút huỷ khẩn cấp: xoá dữ liệu VGC trên mọi máy nhân viên, khôi phục được từ máy chủ."
+      ],
+      "action": [
+        "Lần đầu mở bản này: đăng nhập lại bằng email và mật khẩu VGC cũ.",
+        "Nếu app hỏi mật khẩu mã hoá: nhập mật khẩu mã hoá cloud cũ."
+      ]
+    },
+    {
       "version": "2.1.90",
       "date": "2026-11-06",
       "fixed": [],
