@@ -81,14 +81,14 @@ export function LockScreen({ onUnlocked }: Props): JSX.Element {
         <img src={logo} alt="VGC" style={{ width: 60, height: 60 }} />
         <h2 style={{ margin: '16px 0 6px', fontSize: 21 }}>VGC đang khoá</h2>
         <p style={{ margin: '0 0 18px', color: 'var(--dim,#9aa3bd)', fontSize: 14, lineHeight: 1.6 }}>
-          Nhập mật khẩu bảo mật để mở.
+          Nhập mật khẩu chủ để mở.
         </p>
         <input
           ref={inputRef}
           type="password"
           value={pw}
           autoComplete="off"
-          placeholder="Mật khẩu"
+          placeholder="Mật khẩu chủ"
           disabled={busy || waiting > 0}
           onChange={(e) => setPw(e.target.value)}
           onKeyDown={(e) => {

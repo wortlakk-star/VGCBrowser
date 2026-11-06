@@ -2,6 +2,17 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.2.5",
+      "date": "2026-11-07",
+      "fixed": [
+        "Cài đặt → phần mật khẩu sắp lại thành từng mục riêng: Passphrase mã hoá, Mật khẩu chủ, Mật khẩu SOS, Khoá mở VGC, Khoá từng profile, Khoá theo nhóm — mỗi mục có nút lưu riêng, hết lẫn lộn.",
+        "Gọi thống nhất một tên \"mật khẩu chủ\" ở mọi ô mở khoá (trước có chỗ ghi \"mật khẩu bảo mật\").",
+        "Không cho đặt mật khẩu SOS trùng mật khẩu chủ."
+      ],
+      "added": [],
+      "action": []
+    },
+    {
       "version": "2.2.4",
       "date": "2026-11-07",
       "fixed": [],

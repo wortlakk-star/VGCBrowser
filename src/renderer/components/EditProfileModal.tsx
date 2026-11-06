@@ -164,7 +164,7 @@ Nếu đây là cách đăng nhập duy nhất của tài khoản đó thì bạ
   const toggleLock = async (checked: boolean): Promise<void> => {
     setLockMsg('')
     if (checked && !hasMaster) {
-      setLockMsg('Chưa đặt mật khẩu chủ — vào Cài đặt đặt mật khẩu bảo mật trước.')
+      setLockMsg('Chưa đặt mật khẩu chủ — vào Cài đặt → Bảo mật đặt trước.')
       return
     }
     setSavingLock(true)

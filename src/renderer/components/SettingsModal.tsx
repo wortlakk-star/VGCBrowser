@@ -172,7 +172,7 @@ export function SettingsModal({
       await loadGuard()
       await loadGroups()
     } else {
-      setRevealMsg('Sai mật khẩu bảo mật.')
+      setRevealMsg('Sai mật khẩu chủ.')
       setRevealPw('')
     }
   }
@@ -428,7 +428,11 @@ export function SettingsModal({
           </section>
 
           <section className="card">
-            <h3>Mã hoá dữ liệu</h3>
+            <h3>Passphrase mã hoá dữ liệu</h3>
+            <p className="hint" style={{ margin: '0 0 8px' }}>
+              KHÁC với mật khẩu chủ: passphrase này mã hoá profile và proxy trước khi lưu lên máy chủ; cài máy mới phải nhập
+              đúng passphrase này mới đọc được dữ liệu. Chỉ nhập một lần trên mỗi máy.
+            </p>
             <div style={{ display: 'grid', gap: 8 }}>
               <input
                 placeholder={
@@ -459,15 +463,16 @@ export function SettingsModal({
           </section>
 
           {!guardAdmin ? (
-            // ẨN mặc định: chỉ một ô nhỏ, gõ đúng mật khẩu bảo mật mới hiện phần khoá bảo vệ.
+            // ẨN mặc định: gõ đúng MẬT KHẨU CHỦ mới hiện phần Bảo mật.
             <section className="card">
-              <div className="row-inline" style={{ gap: 8, alignItems: 'center' }}>
+              <h3>Bảo mật (mật khẩu chủ, SOS, khoá)</h3>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ opacity: 0.6 }}>🔒</span>
                 <input
                   type="password"
-                  style={{ ...inp, maxWidth: 220 }}
+                  style={{ ...inp, maxWidth: 240 }}
                   value={revealPw}
-                  placeholder="Mật khẩu bảo mật"
+                  placeholder={'Mật khẩu chủ'}
                   autoComplete="off"
                   onChange={(e) => setRevealPw(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') void revealGuard() }}
@@ -475,92 +480,123 @@ export function SettingsModal({
                 <button className="btn" disabled={!revealPw} onClick={() => void revealGuard()}>Mở</button>
                 {revealMsg && <span className="hint" style={{ margin: 0, color: '#e0534f' }}>{revealMsg}</span>}
               </div>
+              <p className="hint" style={{ margin: '6px 0 0' }}>Chưa đặt mật khẩu chủ thì bấm Mở với ô trống để thiết lập lần đầu.</p>
             </section>
           ) : (
-            <section className="card">
-              <div className="row-inline" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0 }}>🔒 Khoá bảo vệ profile (tự huỷ)</h3>
-                <button className="btn" onClick={() => { onSetGuardAdmin(false); setGMsg('') }}>Ẩn lại</button>
-              </div>
-              <p className="hint" style={{ marginTop: 6 }}>
-                Vào <b>Sửa profile</b> → mục này để bật khoá cho <b>từng profile</b> (không bật thì profile mở
-                bình thường). Sai <b>{gPerLimit}</b> lần → xoá vĩnh viễn riêng profile đó; tổng sai <b>{gGlobalLimit}</b> lần
-                (mọi profile) → xoá <b>TẤT CẢ</b>. Dữ liệu xoá gồm cả bản trên máy chủ, <b>không khôi phục được</b>.
-                {gLockedCount > 0 && <> Hiện có <b>{gLockedCount}</b> profile đang khoá.</>}
-              </p>
+            <>
+              {/* ── 1. Mật khẩu chủ ── */}
+              <section className="card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <h3 style={{ margin: 0 }}>🔑 Mật khẩu chủ {gHasMaster ? <span className="hint">(đã đặt)</span> : <span className="hint" style={{ color: '#e0534f' }}>(chưa đặt)</span>}</h3>
+                  <button className="btn" onClick={() => { onSetGuardAdmin(false); setGMsg('') }}>Ẩn phần bảo mật</button>
+                </div>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  Một mật khẩu dùng cho mọi chỗ cần mở khoá: mở phần này, mở profile đã khoá, mở nhóm đang khoá,
+                  và mở VGC khi bật khoá mở app bên dưới.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: gHasMaster ? '1fr 1fr' : '1fr', gap: 8 }}>
+                  <label>
+                    {gHasMaster ? 'Mật khẩu chủ mới' : 'Đặt mật khẩu chủ'}
+                    <input type="password" style={inp} value={gMasterNew} placeholder={gHasMaster ? 'Để trống nếu không đổi' : 'Mật khẩu chủ'}
+                      autoComplete="new-password" onChange={(e) => setGMasterNew(e.target.value)} />
+                  </label>
+                  {gHasMaster && (
+                    <label>
+                      Mật khẩu chủ hiện tại (để xác nhận)
+                      <input type="password" style={inp} value={gAuth} autoComplete="off"
+                        onChange={(e) => setGAuth(e.target.value)} />
+                    </label>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  <button className="btn primary" disabled={!gMasterNew} onClick={() => void saveMaster(false)}>{gHasMaster ? 'Đổi mật khẩu chủ' : 'Lưu mật khẩu chủ'}</button>
+                  {gHasMaster && <button className="btn" onClick={() => void saveMaster(true)}>Gỡ mật khẩu chủ</button>}
+                </div>
+                <p className="hint" style={{ margin: '8px 0 0', color: '#e0534f' }}>
+                  ⚠️ Quên mật khẩu chủ là không đổi/gỡ được khoá nào nữa và không mở lại được phần này.
+                </p>
+              </section>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-                <label>
-                  Sai mấy lần thì xoá 1 profile
-                  <input type="number" min={1} max={99} value={gPerLimit} style={inp}
-                    onChange={(e) => setGPerLimit(Math.max(1, Math.min(99, Number(e.target.value) || 3)))} />
-                </label>
-                <label>
-                  Tổng sai mấy lần thì xoá TẤT CẢ
-                  <input type="number" min={1} max={999} value={gGlobalLimit} style={inp}
-                    onChange={(e) => setGGlobalLimit(Math.max(1, Math.min(999, Number(e.target.value) || 5)))} />
-                </label>
-              </div>
+              {/* ── 2. Mật khẩu SOS ── */}
+              <section className="card">
+                <h3>🆘 Mật khẩu SOS (khẩn cấp) {gHasSos ? <span className="hint">(đã đặt)</span> : <span className="hint">(chưa đặt)</span>}</h3>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  Khi bị ép mở: gõ mật khẩu này vào <b>bất kỳ ô mở khoá nào</b> (mở VGC, mở profile, mở nhóm) →
+                  xoá <b>TẤT CẢ</b> profile trên máy, trên máy chủ và passkey, không khôi phục được. Màn hình vẫn
+                  trông như mở bình thường. Phải khác mật khẩu chủ.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
+                  <label>
+                    {gHasSos ? 'Mật khẩu SOS mới' : 'Đặt mật khẩu SOS'}
+                    <input type="password" style={inp} value={gSosNew} placeholder={gHasSos ? 'Để trống nếu không đổi' : 'Mật khẩu SOS'}
+                      autoComplete="new-password" onChange={(e) => setGSosNew(e.target.value)} />
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  <button className="btn primary" disabled={!gSosNew} onClick={() => void saveSos(false)}>{gHasSos ? 'Đổi mật khẩu SOS' : 'Lưu mật khẩu SOS'}</button>
+                  {gHasSos && <button className="btn" onClick={() => void saveSos(true)}>Gỡ mật khẩu SOS</button>}
+                </div>
+              </section>
 
-              <label style={{ display: 'block', marginBottom: 8 }}>
-                Tự khoá cửa sổ trình duyệt sau (phút không thao tác, 0 = tắt)
-                <input type="number" min={0} max={1440} value={gRelock} style={inp}
-                  onChange={(e) => setGRelock(Math.max(0, Math.min(1440, Number(e.target.value) || 0)))} />
-                <span className="hint" style={{ display: 'block', margin: '2px 0 0' }}>
-                  Profile khoá đang mở: hết thời gian này thì mọi cửa sổ của nó bị thu nhỏ và phải nhập
-                  mật khẩu chủ mới dùng lại được. Áp dụng cho profile mở từ lần sau.
-                </span>
-              </label>
-              <label style={{ display: 'block', marginBottom: 6 }}>
-                Mật khẩu chủ {gHasMaster ? '(đã đặt — cũng là mật khẩu bảo mật để mở phần này)' : '(chưa đặt)'}
-                <input type="password" style={inp} value={gMasterNew} placeholder={gHasMaster ? 'Nhập để ĐỔI' : 'Đặt mật khẩu chủ'}
-                  autoComplete="new-password" onChange={(e) => setGMasterNew(e.target.value)} />
-              </label>
-              <label style={{ display: 'block', marginBottom: 6 }}>
-                Mật khẩu SOS {gHasSos ? '(đã đặt — gõ vào ô mở khoá sẽ XOÁ TẤT CẢ)' : '(chưa đặt)'}
-                <input type="password" style={inp} value={gSosNew} placeholder={gHasSos ? 'Nhập để ĐỔI' : 'Đặt mật khẩu SOS (khẩn cấp)'}
-                  autoComplete="new-password" onChange={(e) => setGSosNew(e.target.value)} />
-              </label>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8, cursor: gHasMaster ? 'pointer' : 'default' }}>
-                <input
-                  type="checkbox"
-                  checked={gAppLock}
-                  disabled={!gHasMaster}
-                  style={{ marginTop: 3 }}
-                  onChange={(e) => void toggleAppLock(e.target.checked)}
-                />
-                <span>
-                  <b>Yêu cầu mật khẩu khi mở VGC</b> (máy này)
-                  <span className="hint" style={{ display: 'block', margin: '2px 0 0' }}>
-                    Mỗi lần mở app, đổi tài khoản hoặc bấm "Khoá VGC" ở thanh bên: phải nhập <b>mật khẩu chủ</b> mới
-                    vào được. Gõ <b>mật khẩu SOS</b> vào đó → xoá TẤT CẢ profile (máy + máy chủ + passkey) rồi mở vào app
-                    trống như bình thường. Nhập sai chỉ phải chờ lâu dần, không tính vào số lần tự huỷ.
-                    {!gHasMaster && ' Đặt mật khẩu chủ trước rồi mới bật được.'}
+              {/* ── 3. Khoá mở VGC ── */}
+              <section className="card">
+                <h3>🔐 Khoá mở VGC (máy này)</h3>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: gHasMaster ? 'pointer' : 'default', marginTop: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={gAppLock}
+                    disabled={!gHasMaster}
+                    style={{ marginTop: 3 }}
+                    onChange={(e) => void toggleAppLock(e.target.checked)}
+                  />
+                  <span>
+                    <b>Yêu cầu mật khẩu chủ khi mở VGC</b>
+                    <span className="hint" style={{ display: 'block', margin: '2px 0 0' }}>
+                      Mỗi lần mở app, đổi tài khoản hoặc bấm "Khoá VGC" ở thanh bên đều phải nhập mật khẩu chủ.
+                      Nhập sai chỉ phải chờ lâu dần, không tính vào số lần tự huỷ.
+                      {!gHasMaster && ' Đặt mật khẩu chủ trước rồi mới bật được.'}
+                    </span>
                   </span>
-                </span>
-              </label>
-              {gHasMaster && (
-                <label style={{ display: 'block', marginBottom: 6 }}>
-                  Xác nhận bằng mật khẩu chủ hiện tại
-                  <input type="password" style={inp} value={gAuth} autoComplete="off"
-                    onChange={(e) => setGAuth(e.target.value)} />
                 </label>
-              )}
-              <div className="row-inline" style={{ gap: 8, flexWrap: 'wrap' }}>
-                <button className="btn" disabled={!gMasterNew} onClick={() => void saveMaster(false)}>Lưu mật khẩu chủ</button>
-                {gHasMaster && <button className="btn" onClick={() => void saveMaster(true)}>Gỡ mật khẩu chủ</button>}
-                <button className="btn" disabled={!gSosNew} onClick={() => void saveSos(false)}>Lưu SOS</button>
-                {gHasSos && <button className="btn" onClick={() => void saveSos(true)}>Gỡ SOS</button>}
-                <button className="btn" onClick={() => void saveGuardLimits()}>Lưu giới hạn</button>
-              </div>
-              {gMsg && <p className="hint" style={{ marginBottom: 0 }}>{gMsg}</p>}
+              </section>
 
-              <div style={{ borderTop: '1px solid var(--border)', margin: '10px 0 6px', paddingTop: 8 }}>
-                <b>🗂 Khoá theo nhóm</b>
-                <p className="hint" style={{ marginTop: 2 }}>
-                  Khoá cả một nhóm bằng <b>mã riêng</b>. Nhóm bị khoá sẽ <b>ẩn hẳn</b> khỏi danh sách; gõ
-                  đúng mã (ở ô "🔒 Mã nhóm" cột trái) mới hiện. Nhập sai mã quá {gPerLimit} lần → xoá vĩnh viễn
-                  cả nhóm; tổng sai chạm {gGlobalLimit} → xoá TẤT CẢ. Mật khẩu chủ mở được mọi nhóm.
+              {/* ── 4. Khoá từng profile (tự huỷ) ── */}
+              <section className="card">
+                <h3>🔒 Khoá từng profile (tự huỷ) {gLockedCount > 0 && <span className="hint">(đang khoá {gLockedCount})</span>}</h3>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  Bật cho từng profile ở <b>Sửa profile</b> → mục Khoá bảo vệ. Profile khoá phải nhập mật khẩu chủ mới mở.
+                  Sai quá số lần thì tự xoá vĩnh viễn (cả bản trên máy chủ).
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                  <label>
+                    Sai mấy lần → xoá profile đó
+                    <input type="number" min={1} max={99} value={gPerLimit} style={inp}
+                      onChange={(e) => setGPerLimit(Math.max(1, Math.min(99, Number(e.target.value) || 3)))} />
+                  </label>
+                  <label>
+                    Tổng sai mấy lần → xoá TẤT CẢ
+                    <input type="number" min={1} max={999} value={gGlobalLimit} style={inp}
+                      onChange={(e) => setGGlobalLimit(Math.max(1, Math.min(999, Number(e.target.value) || 5)))} />
+                  </label>
+                  <label>
+                    Tự khoá cửa sổ sau (phút, 0 = tắt)
+                    <input type="number" min={0} max={1440} value={gRelock} style={inp}
+                      onChange={(e) => setGRelock(Math.max(0, Math.min(1440, Number(e.target.value) || 0)))} />
+                  </label>
+                </div>
+                <p className="hint" style={{ margin: '4px 0 8px' }}>
+                  Tự khoá cửa sổ: profile khoá đang mở mà không thao tác quá số phút này thì cửa sổ bị thu nhỏ, phải nhập
+                  mật khẩu chủ mới dùng tiếp (áp dụng cho lần mở sau).
+                </p>
+                <button className="btn primary" onClick={() => void saveGuardLimits()}>Lưu giới hạn</button>
+              </section>
+
+              {/* ── 5. Khoá theo nhóm ── */}
+              <section className="card">
+                <h3>🗂 Khoá theo nhóm</h3>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  Mỗi nhóm một <b>mã riêng</b>. Nhóm khoá <b>ẩn hẳn</b> khỏi danh sách; gõ đúng mã ở ô "🔒 Mã nhóm" cột trái
+                  mới hiện. Sai mã quá {gPerLimit} lần → xoá cả nhóm; tổng sai chạm {gGlobalLimit} → xoá TẤT CẢ. Mật khẩu chủ mở được mọi nhóm.
                 </p>
                 {groupNames.length === 0 ? (
                   <p className="hint" style={{ margin: 0 }}>Chưa có nhóm nào. Tạo nhóm và gán profile vào nhóm trước.</p>
@@ -600,13 +636,9 @@ export function SettingsModal({
                   <p className="hint" style={{ margin: '4px 0 0' }}>Đang khoá: {[...lockedGroupSet].join(', ')}</p>
                 )}
                 {groupMsg && <p className="hint" style={{ margin: 0 }}>{groupMsg}</p>}
-              </div>
-
-              <p className="hint" style={{ marginBottom: 0, color: '#e0534f' }}>
-                ⚠️ Nếu đặt mật khẩu chủ mà quên, sẽ không gỡ/đổi được khoá nào nữa, và không mở lại được phần
-                này (đúng tinh thần tự huỷ).
-              </p>
-            </section>
+              </section>
+              {gMsg && <p className="hint" style={{ margin: '-6px 0 10px' }}>{gMsg}</p>}
+            </>
           )}
 
           <section className="card">

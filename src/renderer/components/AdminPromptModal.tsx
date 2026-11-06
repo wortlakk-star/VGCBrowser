@@ -25,7 +25,7 @@ export function AdminPromptModal({ title, desc, onOk, onClose }: Props): JSX.Ele
         onClose()
         onOk()
       } else {
-        setMsg('Sai mật khẩu bảo mật.')
+        setMsg('Sai mật khẩu chủ.')
         setPw('')
       }
     } finally {
@@ -39,7 +39,7 @@ export function AdminPromptModal({ title, desc, onOk, onClose }: Props): JSX.Ele
         <header className="modal-head">
           <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Icon name="shield" size={18} style={{ color: 'var(--accent-2)' }} />
-            {title ?? 'Mật khẩu bảo mật'}
+            {title ?? 'Mật khẩu chủ'}
           </h2>
           <button className="btn" onClick={onClose}>
             <Icon name="x" size={16} strokeWidth={2.4} />
@@ -53,7 +53,7 @@ export function AdminPromptModal({ title, desc, onOk, onClose }: Props): JSX.Ele
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void submit() }}
-            placeholder="Mật khẩu bảo mật"
+            placeholder="Mật khẩu chủ"
             autoComplete="off"
           />
           {msg && <p className="hint" style={{ margin: 0, color: '#e0534f', fontWeight: 600 }}>{msg}</p>}

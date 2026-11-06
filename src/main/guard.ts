@@ -479,6 +479,7 @@ export async function setAppLock(enabled: boolean, auth?: string): Promise<{ ok:
 export async function setMaster(newPw: string, auth?: string): Promise<{ ok: boolean; error?: string }> {
   return withWrite((cfg) => {
     if (!hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    if (newPw && verify(newPw, cfg.sos)) return { ok: false, error: 'Mật khẩu chủ phải khác mật khẩu SOS.' }
     cfg.master = newPw ? makeHash(newPw) : null
     return { ok: true }
   })
@@ -486,6 +487,7 @@ export async function setMaster(newPw: string, auth?: string): Promise<{ ok: boo
 export async function setSos(newPw: string, auth?: string): Promise<{ ok: boolean; error?: string }> {
   return withWrite((cfg) => {
     if (!adminActive() && !hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    if (newPw && verify(newPw, cfg.master)) return { ok: false, error: 'Mật khẩu SOS phải khác mật khẩu chủ.' }
     cfg.sos = newPw ? makeHash(newPw) : null
     return { ok: true }
   })
