@@ -14,8 +14,13 @@ import { dbg } from './dbg'
 
 export const COMPANY_MODE = CLOUD_TARGET === 'xeon'
 
-const PING_EVERY_MS = 30_000
-const FAILS_TO_LOCK = 4
+// Máy chủ tắt (mất điện, rút mạng) → đóng mọi profile trong ~10 giây: ping mỗi 3 s, mỗi lần chờ tối đa 4 s,
+// 3 lần hỏng LIÊN TIẾP mới đóng (một nhịp mạng chập chờn 1–2 lần không làm mất việc đang làm).
+const PING_EVERY_MS = 3_000
+const PING_TIMEOUT_MS = 4_000
+const FAILS_TO_LOCK = 3
+// Lệnh huỷ khẩn cấp chỉ cần hỏi mỗi ~30 s (10 nhịp ping tốt) — không tăng tải máy chủ so với trước.
+const KILL_CHECK_EVERY_OK_TICKS = 10
 
 export interface CompanyServerState {
   mode: boolean
@@ -27,6 +32,8 @@ export interface CompanyServerState {
 }
 let state: CompanyServerState = { mode: COMPANY_MODE, down: false, lastOkAt: 0, reason: '', killed: false }
 let fails = 0
+let okTicks = 0
+let ticking = false
 let timer: NodeJS.Timeout | null = null
 
 export function companyServerState(): CompanyServerState {
@@ -160,16 +167,24 @@ async function emergencyWipe(killProfiles: () => Promise<void>): Promise<void> {
 export function startCompanyWatchdog(onLost: () => Promise<void>, onKill: () => Promise<void>): void {
   if (!COMPANY_MODE || timer) return
   const tick = async (): Promise<void> => {
-    const p = await pingCompanyServer()
-    if (p.ok) {
-      if (await killRequested()) return emergencyWipe(onKill)
-      return markOk()
-    }
-    fails++
-    dbg(`[company] ping failed ${fails}/${FAILS_TO_LOCK} (${p.reason})`)
-    if (fails >= FAILS_TO_LOCK && !state.down) {
-      markDown(p.reason)
-      await onLost().catch((e) => dbg(`[company] close-all failed: ${e instanceof Error ? e.message : e}`))
+    // Không cho hai nhịp chồng nhau (ping chậm hơn chu kỳ) — mỗi lần hỏng phải là một lần hỏi thật.
+    if (ticking) return
+    ticking = true
+    try {
+      const p = await pingCompanyServer(PING_TIMEOUT_MS)
+      if (p.ok) {
+        okTicks++
+        if (okTicks % KILL_CHECK_EVERY_OK_TICKS === 1 && (await killRequested())) return emergencyWipe(onKill)
+        return markOk()
+      }
+      fails++
+      dbg(`[company] ping failed ${fails}/${FAILS_TO_LOCK} (${p.reason})`)
+      if (fails >= FAILS_TO_LOCK && !state.down) {
+        markDown(p.reason)
+        await onLost().catch((e) => dbg(`[company] close-all failed: ${e instanceof Error ? e.message : e}`))
+      }
+    } finally {
+      ticking = false
     }
   }
   void tick()

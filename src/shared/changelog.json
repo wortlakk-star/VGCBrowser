@@ -2,6 +2,15 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.2.4",
+      "date": "2026-11-07",
+      "fixed": [],
+      "added": [
+        "Máy chủ công ty tắt (mất điện, mất mạng): app phát hiện trong khoảng 10 giây và tự đóng mọi profile (trước đây mất 2 phút). Phần việc chưa kịp lưu vẫn giữ trên máy và tự đưa lên máy chủ ở lần mở sau."
+      ],
+      "action": []
+    },
+    {
       "version": "2.2.3",
       "date": "2026-11-06",
       "fixed": [],
