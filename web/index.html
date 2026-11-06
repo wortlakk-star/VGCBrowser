@@ -207,7 +207,6 @@
         <div class="navlinks">
           <a href="#features">Tính năng</a>
           <a href="#pricing">Bảng giá</a>
-          <a href="#login">Tài khoản</a>
           <a class="btn primary" id="navDl" href="#download">Tải về</a>
         </div>
       </div>
@@ -224,7 +223,6 @@
         <div class="cta" id="download">
           <a class="btn primary lg" id="dlWin" href="#">↓ Tải cho Windows</a>
           <a class="btn primary lg" id="dlMac" href="#">↓ Tải cho macOS</a>
-          <a class="btn ghost lg" href="#login">Đăng nhập VGC Cloud</a>
         </div>
         <div class="subnote" id="dlNote">Windows (.exe) &amp; macOS (.dmg) · miễn phí 10 hồ sơ · không cần thẻ tín dụng</div>
 
@@ -308,53 +306,25 @@
             <h3>Free</h3>
             <div class="amt">0đ<span> /mãi mãi</span></div>
             <ul><li><b>✓</b> 10 hồ sơ</li><li><b>✓</b> Vân tay &amp; proxy</li><li><b>✓</b> Đồng bộ cơ bản</li></ul>
-            <a class="btn ghost" href="#login">Dùng thử</a>
+            <a class="btn ghost" href="#download">Dùng thử</a>
           </div>
           <div class="price feat">
             <span class="tag">PHỔ BIẾN NHẤT</span>
             <h3>Pro</h3>
             <div class="amt">199k<span> /tháng</span></div>
             <ul><li><b>✓</b> 100 hồ sơ + cloud sync</li><li><b>✓</b> Automation API</li><li><b>✓</b> Proxy Manager</li><li><b>✓</b> Hỗ trợ ưu tiên 24/7</li></ul>
-            <a class="btn primary" href="#login">Dùng thử</a>
+            <a class="btn primary" href="#download">Dùng thử</a>
           </div>
           <div class="price">
             <h3>Team</h3>
             <div class="amt">499k<span> /tháng</span></div>
             <ul><li><b>✓</b> Hồ sơ không giới hạn</li><li><b>✓</b> Chia sẻ nhóm &amp; phân quyền</li><li><b>✓</b> Nhiều thành viên</li></ul>
-            <a class="btn ghost" href="#login">Liên hệ</a>
+            <a class="btn ghost" href="https://veltrixworldwide.com" target="_blank" rel="noopener">Liên hệ</a>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="block reveal" id="login">
-      <div class="wrap">
-        <div class="sec-head">
-          <div class="kicker">Tài khoản</div>
-          <h2>Đăng nhập VGC Cloud</h2>
-          <p>Một tài khoản — đồng bộ hồ sơ &amp; phiên trên mọi thiết bị.</p>
-        </div>
-        <div class="authwrap">
-          <div class="tabs">
-            <button class="tab active" data-t="login">Đăng nhập</button>
-            <button class="tab" data-t="signup">Đăng ký</button>
-          </div>
-          <div id="pane-login">
-            <input id="li-email" type="email" placeholder="Địa chỉ email" />
-            <input id="li-pass" type="password" placeholder="Mật khẩu" />
-            <button class="btn primary" id="loginBtn">Đăng nhập</button>
-          </div>
-          <div id="pane-signup" style="display: none">
-            <input id="su-name" placeholder="Tên hiển thị (tuỳ chọn)" />
-            <input id="su-email" type="email" placeholder="Địa chỉ email" />
-            <input id="su-pass" type="password" placeholder="Mật khẩu (≥ 6 ký tự)" />
-            <input id="su-pass2" type="password" placeholder="Nhập lại mật khẩu" />
-            <button class="btn primary" id="signupBtn">Tạo tài khoản</button>
-          </div>
-          <p id="msg"></p>
-        </div>
-      </div>
-    </section>
 
     <footer>
       <div class="wrap foot-in">
@@ -366,13 +336,11 @@
           <p>Trình duyệt ẩn danh đa hồ sơ cho doanh nghiệp. Một thành viên của Veltrix Group Corporation — Global Technology Holding.</p>
         </div>
         <div><h5>Sản phẩm</h5><a href="#features">Tính năng</a><a href="#pricing">Bảng giá</a><a id="ctaDl" href="#download">Tải về</a></div>
-        <div><h5>Tài khoản</h5><a href="#login">Đăng nhập</a><a href="#login">Đăng ký</a></div>
         <div><h5>Veltrix Group</h5><a href="https://veltrixworldwide.com" target="_blank" rel="noopener">veltrixworldwide.com</a><p>vgcbrowser.com</p></div>
       </div>
       <div class="wrap copy">© 2026 VGC Browser · Veltrix Group Corporation. All rights reserved.</div>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
       // HAI luồng tải riêng: nút Windows (.exe) + nút macOS (.dmg). Mỗi nút lấy
       // version mới nhất từ feed riêng của nó (latest.yml / latest-mac.yml) nên luôn
@@ -426,64 +394,8 @@
         }
       }
       ;(function(){ var m = document.getElementById('dlMac'); if(m) m.addEventListener('click', function(){ setTimeout(showMacGuide, 400) }) })()
-      const SUPABASE_URL = 'https://pwiledrttvbnmytghyip.supabase.co'
-      const SUPABASE_ANON = 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO'
-      ;(function(){ try {
-        var h = location.hash || ''
-        var goLogin = h === '#login'
-        if (h.indexOf('access_token=') !== -1) showAuthDone(h.indexOf('type=recovery') !== -1)
-        if (location.search || location.hash) history.replaceState(null, document.title, location.pathname || '/')
-        if (goLogin) { var el = document.getElementById('login'); if (el) el.scrollIntoView() }
-      } catch(e){} })();
-      function showAuthDone(isRecovery){
-        var t = isRecovery ? 'Liên kết hợp lệ' : 'Xác nhận tài khoản thành công!'
-        var sub = isRecovery
-          ? 'Bạn có thể đăng nhập lại trong app VGC Browser.'
-          : 'Email đã được xác nhận. Mở app VGC Browser và đăng nhập để bắt đầu.'
-        var o = document.createElement('div')
-        o.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(4,10,20,.86);backdrop-filter:blur(6px)'
-        var card = document.createElement('div')
-        card.style.cssText = 'max-width:440px;width:92%;text-align:center;background:linear-gradient(180deg,#0e1120,#0a0c16);border:1px solid #6366f1;border-radius:18px;padding:38px 30px;color:#eef0f7;box-shadow:0 30px 80px rgba(0,0,0,.6)'
-        card.innerHTML = '<div style="font-size:56px;line-height:1">✅</div>'
-          + '<h2 style="margin:16px 0 8px;font-size:24px;font-family:Space Grotesk,sans-serif">'+t+'</h2>'
-          + '<p style="margin:0 0 24px;color:#9aa3bd;font-size:14px;line-height:1.6">'+sub+'</p>'
-          + '<a href="'+DOWNLOAD_URL+'" style="display:inline-block;background:linear-gradient(135deg,#a78bfa,#6366f1);color:#fff;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:30px">Tải VGC Browser</a>'
-          + '<div style="margin-top:16px"><a href="#" id="vgcAuthClose" style="color:#a78bfa;font-size:13px;text-decoration:underline">Đóng</a></div>'
-        o.appendChild(card)
-        document.body.appendChild(o)
-        o.addEventListener('click', function(ev){ if(ev.target===o) o.remove() })
-        var cl = document.getElementById('vgcAuthClose'); if(cl) cl.onclick = function(e){ e.preventDefault(); o.remove() }
-      }
       var io = new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target) } }) }, { threshold: 0.08 })
       document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el) })
-      var msg = document.getElementById('msg'); var sb = null
-      if (SUPABASE_URL && SUPABASE_ANON && window.supabase) sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON)
-      function setMsg(t, ok){ msg.textContent = t; msg.style.color = ok ? '#7ee0b0' : '#ff9a9a' }
-      function val(id){ var e=document.getElementById(id); return e ? e.value.trim() : '' }
-      document.querySelectorAll('.tab').forEach(function(t){ t.onclick = function(){
-        document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('active') }); t.classList.add('active')
-        var s = t.getAttribute('data-t') === 'signup'
-        document.getElementById('pane-login').style.display = s ? 'none' : ''
-        document.getElementById('pane-signup').style.display = s ? '' : 'none'
-        msg.textContent = ''
-      }})
-      document.getElementById('loginBtn').onclick = async function(){
-        if(!sb){ setMsg('Hệ thống tài khoản đang được cấu hình — thử lại sau.', false); return }
-        var e=val('li-email'), p=val('li-pass'); if(!e||!p){ setMsg('Nhập email và mật khẩu.', false); return }
-        setMsg('Đang đăng nhập…', true)
-        var r=await sb.auth.signInWithPassword({ email:e, password:p })
-        setMsg(r.error ? 'Lỗi: '+r.error.message : 'Đăng nhập thành công! Mở app VGC Browser để đồng bộ.', !r.error)
-      }
-      document.getElementById('signupBtn').onclick = async function(){
-        if(!sb){ setMsg('Hệ thống tài khoản đang được cấu hình — thử lại sau.', false); return }
-        var e=val('su-email'), p=val('su-pass'), p2=val('su-pass2'), n=val('su-name')
-        if(!e||!p){ setMsg('Nhập email và mật khẩu.', false); return }
-        if(p.length<6){ setMsg('Mật khẩu tối thiểu 6 ký tự.', false); return }
-        if(p!==p2){ setMsg('Mật khẩu nhập lại không khớp.', false); return }
-        setMsg('Đang tạo tài khoản…', true)
-        var r=await sb.auth.signUp({ email:e, password:p, options:{ data:{ name:n }, emailRedirectTo: 'https://vgcbrowser.com' } })
-        setMsg(r.error ? 'Lỗi: '+r.error.message : 'Tạo tài khoản thành công! Kiểm tra email để xác nhận, rồi đăng nhập.', !r.error)
-      }
     </script>
   </body>
 </html>

@@ -34,7 +34,7 @@ jobs:
       VGC_ENGINE_SHA256: 1ccb4569f06ee62308344f7d4f101e67993b42027074b3549bc8ab19bd294112
       VGC_ALLOW_UNSIGNED_BUILD: '1'
       # Máy chủ dữ liệu của bản build (electron.vite.config.ts): mặc định xeon (máy chủ công ty, từ 2.2.0);
-      # đặt biến repo VGC_TARGET=supabase để build lại bản cloud.
+      # cloud cũ đã huỷ; chỉ còn target xeon (và fake để thử).
       # VGC_APP_KEY (bí mật) = khoá app qua cổng máy chủ công ty; thiếu thì bản supabase không có nút
       # chuyển dữ liệu, bản xeon từ chối build.
       VGC_TARGET: ${{ vars.VGC_TARGET || 'xeon' }}
@@ -144,7 +144,7 @@ jobs:
     runs-on: macos-latest
     env:
       # Máy chủ dữ liệu của bản build (electron.vite.config.ts): mặc định xeon (máy chủ công ty, từ 2.2.0);
-      # đặt biến repo VGC_TARGET=supabase để build lại bản cloud.
+      # cloud cũ đã huỷ; chỉ còn target xeon (và fake để thử).
       # VGC_APP_KEY (bí mật) = khoá app qua cổng máy chủ công ty; thiếu thì bản supabase không có nút
       # chuyển dữ liệu, bản xeon từ chối build.
       VGC_TARGET: ${{ vars.VGC_TARGET || 'xeon' }}

@@ -290,7 +290,7 @@ export interface AppSettings {
   /** Header thêm cho mọi lệnh gọi máy chủ dữ liệu (khoá app của máy chủ công ty). */
   cloudHeaders?: Record<string, string>
   /** Máy chủ dữ liệu của bản build: cloud Supabase, máy chủ công ty (xeon), hoặc cloud giả để thử. */
-  cloudTarget?: 'supabase' | 'xeon' | 'fake'
+  cloudTarget?: 'xeon' | 'fake'
   /** Bản này có nút "Chuyển dữ liệu sang máy chủ công ty". */
   migrationAvailable?: boolean
   /** Bản thử (VGC Browser TEST). */

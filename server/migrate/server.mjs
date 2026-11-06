@@ -345,7 +345,7 @@ async function pool(items, n, fn) {
 }
 
 // ── Danh sách nhân viên ─────────────────────────────────────────────────────
-const OLD_LICENSE = env('OLD_LICENSE_URL', 'https://vgcbrowser.com/quanly/check.php')
+const OLD_LICENSE = env('OLD_LICENSE_URL', '') // trang duyệt cũ trên Hostinger — đã bỏ, để trống
 const normEmail = (e) => String(e ?? '').trim().toLowerCase()
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -370,6 +370,7 @@ async function copyApproval(email) {
   const e = normEmail(email)
   const existing = await staffGet(e)
   if (existing && existing.source !== 'hostinger') return existing.approved ? 'đã có trên máy chủ' : 'chủ đã gỡ quyền'
+  if (!OLD_LICENSE) return existing ? 'đã có trên máy chủ' : 'chưa được duyệt — chủ thêm ở trang quản trị'
   try {
     const r = await req(`${OLD_LICENSE}?email=${encodeURIComponent(e)}`, { redirect: 'error' })
     const j = await json(r, 'hỏi danh sách cũ')

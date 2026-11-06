@@ -2,10 +2,10 @@
 // Chọn lúc build bằng VGC_TARGET (xem electron.vite.config.ts). Mọi URL cloud, khoá công khai,
 // trang duyệt nhân viên và đích "chuyển dữ liệu" đều lấy từ đây — không chỗ nào khác tự ghi URL.
 
-export type CloudTarget = 'supabase' | 'xeon' | 'fake'
+export type CloudTarget = 'xeon' | 'fake'
 
 // Giữ dạng biểu thức hằng (không qua hàm) để Rollup bỏ được nhánh không dùng.
-const __TARGET: CloudTarget = (typeof __VGC_TARGET__ !== 'undefined' ? __VGC_TARGET__ : 'supabase') as CloudTarget
+const __TARGET: CloudTarget = (typeof __VGC_TARGET__ !== 'undefined' ? __VGC_TARGET__ : 'xeon') as CloudTarget
 const target: CloudTarget = __TARGET
 const appKey = typeof __VGC_APP_KEY__ !== 'undefined' ? __VGC_APP_KEY__ : ''
 const fakeAnon = typeof __VGC_FAKE_ANON__ !== 'undefined' ? __VGC_FAKE_ANON__ : ''
@@ -23,23 +23,22 @@ export const COMPANY_SERVER = Object.freeze({
 })
 
 // Chỉ nhánh của ĐÚNG bản build được đóng vào app (Rollup bỏ nhánh còn lại vì __VGC_TARGET__ là hằng):
-// bản xeon không chứa địa chỉ / khoá Supabase cloud, trang /quanly cũ hay chức năng chuyển dữ liệu.
+// bản xeon không chứa chức năng chuyển dữ liệu. Cloud Supabase cũ đã huỷ hẳn (6/11/2026) — không còn nhánh nào trỏ tới.
 
 /** Máy chủ dữ liệu app đang dùng (đăng nhập, profile, kho file). */
 export const CLOUD: { url: string; anonKey: string; headers: Record<string, string> } =
-  __TARGET === 'xeon'
-    ? { url: COMPANY_SERVER.url, anonKey: COMPANY_SERVER.anonKey, headers: { ...COMPANY_SERVER.headers } }
-    : __TARGET === 'fake'
-      ? { url: 'http://192.168.1.19:8200', anonKey: fakeAnon, headers: {} }
-      : { url: 'https://pwiledrttvbnmytghyip.supabase.co', anonKey: 'sb_publishable_nBbOnvIm-RnevH9CCux9Hg_pvPncobO', headers: {} }
+  __TARGET === 'fake'
+    ? { url: 'http://192.168.1.19:8200', anonKey: fakeAnon, headers: {} }
+    : { url: COMPANY_SERVER.url, anonKey: COMPANY_SERVER.anonKey, headers: { ...COMPANY_SERVER.headers } }
 
-/** Danh sách nhân viên được dùng: máy chủ công ty, hoặc trang cũ trên Hostinger (chỉ bản cloud). */
-export const LICENSE: { check: string; register: string; headers: Record<string, string> } =
-  __TARGET === 'supabase'
-    ? { check: 'https://vgcbrowser.com/quanly/check.php', register: 'https://vgcbrowser.com/quanly/register.php', headers: {} }
-    : { check: `${COMPANY_SERVER.url}/vgc/v1/license/check`, register: `${COMPANY_SERVER.url}/vgc/v1/license/register`, headers: { ...COMPANY_SERVER.headers } }
+/** Danh sách nhân viên được dùng: luôn hỏi máy chủ công ty. */
+export const LICENSE: { check: string; register: string; headers: Record<string, string> } = {
+  check: `${COMPANY_SERVER.url}/vgc/v1/license/check`,
+  register: `${COMPANY_SERVER.url}/vgc/v1/license/register`,
+  headers: { ...COMPANY_SERVER.headers }
+}
 
-/** Đích của nút "Chuyển dữ liệu sang máy chủ công ty" — chỉ có ở bản còn chạy trên cloud. */
+/** Đích của nút "Chuyển dữ liệu sang máy chủ công ty" — chỉ còn ở bản thử (fake). */
 export const MIGRATION: { url: string; headers: Record<string, string> } | null =
   __TARGET !== 'xeon' && appKey ? { url: `${COMPANY_SERVER.url}/vgc/v1/migrate`, headers: { ...COMPANY_SERVER.headers } } : null
 

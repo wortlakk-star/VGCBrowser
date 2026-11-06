@@ -17,7 +17,7 @@
 -- Both machines are the SAME account (owner = auth.uid()); RLS scopes by owner only, so mutual
 -- exclusion is enforced app-side via the epoch, not by RLS. Rows are tiny + high-churn, so this
 -- lives in its OWN table (NOT profiles_cloud, whose data is encrypted-only + whose updated_at
--- drives metadata sync). Run once in the Supabase SQL editor (project: pwiledrttvbnmytghyip).
+-- drives metadata sync). Run once in the SQL editor of the company server.
 
 -- GLOBAL monotonic epoch source. Using a sequence (not a per-row +1) means every claim — even the
 -- INSERT that follows a release-DELETE — gets a strictly HIGHER epoch than any ever issued, so a

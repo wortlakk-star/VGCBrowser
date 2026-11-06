@@ -25,7 +25,7 @@ jobs:
     runs-on: macos-14 # Apple Silicon runner -> arm64 .dmg
     env:
       # Máy chủ dữ liệu của bản build (electron.vite.config.ts): mặc định xeon (máy chủ công ty, từ 2.2.0);
-      # đặt biến repo VGC_TARGET=supabase để build lại bản cloud.
+      # cloud cũ đã huỷ; chỉ còn target xeon (và fake để thử).
       # VGC_APP_KEY (bí mật) = khoá app qua cổng máy chủ công ty; thiếu thì bản supabase không có nút
       # chuyển dữ liệu, bản xeon từ chối build.
       VGC_TARGET: ${{ vars.VGC_TARGET || 'xeon' }}
