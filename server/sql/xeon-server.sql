@@ -127,3 +127,19 @@ alter table public.vgc_cutover enable row level security;
 alter table public.vgc_cutover force row level security;
 revoke all on table public.vgc_cutover from anon, authenticated;
 grant all on table public.vgc_cutover to service_role;
+
+-- 8. Dòng CŨ đã xoá (deleted = true) có thể còn dữ liệu chưa mã hoá từ trước khi app mã hoá proxy /
+--    profile (vd proxy xoá từ 06/2026). Chép NGUYÊN như cloud nên phải nhận chúng; mọi dòng ĐANG
+--    DÙNG (deleted = false) vẫn bắt buộc mã hoá như cũ.
+alter table public.proxies_cloud drop constraint if exists proxies_cloud_encrypted_data_check;
+alter table public.proxies_cloud add constraint proxies_cloud_encrypted_data_check check (
+  deleted
+  or (jsonb_typeof(data) = 'object' and data ? 'enc' and jsonb_typeof(data -> 'enc') = 'string'
+      and data - 'enc' = '{}'::jsonb and octet_length(data ->> 'enc') between 40 and 4194304)
+) not valid;
+alter table public.profiles_cloud drop constraint if exists profiles_cloud_encrypted_data_check;
+alter table public.profiles_cloud add constraint profiles_cloud_encrypted_data_check check (
+  deleted
+  or (jsonb_typeof(data) = 'object' and data ? 'enc' and jsonb_typeof(data -> 'enc') = 'string'
+      and data - 'enc' = '{}'::jsonb and octet_length(data ->> 'enc') between 40 and 25165824)
+) not valid;
