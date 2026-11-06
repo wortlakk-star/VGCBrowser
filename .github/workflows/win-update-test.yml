@@ -1,0 +1,56 @@
+name: Thử cập nhật bản Windows (tay)
+
+# Cài bản cũ trên máy Windows của CI, mở app, để màn hình bắt buộc cập nhật tự tải bản mới nhất
+# trên vgcbrowser.com/dl rồi bấm "Cập nhật ngay" — kiểm tra máy lên đúng bản mới và app tự mở lại.
+# Chỉ chạy tay; không build, không đưa gì lên web.
+on:
+  workflow_dispatch:
+    inputs:
+      from_version:
+        description: 'Bản cũ cài trước (vd 2.1.90)'
+        required: true
+        default: '2.1.90'
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Cài bản cũ
+        shell: pwsh
+        run: |
+          $v = '${{ inputs.from_version }}'
+          Invoke-WebRequest "https://vgcbrowser.com/dl/VGC-Browser-Setup-$v.exe" -OutFile old.exe
+          $t = Get-Date; Start-Process -Wait .\old.exe -ArgumentList '/S'
+          "cài bản cũ mất $([int]((Get-Date)-$t).TotalSeconds)s"
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'VGC Browser.exe' | Select-Object -First 1
+          "đã cài: $($exe.FullName) — phiên bản $($exe.VersionInfo.ProductVersion)"
+          "EXE=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+      - name: Mở app, chờ tự tải bản mới, bấm Cập nhật ngay
+        shell: pwsh
+        run: |
+          npm i --no-save --no-audit --no-fund ws@8 | Out-Null
+          Start-Process -FilePath $env:EXE -ArgumentList '--remote-debugging-port=9222'
+          node .github/scripts/win-update-test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "lái app lỗi ($LASTEXITCODE)" }
+          "BAM=$(Get-Date -Format o)" | Out-File -Append $env:GITHUB_ENV
+      - name: Chờ cài xong và app tự mở lại
+        shell: pwsh
+        run: |
+          $want = (Invoke-WebRequest https://vgcbrowser.com/dl/latest.yml).Content -split "`n" | Where-Object { $_ -match '^version:' } | ForEach-Object { ($_ -split ':')[1].Trim() }
+          "bản mới nhất trên web: $want"
+          $t = [datetime]$env:BAM
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 5
+            $ver = (Get-Item $env:EXE -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+            $run = @(Get-Process 'VGC Browser' -ErrorAction SilentlyContinue).Count
+            $inst = @(Get-Process | Where-Object { $_.ProcessName -like 'VGC-Browser-Setup*' -or $_.ProcessName -like '*installer*' }).Count
+            "$([int]((Get-Date)-$t).TotalSeconds)s sau khi bấm: phiên bản=$ver app_chạy=$run bộ_cài=$inst"
+            if ($ver -eq $want -and $run -gt 0) { "ĐẠT: đã lên $want và app tự mở lại"; exit 0 }
+          }
+          Get-ChildItem "$env:LOCALAPPDATA\vgc-browser-updater" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300
+          throw "KHÔNG ĐẠT: không lên $want trong 5 phút"
