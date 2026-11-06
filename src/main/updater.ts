@@ -47,6 +47,17 @@ export function getUpdateStatus(): UpdateStatus {
 }
 
 let macSelf = false
+/** Bản đã tải xong (sẵn sàng cài). Khi đã có, KHÔNG để lần kiểm tra sau (định kỳ 8 s sau khi mở,
+ *  màn hình bắt buộc cập nhật, nút "Kiểm tra") đẩy trạng thái về "đang kiểm tra / đang tải" — trước
+ *  đây bấm "Cập nhật ngay" đúng lúc đó thì bị bỏ qua và màn hình như "tải lại" (đã tái hiện trên
+ *  máy Windows của CI, 06/11/2026). */
+let downloadedVersion: string | null = null
+const readyStatus = (): UpdateStatus => ({
+  phase: 'downloaded',
+  currentVersion: app.getVersion(),
+  newVersion: downloadedVersion ?? lastStatus.newVersion,
+  releaseNotes: lastStatus.releaseNotes
+})
 let macDownloading: Promise<void> | null = null
 /** macOS: tải + kiểm SHA-512 + giải nén bản mới; lỗi thì quay về nút tải trên web. */
 function startMacDownload(): Promise<void> {
@@ -56,12 +67,14 @@ function startMacDownload(): Promise<void> {
       const info = await macLatest()
       if (!info) return
       if (stagedMacUpdate()?.version === info.version) {
+        downloadedVersion = info.version
         broadcast({ phase: 'downloaded', currentVersion: app.getVersion(), newVersion: info.version, releaseNotes: lastStatus.releaseNotes })
         return
       }
       await macDownload(info, (pct) =>
         broadcast({ phase: 'downloading', currentVersion: app.getVersion(), newVersion: info.version, releaseNotes: lastStatus.releaseNotes, percent: pct })
       )
+      downloadedVersion = info.version
       broadcast({ phase: 'downloaded', currentVersion: app.getVersion(), newVersion: info.version, releaseNotes: lastStatus.releaseNotes })
     } catch (e) {
       broadcast({
@@ -95,10 +108,11 @@ export function initUpdater(): void {
   autoUpdater.allowPrerelease = false
   autoUpdater.logger = null
 
-  autoUpdater.on('checking-for-update', () =>
-    broadcast({ phase: 'checking', currentVersion: app.getVersion() })
-  )
+  autoUpdater.on('checking-for-update', () => {
+    if (!downloadedVersion) broadcast({ phase: 'checking', currentVersion: app.getVersion() })
+  })
   autoUpdater.on('update-available', (info) => {
+    if (downloadedVersion === info.version) return broadcast(readyStatus())
     broadcast({
       phase: 'available',
       currentVersion: app.getVersion(),
@@ -108,10 +122,11 @@ export function initUpdater(): void {
     })
     if (macSelf) void startMacDownload()
   })
-  autoUpdater.on('update-not-available', () =>
-    broadcast({ phase: 'up-to-date', currentVersion: app.getVersion() })
-  )
-  autoUpdater.on('download-progress', (p) =>
+  autoUpdater.on('update-not-available', () => {
+    if (!downloadedVersion) broadcast({ phase: 'up-to-date', currentVersion: app.getVersion() })
+  })
+  autoUpdater.on('download-progress', (p) => {
+    if (downloadedVersion) return
     broadcast({
       phase: 'downloading',
       currentVersion: app.getVersion(),
@@ -119,22 +134,25 @@ export function initUpdater(): void {
       releaseNotes: lastStatus.releaseNotes,
       percent: Math.round(p.percent)
     })
-  )
-  autoUpdater.on('update-downloaded', (info) =>
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    downloadedVersion = info.version
     broadcast({
       phase: 'downloaded',
       currentVersion: app.getVersion(),
       newVersion: info.version,
       releaseNotes: notesOf(info) ?? lastStatus.releaseNotes
     })
-  )
-  autoUpdater.on('error', (err) =>
+  })
+  autoUpdater.on('error', (err) => {
+    // Lỗi của một lần kiểm tra sau không xoá bản đã tải xong.
+    if (downloadedVersion) return broadcast(readyStatus())
     broadcast({
       phase: 'error',
       currentVersion: app.getVersion(),
       message: err == null ? 'Lỗi không xác định' : err.message || String(err)
     })
-  )
+  })
 
   // Check shortly after launch, then every 6 hours.
   setTimeout(() => void autoUpdater.checkForUpdates()?.catch(() => {}), 8000)
@@ -151,6 +169,10 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     }
     broadcast(s)
     return s
+  }
+  if (downloadedVersion) {
+    broadcast(readyStatus())
+    return lastStatus
   }
   try {
     await autoUpdater.checkForUpdates()
@@ -169,7 +191,7 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
  * (stop profiles + cloud-sync) before the NSIS installer takes over, then relaunches.
  */
 export function installUpdate(): void {
-  if (!app.isPackaged || lastStatus.phase !== 'downloaded') return
+  if (!app.isPackaged || !downloadedVersion) return
   // DON'T call quitAndInstall() here. It races the app's before-quit handler, which
   // preventDefault()s the quit and runs gracefulQuit → installOnQuit → quitAndInstall
   // AGAIN; electron-updater rejects that second call ("quitAndInstall called twice") so
@@ -182,7 +204,7 @@ export function installUpdate(): void {
 
 /** True when a newer version has finished downloading and is ready to install. */
 export function hasDownloadedUpdate(): boolean {
-  return app.isPackaged && lastStatus.phase === 'downloaded'
+  return app.isPackaged && downloadedVersion !== null
 }
 
 /**

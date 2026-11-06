@@ -10,21 +10,43 @@ on:
         description: 'Bản cũ cài trước (vd 2.1.90)'
         required: true
         default: '2.1.90'
+      build_from_source:
+        description: 'Build bản cũ từ mã nguồn của nhánh này (đánh số from_version) thay vì tải trên web'
+        type: boolean
+        default: false
 
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
+    env:
+      VGC_ENGINE_URL: https://vgcbrowser.com/dl/vgc-core-159.zip
+      VGC_ENGINE_SHA256: 1ccb4569f06ee62308344f7d4f101e67993b42027074b3549bc8ab19bd294112
+      VGC_ALLOW_UNSIGNED_BUILD: '1'
+      VGC_TARGET: ${{ vars.VGC_TARGET || 'xeon' }}
+      VGC_APP_KEY: ${{ secrets.VGC_APP_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Build bản cũ từ mã nguồn (không đưa lên web)
+        if: ${{ inputs.build_from_source }}
+        shell: bash
+        run: |
+          npm ci --no-audit --no-fund
+          node -e "const f='package.json',p=require('./'+f);p.version='${{ inputs.from_version }}';require('fs').writeFileSync(f,JSON.stringify(p,null,2))"
+          for i in 1 2 3; do node scripts/fetch-engine.mjs && break || sleep $((i*30)); done
+          node scripts/brand-engine.mjs && node scripts/release-notes.mjs
+          npx electron-vite build
+          npx electron-builder --win --publish never
+          cp "release/VGC-Browser-Setup-${{ inputs.from_version }}.exe" old.exe
+          git checkout -- package.json
       - name: Cài bản cũ
         shell: pwsh
         run: |
           $v = '${{ inputs.from_version }}'
-          Invoke-WebRequest "https://vgcbrowser.com/dl/VGC-Browser-Setup-$v.exe" -OutFile old.exe
+          if (-not (Test-Path old.exe)) { Invoke-WebRequest "https://vgcbrowser.com/dl/VGC-Browser-Setup-$v.exe" -OutFile old.exe }
           $t = Get-Date; Start-Process -Wait .\old.exe -ArgumentList '/S'
           "cài bản cũ mất $([int]((Get-Date)-$t).TotalSeconds)s"
           $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'VGC Browser.exe' | Select-Object -First 1
