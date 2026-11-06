@@ -106,6 +106,11 @@ export function initUpdater(): void {
   autoUpdater.autoDownload = process.platform !== 'darwin'
   autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
   autoUpdater.allowDowngrade = false
+  // Tải NGUYÊN file, không "tải phần khác nhau": kiểu đó gửi hàng nghìn yêu cầu nhỏ tới vgcbrowser.com,
+  // rất chậm, không báo % và hỏng thì tải lại từ đầu — nhân viên thấy "tải xong lại bắt tải lại"
+  // (đo trên Windows CI 06/11/2026: 3.125 mảnh, 4 phút mới được 14 MB).
+  autoUpdater.disableDifferentialDownload = true
+  autoUpdater.disableWebInstaller = true
   autoUpdater.allowPrerelease = false
   // Ghi nhật ký bộ cập nhật vào vgc-sess.log — trước đây tắt hẳn nên không chẩn đoán được máy nhân viên.
   autoUpdater.logger = {
