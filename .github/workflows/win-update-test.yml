@@ -44,13 +44,28 @@ jobs:
           $want = (Invoke-WebRequest https://vgcbrowser.com/dl/latest.yml).Content -split "`n" | Where-Object { $_ -match '^version:' } | ForEach-Object { ($_ -split ':')[1].Trim() }
           "bản mới nhất trên web: $want"
           $t = [datetime]$env:BAM
+          $ok = $false
           for ($i = 0; $i -lt 60; $i++) {
             Start-Sleep 5
             $ver = (Get-Item $env:EXE -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
             $run = @(Get-Process 'VGC Browser' -ErrorAction SilentlyContinue).Count
-            $inst = @(Get-Process | Where-Object { $_.ProcessName -like 'VGC-Browser-Setup*' -or $_.ProcessName -like '*installer*' }).Count
-            "$([int]((Get-Date)-$t).TotalSeconds)s sau khi bấm: phiên bản=$ver app_chạy=$run bộ_cài=$inst"
-            if ($ver -eq $want -and $run -gt 0) { "ĐẠT: đã lên $want và app tự mở lại"; exit 0 }
+            $inst = (Get-Process | Where-Object { $_.ProcessName -like 'VGC-Browser-Setup*' -or $_.ProcessName -like '*installer*' -or $_.ProcessName -like '*Setup*' } | ForEach-Object { $_.ProcessName }) -join ','
+            "$([int]((Get-Date)-$t).TotalSeconds)s sau khi bấm: phiên bản=$ver app_chạy=$run bộ_cài=[$inst]"
+            if ("$ver".StartsWith($want) -and $run -gt 0) { "ĐẠT: đã lên $want và app tự mở lại"; $ok = $true; break }
           }
-          Get-ChildItem "$env:LOCALAPPDATA\vgc-browser-updater" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300
-          throw "KHÔNG ĐẠT: không lên $want trong 5 phút"
+          if (-not $ok) { throw "KHÔNG ĐẠT: không lên $want trong 5 phút" }
+      - name: Bản mới mở lên có còn đòi cập nhật không
+        shell: pwsh
+        run: |
+          Get-Process 'VGC Browser' -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 3
+          Start-Process -FilePath $env:EXE -ArgumentList '--remote-debugging-port=9222'
+          node .github/scripts/win-after-update.cjs
+          for ($i = 0; $i -lt 24; $i++) {
+            Start-Sleep 10
+            $inst = (Get-Process | Where-Object { $_.ProcessName -like '*Setup*' -or $_.ProcessName -like '*installer*' } | ForEach-Object { "$($_.ProcessName) $($_.Path)" }) -join '; '
+            "$(($i+1)*10)s: phiên bản=$((Get-Item $env:EXE).VersionInfo.ProductVersion) bộ_cài=[$inst]"
+          }
+          node .github/scripts/win-after-update.cjs
+          "--- thư mục bộ cập nhật:"
+          Get-ChildItem "$env:LOCALAPPDATA\vgc-browser-updater" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize | Out-String -Width 300
