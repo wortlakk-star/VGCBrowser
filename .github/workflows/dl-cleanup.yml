@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       delete_blockmaps:
-        description: Xoá mọi file .blockmap trong dl — máy cũ chuyển sang tải NGUYÊN file khi cập nhật (không kẹt "tải từng mảnh")
+        description: Delete all .blockmap files in dl (old apps then download the full installer)
         type: boolean
         default: false
 jobs:
