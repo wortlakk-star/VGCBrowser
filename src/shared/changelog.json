@@ -2,6 +2,18 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.2.2",
+      "date": "2026-11-06",
+      "fixed": [
+        "Cập nhật trên Windows: bấm \"Cập nhật ngay\" có lúc không ăn và màn hình như bắt tải lại — đã sửa, bản tải xong luôn sẵn sàng cài.",
+        "Cập nhật tải nguyên file và hiện % rõ ràng (trước đây tải từng mảnh nhỏ, rất chậm, hỏng thì tải lại từ đầu)."
+      ],
+      "added": [],
+      "action": [
+        "Bấm \"Cập nhật ngay\" rồi chờ khoảng 1 phút — app tự cài và tự mở lại, đừng mở lại VGC trong lúc đó."
+      ]
+    },
+    {
       "version": "2.2.1",
       "date": "2026-11-06",
       "fixed": [

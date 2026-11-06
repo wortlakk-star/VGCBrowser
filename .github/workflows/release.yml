@@ -122,7 +122,8 @@ jobs:
           # NOT release/nsis-web/ and there is no .7z. (This path mismatch is what
           # silently failed every Windows release since 0.1.46.)
           cp release/*.exe release/latest.yml out-dl/
-          cp release/*.blockmap out-dl/ 2>/dev/null || true
+          # KHÔNG đưa .blockmap lên web: có file này các máy cũ dùng kiểu "tải phần khác nhau" — hàng nghìn
+          # yêu cầu nhỏ, rất chậm, hỏng thì tải lại từ đầu ("tải xong lại bắt tải lại", 06/11/2026).
           ls -la out-dl/
       - name: Publish Windows artifacts
         shell: bash
@@ -137,7 +138,7 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           # Binaries first, each verified by SHA-256 on the server, latest.yml last.
-          bash scripts/publish-dl.sh out-dl/latest.yml out-dl/*.exe out-dl/*.blockmap
+          bash scripts/publish-dl.sh out-dl/latest.yml out-dl/*.exe
 
   build-mac:
     runs-on: macos-latest

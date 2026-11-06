@@ -16,6 +16,10 @@ on:
         description: Also delete old installers in domains/vgcbrowser.com/dl-archive
         type: boolean
         default: false
+      delete_blockmaps:
+        description: Xoá mọi file .blockmap trong dl — máy cũ chuyển sang tải NGUYÊN file khi cập nhật (không kẹt "tải từng mảnh")
+        type: boolean
+        default: false
 jobs:
   clean:
     runs-on: ubuntu-latest
@@ -26,6 +30,7 @@ jobs:
           VERSIONS: ${{ inputs.versions }}
           PURGE: ${{ inputs.purge_archive }}
           MINV: ${{ inputs.min_version }}
+          NOBM: ${{ inputs.delete_blockmaps }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
@@ -41,7 +46,7 @@ jobs:
             echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad version $v"; exit 1; }
           done
           ssh -p 65002 -i ~/.ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            u469659181@195.179.238.65 "VERSIONS='$VERSIONS' PURGE='$PURGE' MINV='$MINV' bash -s" <<'REMOTE'
+            u469659181@195.179.238.65 "VERSIONS='$VERSIONS' PURGE='$PURGE' MINV='$MINV' NOBM='$NOBM' bash -s" <<'REMOTE'
           set -u
           cd domains/vgcbrowser.com/public_html/dl
           echo "== before"; ls -la; du -sh . ; df -h ~ 2>/dev/null || true; quota -s 2>/dev/null || true
@@ -49,6 +54,10 @@ jobs:
           for v in $VERSIONS; do
             for f in *"-$v-"* *"-$v."*; do [ -f "$f" ] && echo "delete $f" && rm -f -- "$f"; done
           done
+          if [ "$NOBM" = true ]; then
+            echo "== xoá .blockmap (máy cũ sẽ tải nguyên file)"
+            find . -maxdepth 1 -type f -name '*.blockmap' -print -delete
+          fi
           if [ "$PURGE" = true ]; then
             echo "== purge dl-archive"
             find ~/domains/vgcbrowser.com/dl-archive -maxdepth 1 -type f -name 'VGC-Browser-*' -print -delete
