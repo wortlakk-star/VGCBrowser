@@ -492,6 +492,12 @@ export interface GuardStatus {
   globalWrong: number
   lockedCount: number
   relockMinutes: number
+  /** Vào VGC phải nhập mật khẩu chủ (theo máy). */
+  appLock: boolean
+}
+export interface AppLockState {
+  enabled: boolean
+  locked: boolean
 }
 export type GuardUnlockAction = 'ok' | 'master' | 'wrong' | 'wiped-profile' | 'wiped-all' | 'sos'
 export interface UnlockResult {

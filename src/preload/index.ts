@@ -31,6 +31,7 @@ import type {
   UpdateStatus,
   LicenseCheckResult,
   GuardStatus,
+  AppLockState,
   PasskeyInfo,
   UnlockResult,
   GroupUnlockResult,
@@ -335,6 +336,18 @@ const api = {
     passphrase: string
   ): Promise<{ ok: boolean; canceled?: boolean; error?: string; profiles?: number; creds?: number; skipped?: number }> =>
     ipcRenderer.invoke('passkeys:import', passphrase),
+  // Khoá mở app: màn hình nhập mật khẩu khi vào VGC (mật khẩu chủ mở; SOS xoá tất cả).
+  guardAppState: (): Promise<AppLockState> => ipcRenderer.invoke('guard:appState'),
+  guardAppUnlock: (pw: string): Promise<{ ok: boolean; retryAfterMs?: number }> =>
+    ipcRenderer.invoke('guard:appUnlock', pw),
+  guardAppLock: (): Promise<AppLockState> => ipcRenderer.invoke('guard:appLock'),
+  guardAppSet: (enabled: boolean, auth?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('guard:appSet', enabled, auth),
+  onGuardAppState: (cb: (s: AppLockState) => void): (() => void) => {
+    const listener = (_e: unknown, s: AppLockState): void => cb(s)
+    ipcRenderer.on('guard:appState', listener)
+    return () => ipcRenderer.removeListener('guard:appState', listener)
+  },
   onGuardChanged: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('guard:changed', listener)

@@ -45,6 +45,8 @@ interface GuardConfig {
   globalWrong: number
   /** Số phút hệ thống không có thao tác thì cửa sổ trình duyệt của profile khoá tự khoá lại (0 = tắt). */
   relockMinutes: number
+  /** Khoá mở app: vào VGC phải nhập mật khẩu chủ (SOS = xoá tất cả). Theo từng MÁY, không đồng bộ. */
+  appLock: boolean
   profiles: Record<string, ProfileLock>
   groups: Record<string, GroupLock> // key = tên nhóm
   /** Số phiên bản cấu hình (thời điểm sửa gần nhất, ms). Tăng mỗi khi cấu hình ĐỒNG BỘ thay đổi; dùng để
@@ -59,6 +61,7 @@ const DEFAULTS: GuardConfig = {
   globalLimit: 5,
   globalWrong: 0,
   relockMinutes: 5,
+  appLock: false,
   profiles: {},
   groups: {},
   rev: 0
@@ -109,9 +112,10 @@ async function load(): Promise<GuardConfig> {
   loadingUid = uid
   loading = (async () => {
     if (cache && cacheUid !== uid) {
-      // Đổi tài khoản: huỷ mọi vé mở khoá và phiên admin của tài khoản trước.
+      // Đổi tài khoản: huỷ mọi vé mở khoá, phiên admin và trạng thái đã mở app của tài khoản trước.
       tickets.clear()
       adminUntil = 0
+      appUnlockedUid = ''
     }
     const cfg = normalize(await readOrClaim(uid))
     cache = cfg
@@ -215,6 +219,7 @@ export function applyRemoteGuard(remote: GuardSyncData, union: boolean): Promise
         Object.entries(remote.groups ?? {}).map(([n, v]) => [n, { ...v, wrong: cfg.groups[n]?.wrong ?? 0 }])
       ),
       globalWrong: cfg.globalWrong,
+      appLock: cfg.appLock, // theo máy, không lấy từ cloud
       rev: remote.rev
     } as unknown as Partial<GuardConfig>)
     if (union) {
@@ -238,6 +243,7 @@ function normalize(s: Partial<GuardConfig> | null): GuardConfig {
   out.globalLimit = clampInt(s.globalLimit, 1, 999, DEFAULTS.globalLimit)
   out.relockMinutes = clampInt(s.relockMinutes, 0, 1440, DEFAULTS.relockMinutes)
   out.globalWrong = clampInt(s.globalWrong, 0, 1_000_000, 0)
+  out.appLock = s.appLock === true
   out.rev = clampInt(s.rev, 0, Number.MAX_SAFE_INTEGER, 0)
   if (s.profiles && typeof s.profiles === 'object') {
     for (const [id, v] of Object.entries(s.profiles)) {
@@ -379,6 +385,7 @@ export async function guardStatus(): Promise<{
   globalWrong: number
   lockedCount: number
   relockMinutes: number
+  appLock: boolean
 }> {
   const cfg = await load()
   return {
@@ -388,8 +395,84 @@ export async function guardStatus(): Promise<{
     globalLimit: cfg.globalLimit,
     globalWrong: cfg.globalWrong,
     lockedCount: Object.keys(cfg.profiles).length,
-    relockMinutes: cfg.relockMinutes
+    relockMinutes: cfg.relockMinutes,
+    appLock: cfg.appLock
   }
+}
+
+// ── Khoá mở app (màn hình nhập mật khẩu khi vào VGC) ─────────────────────────
+// Mở bằng MẬT KHẨU CHỦ; gõ MẬT KHẨU SOS → xoá tất cả profile (máy + máy chủ + passkey) rồi mở vào app
+// TRỐNG như bình thường — kẻ ép không biết. Nhập sai KHÔNG tính vào bộ đếm tự huỷ, chỉ bị chờ lâu dần
+// (sai từ lần 3: 1 s, 2 s, 4 s … tối đa 60 s). Khoá lại mỗi lần mở app, đổi tài khoản, hoặc bấm "Khoá VGC".
+export interface AppLockState {
+  enabled: boolean
+  locked: boolean
+}
+let appUnlockedUid = ''
+let appWrong = 0
+let appRetryAt = 0
+
+export async function appLockState(): Promise<AppLockState> {
+  const cfg = await load()
+  const enabled = cfg.appLock && !!cfg.master
+  return { enabled, locked: enabled && appUnlockedUid !== cacheUid }
+}
+/** IPC dùng: đang khoá → từ chối mọi lệnh đụng dữ liệu. */
+export async function appLockedNow(): Promise<boolean> {
+  return (await appLockState()).locked
+}
+function broadcastAppState(s: AppLockState): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send('guard:appState', s)
+    } catch {
+      /* cửa sổ đã đóng */
+    }
+  }
+}
+export async function appUnlock(pw: string): Promise<{ ok: boolean; retryAfterMs?: number }> {
+  const cfg = await load()
+  const uid = cacheUid
+  if (!(cfg.appLock && cfg.master)) {
+    appUnlockedUid = uid
+    return { ok: true }
+  }
+  if (Date.now() < appRetryAt) return { ok: false, retryAfterMs: appRetryAt - Date.now() }
+  if (verify(pw, cfg.sos)) {
+    // Xoá xong mới mở, để khi vào app chỉ còn danh sách trống.
+    await wipeAll('sos').catch(() => {})
+    appWrong = 0
+    appUnlockedUid = uid
+    broadcastAppState(await appLockState())
+    return { ok: true }
+  }
+  if (verify(pw, cfg.master)) {
+    appWrong = 0
+    appRetryAt = 0
+    appUnlockedUid = uid
+    broadcastAppState(await appLockState())
+    return { ok: true }
+  }
+  appWrong += 1
+  if (appWrong >= 3) appRetryAt = Date.now() + Math.min(60_000, 1000 * 2 ** (appWrong - 3))
+  return { ok: false, retryAfterMs: Math.max(0, appRetryAt - Date.now()) }
+}
+/** Bấm "Khoá VGC": về màn hình nhập mật khẩu ngay (profile đang chạy vẫn chạy). */
+export async function appLockNow(): Promise<AppLockState> {
+  appUnlockedUid = ''
+  const s = await appLockState()
+  broadcastAppState(s)
+  return s
+}
+/** Bật/tắt khoá mở app — cần phiên admin (đã nhập mật khẩu bảo mật) hoặc mật khẩu chủ; bật thì phải có mật khẩu chủ. */
+export async function setAppLock(enabled: boolean, auth?: string): Promise<{ ok: boolean; error?: string }> {
+  return withWrite((cfg) => {
+    if (!adminActive() && !hasAdmin(cfg, auth)) return { ok: false, error: 'Sai mật khẩu chủ hiện tại.' }
+    if (enabled && !cfg.master) return { ok: false, error: 'Đặt mật khẩu chủ trước rồi mới bật khoá mở app.' }
+    cfg.appLock = enabled
+    if (enabled) appUnlockedUid = cacheUid // vừa bật thì không khoá ngay phiên đang dùng
+    return { ok: true }
+  })
 }
 
 // ── Đặt/gỡ mật khẩu ──────────────────────────────────────────────────────────

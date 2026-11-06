@@ -6,7 +6,8 @@
       "date": "2026-11-07",
       "fixed": [],
       "added": [
-        "Máy chủ công ty tắt (mất điện, mất mạng): app phát hiện trong khoảng 10 giây và tự đóng mọi profile (trước đây mất 2 phút). Phần việc chưa kịp lưu vẫn giữ trên máy và tự đưa lên máy chủ ở lần mở sau."
+        "Máy chủ công ty tắt (mất điện, mất mạng): app phát hiện trong khoảng 10 giây và tự đóng mọi profile (trước đây mất 2 phút). Phần việc chưa kịp lưu vẫn giữ trên máy và tự đưa lên máy chủ ở lần mở sau.",
+        "Khoá mở VGC: Cài đặt → Khoá bảo vệ → bật \"Yêu cầu mật khẩu khi mở VGC\". Mỗi lần mở app phải nhập mật khẩu chủ; gõ mật khẩu SOS thì xoá tất cả profile rồi mở vào app trống. Thanh bên có nút \"Khoá VGC\" để khoá ngay."
       ],
       "action": []
     },

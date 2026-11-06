@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import App from './App'
 import { AuthScreen } from './components/AuthScreen'
 import { AccessDenied } from './components/AccessDenied'
+import { LockScreen } from './components/LockScreen'
 import { getCloud, signOutEverywhere } from './cloud'
 import logo from './assets/logo.png'
 import type { Session } from '@supabase/supabase-js'
@@ -51,6 +52,24 @@ export default function Gate(): JSX.Element {
   const [license, setLicense] = useState<LicenseCheckResult | null>(null)
   const sessionRevision = useRef(0)
   const lastRecheckAt = useRef(0)
+  // Khoá mở app: null = chưa hỏi; hỏi main mỗi khi vào trạng thái 'in' và khi main báo đổi (bấm "Khoá VGC").
+  const [appLocked, setAppLocked] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (status !== 'in') {
+      setAppLocked(null)
+      return
+    }
+    let alive = true
+    void window.vgc
+      .guardAppState()
+      .then((s) => alive && setAppLocked(s.locked))
+      .catch(() => alive && setAppLocked(false))
+    const off = window.vgc.onGuardAppState((s) => alive && setAppLocked(s.locked))
+    return () => {
+      alive = false
+      off()
+    }
+  }, [status])
 
   const applySession = async (session: Session | null): Promise<void> => {
     const revision = ++sessionRevision.current
@@ -371,7 +390,11 @@ export default function Gate(): JSX.Element {
     )
   }
 
-  if (status === 'in') return <App />
+  if (status === 'in') {
+    if (appLocked === null) return <></>
+    if (appLocked) return <LockScreen onUnlocked={() => setAppLocked(false)} />
+    return <App />
+  }
   if (status === 'denied') {
     return <AccessDenied license={license} onRecheck={handleRecheck} onSignOut={handleSignOut} />
   }

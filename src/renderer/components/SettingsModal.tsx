@@ -96,6 +96,7 @@ export function SettingsModal({
   // Khoá bảo vệ profile (tự huỷ khi nhập sai)
   const [gHasMaster, setGHasMaster] = useState(false)
   const [gHasSos, setGHasSos] = useState(false)
+  const [gAppLock, setGAppLock] = useState(false)
   const [gPerLimit, setGPerLimit] = useState(3)
   const [gGlobalLimit, setGGlobalLimit] = useState(5)
   const [gLockedCount, setGLockedCount] = useState(0)
@@ -180,6 +181,7 @@ export function SettingsModal({
     const s = await window.vgc.guardStatus()
     setGHasMaster(s.hasMaster)
     setGHasSos(s.hasSos)
+    setGAppLock(s.appLock)
     setGPerLimit(s.perProfileLimit)
     setGGlobalLimit(s.globalLimit)
     setGLockedCount(s.lockedCount)
@@ -197,6 +199,13 @@ export function SettingsModal({
     const res = await window.vgc.guardSetSos(remove ? '' : gSosNew, gHasMaster ? gAuth : undefined)
     if (!res.ok) { setGMsg(res.error || 'Không lưu được.'); return }
     setGSosNew(''); setGAuth(''); setGMsg(remove ? 'Đã gỡ mật khẩu SOS.' : 'Đã lưu mật khẩu SOS ✓')
+    await loadGuard()
+  }
+  const toggleAppLock = async (enabled: boolean): Promise<void> => {
+    setGMsg('')
+    const res = await window.vgc.guardAppSet(enabled, gHasMaster ? gAuth : undefined)
+    if (!res.ok) { setGMsg(res.error || 'Không lưu được.'); return }
+    setGMsg(enabled ? 'Đã bật: lần mở VGC sau sẽ hỏi mật khẩu chủ ✓' : 'Đã tắt khoá mở VGC.')
     await loadGuard()
   }
   const saveGuardLimits = async (): Promise<void> => {
@@ -511,6 +520,24 @@ export function SettingsModal({
                 Mật khẩu SOS {gHasSos ? '(đã đặt — gõ vào ô mở khoá sẽ XOÁ TẤT CẢ)' : '(chưa đặt)'}
                 <input type="password" style={inp} value={gSosNew} placeholder={gHasSos ? 'Nhập để ĐỔI' : 'Đặt mật khẩu SOS (khẩn cấp)'}
                   autoComplete="new-password" onChange={(e) => setGSosNew(e.target.value)} />
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8, cursor: gHasMaster ? 'pointer' : 'default' }}>
+                <input
+                  type="checkbox"
+                  checked={gAppLock}
+                  disabled={!gHasMaster}
+                  style={{ marginTop: 3 }}
+                  onChange={(e) => void toggleAppLock(e.target.checked)}
+                />
+                <span>
+                  <b>Yêu cầu mật khẩu khi mở VGC</b> (máy này)
+                  <span className="hint" style={{ display: 'block', margin: '2px 0 0' }}>
+                    Mỗi lần mở app, đổi tài khoản hoặc bấm "Khoá VGC" ở thanh bên: phải nhập <b>mật khẩu chủ</b> mới
+                    vào được. Gõ <b>mật khẩu SOS</b> vào đó → xoá TẤT CẢ profile (máy + máy chủ + passkey) rồi mở vào app
+                    trống như bình thường. Nhập sai chỉ phải chờ lâu dần, không tính vào số lần tự huỷ.
+                    {!gHasMaster && ' Đặt mật khẩu chủ trước rồi mới bật được.'}
+                  </span>
+                </span>
               </label>
               {gHasMaster && (
                 <label style={{ display: 'block', marginBottom: 6 }}>

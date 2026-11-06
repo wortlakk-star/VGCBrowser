@@ -56,6 +56,16 @@ export default function App(): JSX.Element {
   // Đã nhập đúng "mật khẩu bảo mật" trong phiên này → mới hiện phần Khoá bảo vệ
   // (ở Cài đặt và ở Sửa profile). Mặc định ẨN. Reset khi khởi động lại app.
   const [guardAdmin, setGuardAdmin] = useState(false)
+  // Khoá mở app đang bật → thanh bên có nút "Khoá VGC".
+  const [appLockEnabled, setAppLockEnabled] = useState(false)
+  useEffect(() => {
+    const ask = (): void => {
+      void window.vgc.guardAppState().then((s) => setAppLockEnabled(s.enabled)).catch(() => {})
+    }
+    ask()
+    const off = window.vgc.onGuardChanged(ask)
+    return off
+  }, [])
   const [lockedIds, setLockedIds] = useState<Set<string>>(new Set())
   const refreshLockedIds = useCallback(async () => {
     if (!guardAdmin) { setLockedIds(new Set()); return }
@@ -1131,6 +1141,7 @@ export default function App(): JSX.Element {
         onCreate={() => setShowCreate(true)}
         onProxy={() => setShowProxyMgr(true)}
         onSettings={() => setShowSettings(true)}
+        onLock={appLockEnabled ? () => void window.vgc.guardAppLock() : undefined}
         onCreateGroup={createGroup}
         onDeleteGroup={deleteGroup}
         onUnlockGroup={unlockGroupByCode}

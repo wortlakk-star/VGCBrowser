@@ -127,7 +127,12 @@ import {
   setRelockMinutes as guardSetRelockMinutes,
   lockedGroupNames as guardLockedGroups,
   setGroupLock as guardSetGroupLock,
-  unlockGroup as guardUnlockGroup
+  unlockGroup as guardUnlockGroup,
+  appLockState as guardAppLockState,
+  appUnlock as guardAppUnlock,
+  appLockNow as guardAppLockNow,
+  setAppLock as guardSetAppLock,
+  appLockedNow as guardAppLockedNow
 } from './guard'
 import {
   getProviderCreds,
@@ -174,12 +179,19 @@ function isTrustedRenderer(event: IpcMainInvokeEvent): boolean {
   }
 }
 
+/** Kênh vẫn được gọi khi app đang KHOÁ (màn hình nhập mật khẩu): chỉ những gì màn hình khoá/cổng cần.
+ *  Mọi kênh khác (profile, proxy, passkey, cài đặt, …) bị từ chối ở main — renderer không thể lách. */
+const ALLOWED_WHILE_APP_LOCKED = /^(guard:app|company:|license:|app:|update:|engine:|cloud:setSession|settings:get)/
+
 function handle(
   channel: string,
   listener: (event: IpcMainInvokeEvent, ...args: any[]) => any
 ): void {
-  rawHandle(channel, (event, ...args) => {
+  rawHandle(channel, async (event, ...args) => {
     if (!isTrustedRenderer(event)) throw new Error('IPC sender không được phép')
+    if (!ALLOWED_WHILE_APP_LOCKED.test(channel) && (await guardAppLockedNow())) {
+      throw new Error('VGC đang khoá — nhập mật khẩu để mở.')
+    }
     return listener(event, ...args)
   })
 }
@@ -522,6 +534,13 @@ export function registerIpc(): void {
     )
   )
   handle('guard:unlockGroup', (_e, code: string) => guardUnlockGroup(String(code ?? '').slice(0, 1024)))
+  // Khoá mở app (nhập mật khẩu khi vào VGC).
+  handle('guard:appState', () => guardAppLockState())
+  handle('guard:appUnlock', (_e, pw: string) => guardAppUnlock(String(pw ?? '').slice(0, 1024)))
+  handle('guard:appLock', () => guardAppLockNow())
+  handle('guard:appSet', (_e, enabled: boolean, auth?: string) =>
+    guardSetAppLock(enabled === true, auth === undefined ? undefined : String(auth).slice(0, 1024))
+  )
   handle('guard:setLimits', (_e, perProfile: number, global: number, auth?: string) =>
     guardSetLimits(
       Number(perProfile),

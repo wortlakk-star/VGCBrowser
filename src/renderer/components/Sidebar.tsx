@@ -17,6 +17,8 @@ interface Props {
   onCreate: () => void
   onProxy: () => void
   onSettings: () => void
+  /** Có bật khoá mở app → hiện nút "Khoá VGC". */
+  onLock?: () => void
   onCreateGroup: (name: string) => void
   onDeleteGroup: (name: string) => void
   /** Nhập mã để mở một nhóm đang ẩn. Trả về ok + thông báo lỗi nếu sai. */
@@ -37,6 +39,7 @@ export function Sidebar({
   onCreate,
   onProxy,
   onSettings,
+  onLock,
   onCreateGroup,
   onDeleteGroup,
   onUnlockGroup
@@ -207,6 +210,14 @@ export function Sidebar({
             </span>
             <span className="nav-lbl">Cài đặt</span>
           </button>
+          {onLock && (
+            <button className="nav-row side-settings" title="Về màn hình nhập mật khẩu (profile đang chạy vẫn chạy)" onClick={onLock}>
+              <span className="nav-ic">
+                <Icon name="lock" size={17} />
+              </span>
+              <span className="nav-lbl">Khoá VGC</span>
+            </button>
+          )}
           <button
             className="nav-row theme-toggle"
             title={theme === 'dark' ? 'Chuyển giao diện sáng' : 'Chuyển giao diện tối'}
