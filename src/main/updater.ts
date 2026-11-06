@@ -9,6 +9,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
+import { dbg } from './dbg'
 import { canSelfUpdate, macDownload, macInstallOnQuit, macLatest, stagedMacUpdate } from './mac-updater'
 
 const { autoUpdater } = electronUpdater
@@ -106,7 +107,13 @@ export function initUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
   autoUpdater.allowDowngrade = false
   autoUpdater.allowPrerelease = false
-  autoUpdater.logger = null
+  // Ghi nhật ký bộ cập nhật vào vgc-sess.log — trước đây tắt hẳn nên không chẩn đoán được máy nhân viên.
+  autoUpdater.logger = {
+    info: (m: unknown) => dbg(`[upd] ${String(m).slice(0, 400)}`),
+    warn: (m: unknown) => dbg(`[upd WARN] ${String(m).slice(0, 400)}`),
+    error: (m: unknown) => dbg(`[upd ERR] ${String(m).slice(0, 600)}`),
+    debug: () => {}
+  }
 
   autoUpdater.on('checking-for-update', () => {
     if (!downloadedVersion) broadcast({ phase: 'checking', currentVersion: app.getVersion() })

@@ -91,3 +91,11 @@ jobs:
           node .github/scripts/win-after-update.cjs
           "--- thư mục bộ cập nhật:"
           Get-ChildItem "$env:LOCALAPPDATA\vgc-browser-updater" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize | Out-String -Width 300
+      - name: Nhật ký app (vgc-sess.log) và tiến trình
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process | Where-Object { $_.ProcessName -like 'VGC*' } | Select-Object ProcessName, Id, StartTime | Format-Table -AutoSize | Out-String -Width 200
+          $log = "$env:APPDATA\vgc-browser\vgc-sess.log"
+          if (Test-Path $log) { Get-Content $log -Tail 120 } else { "không có $log" }
+          Get-ChildItem "$env:LOCALAPPDATA\vgc-browser-updater" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize | Out-String -Width 300
