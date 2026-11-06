@@ -9,6 +9,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
+import { canSelfUpdate, macDownload, macInstallOnQuit, macLatest, stagedMacUpdate } from './mac-updater'
 
 const { autoUpdater } = electronUpdater
 
@@ -45,14 +46,51 @@ export function getUpdateStatus(): UpdateStatus {
   return lastStatus
 }
 
+let macSelf = false
+let macDownloading: Promise<void> | null = null
+/** macOS: tải + kiểm SHA-512 + giải nén bản mới; lỗi thì quay về nút tải trên web. */
+function startMacDownload(): Promise<void> {
+  if (macDownloading) return macDownloading
+  macDownloading = (async () => {
+    try {
+      const info = await macLatest()
+      if (!info) return
+      if (stagedMacUpdate()?.version === info.version) {
+        broadcast({ phase: 'downloaded', currentVersion: app.getVersion(), newVersion: info.version, releaseNotes: lastStatus.releaseNotes })
+        return
+      }
+      await macDownload(info, (pct) =>
+        broadcast({ phase: 'downloading', currentVersion: app.getVersion(), newVersion: info.version, releaseNotes: lastStatus.releaseNotes, percent: pct })
+      )
+      broadcast({ phase: 'downloaded', currentVersion: app.getVersion(), newVersion: info.version, releaseNotes: lastStatus.releaseNotes })
+    } catch (e) {
+      broadcast({
+        phase: 'available',
+        currentVersion: app.getVersion(),
+        newVersion: lastStatus.newVersion,
+        releaseNotes: lastStatus.releaseNotes,
+        manualDownloadUrl: MAC_DOWNLOAD_PAGE,
+        message: e instanceof Error ? e.message : String(e)
+      })
+    } finally {
+      macDownloading = null
+    }
+  })()
+  return macDownloading
+}
+
 /** Wire electron-updater events and schedule periodic checks. Call once on ready. */
 export function initUpdater(): void {
   if (!app.isPackaged) return // dev build: no updater
 
   // Release builds are code-signed on both platforms; electron-updater verifies the
   // platform signature before installation.
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // macOS: app chưa ký Apple nên Squirrel.Mac không cài được → electron-updater chỉ dùng để HỎI bản
+  // mới (và lấy ghi chú); tải + cài do mac-updater.ts tự làm (kiểm SHA-512). Không ghi được thư mục
+  // chứa app → quay về tải tay trên web như trước.
+  macSelf = process.platform === 'darwin' && canSelfUpdate()
+  autoUpdater.autoDownload = process.platform !== 'darwin'
+  autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
   autoUpdater.allowDowngrade = false
   autoUpdater.allowPrerelease = false
   autoUpdater.logger = null
@@ -60,15 +98,16 @@ export function initUpdater(): void {
   autoUpdater.on('checking-for-update', () =>
     broadcast({ phase: 'checking', currentVersion: app.getVersion() })
   )
-  autoUpdater.on('update-available', (info) =>
+  autoUpdater.on('update-available', (info) => {
     broadcast({
       phase: 'available',
       currentVersion: app.getVersion(),
       newVersion: info.version,
       releaseNotes: notesOf(info),
-      ...(process.platform === 'darwin' ? { manualDownloadUrl: MAC_DOWNLOAD_PAGE } : {})
+      ...(process.platform === 'darwin' && !macSelf ? { manualDownloadUrl: MAC_DOWNLOAD_PAGE } : {})
     })
-  )
+    if (macSelf) void startMacDownload()
+  })
   autoUpdater.on('update-not-available', () =>
     broadcast({ phase: 'up-to-date', currentVersion: app.getVersion() })
   )
@@ -154,6 +193,10 @@ export function hasDownloadedUpdate(): boolean {
  * explicitly instead. `isForceRunAfter=false` → install on exit, don't relaunch.
  */
 export function installOnQuit(): void {
+  if (macSelf && stagedMacUpdate()) {
+    macInstallOnQuit(relaunchAfterInstall)
+    return
+  }
   try {
     // isSilent=true (per-user oneClick NSIS → no elevation, runs quietly). Relaunch only
     // when the user clicked "restart & install"; a plain quit installs without reopening.

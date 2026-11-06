@@ -2,6 +2,17 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.2.1",
+      "date": "2026-11-06",
+      "fixed": [
+        "Trên Mac, bấm \"Cập nhật\" giờ tự tải, kiểm tra và cài bản mới ngay trong app rồi tự mở lại — không phải lên web tải tay nữa (áp dụng từ bản này trở đi)."
+      ],
+      "added": [],
+      "action": [
+        "Máy Mac đang ở bản cũ: tải bản này trên web một lần cuối; từ đây về sau app tự cập nhật."
+      ]
+    },
+    {
       "version": "2.2.0",
       "date": "2026-11-06",
       "fixed": [],
