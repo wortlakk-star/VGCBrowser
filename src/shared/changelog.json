@@ -2,6 +2,15 @@
   "_note": "Mỗi lần phát hành: thêm 1 mục MỚI LÊN ĐẦU với đúng version trong package.json. fixed = lỗi đã sửa, added = cập nhật mới, action = việc nhân viên cần làm (để [] nếu không có). Build sẽ dừng nếu thiếu mục cho version hiện tại.",
   "entries": [
     {
+      "version": "2.2.3",
+      "date": "2026-11-06",
+      "fixed": [],
+      "added": [
+        "Toàn bộ dữ liệu VGC chỉ còn trên máy chủ công ty; hệ thống cũ đã gỡ bỏ hoàn toàn. Trang vgcbrowser.com không còn mục đăng nhập."
+      ],
+      "action": []
+    },
+    {
       "version": "2.2.2",
       "date": "2026-11-06",
       "fixed": [
